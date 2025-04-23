@@ -1,0 +1,2471 @@
+[
+    {
+        "description": "",
+        "formula": {
+        "CaO": 5.81,
+        "K2O": 3.2,
+        "MgO": 2.71,
+        "Na2O": 0.8,
+        "SiO2": 57.83,
+        "TiO2": 0.4,
+        "Al2O3": 14.63,
+        "Fe2O3": 5.21
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 173,
+        "name": "Albany slip",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 6.01,
+        "K2O": 3.57,
+        "MgO": 3.97,
+        "Na2O": 2.24,
+        "P2O5": 0.1,
+        "SiO2": 54.54,
+        "TiO2": 0.31,
+        "Al2O3": 15.48,
+        "Fe2O3": 4.58
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 174,
+        "name": "Alberta Slip",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "BaO": 51.55, "SiO2": 34.74, "Al2O3": 13.71 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 168,
+        "name": "Bariumsilikat F 37046",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 1.81,
+        "K2O": 4.3,
+        "MgO": 0.14,
+        "Na2O": 3.3,
+        "SiO2": 73.78,
+        "TiO2": 0.15,
+        "Al2O3": 16.33,
+        "Fe2O3": 0.19
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 143,
+        "name": "Cornwall Stone",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.3,
+        "K2O": 10,
+        "Na2O": 3,
+        "SiO2": 68.5,
+        "Al2O3": 17,
+        "Fe2O3": 0.1
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 140,
+        "name": "Custer Feldspar",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.18,
+        "K2O": 0.35,
+        "MgO": 0.1,
+        "Na2O": 0.07,
+        "P2O5": 0.26,
+        "SiO2": 45.73,
+        "TiO2": 0.38,
+        "Al2O3": 37.36,
+        "Fe2O3": 0.76
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 139,
+        "name": "EPK",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 19.4,
+        "K2O": 0.4,
+        "MgO": 3.5,
+        "B2O3": 26.8,
+        "Na2O": 4,
+        "P2O5": 0.1,
+        "SiO2": 14.8,
+        "TiO2": 0.1,
+        "Al2O3": 1,
+        "Fe2O3": 0.4
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 136,
+        "name": "Gerstley Borate",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.2,
+        "K2O": 1.9,
+        "MgO": 0.4,
+        "Na2O": 0.2,
+        "SiO2": 55.26,
+        "TiO2": 1.8,
+        "Al2O3": 28.83,
+        "Fe2O3": 1.4
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 135,
+        "name": "Goldart",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.1,
+        "K2O": 1.9,
+        "MgO": 0.3,
+        "Na2O": 0.1,
+        "SiO2": 47.92,
+        "TiO2": 0.03,
+        "Al2O3": 36.94,
+        "Fe2O3": 0.7
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 133,
+        "name": "Grolleg Kaolin",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 56.2,
+        "K2O": 0.01,
+        "MgO": 1.2,
+        "ZnO": 0.02,
+        "Na2O": 1,
+        "P2O5": 41.3,
+        "SiO2": 0.2,
+        "Al2O3": 0.04
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 124,
+        "name": "Knochenasche 187",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 1.7,
+        "K2O": 4.8,
+        "MgO": 0.05,
+        "Na2O": 6.89,
+        "SiO2": 66.74,
+        "Al2O3": 19.58,
+        "Fe2O3": 0.04
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 123,
+        "name": "Kona F-4 feldspar",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.15,
+        "K2O": 11.5,
+        "MgO": 0.15,
+        "Na2O": 3,
+        "SiO2": 67,
+        "Al2O3": 17.5,
+        "Fe2O3": 0.08
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 115,
+        "name": "Mahavir Potash Feldspar",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 1.51,
+        "K2O": 4.12,
+        "Na2O": 6.53,
+        "SiO2": 68.91,
+        "Al2O3": 18.58,
+        "Fe2O3": 0.06
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 112,
+        "name": "Minspar 200",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.6,
+        "K2O": 0.4,
+        "Na2O": 10,
+        "SiO2": 70,
+        "Al2O3": 18,
+        "Fe2O3": 0.1
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 109,
+        "name": "Natronfeldspat Maxum LA 75",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.7,
+        "K2O": 10.7,
+        "MgO": 0.07,
+        "Na2O": 3,
+        "SiO2": 66.7,
+        "TiO2": 0.04,
+        "Al2O3": 18.1
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 101,
+        "name": "Potash Feldspar Norflux LIS",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.5,
+        "K2O": 0.4,
+        "MgO": 0.4,
+        "Na2O": 0.3,
+        "SiO2": 54.2,
+        "TiO2": 1.6,
+        "Al2O3": 30.1,
+        "Fe2O3": 1.1
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 71,
+        "name": "Tennessee ball clay",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.29,
+        "MgO": 0.41,
+        "Na2O": 0.09,
+        "SiO2": 45.62,
+        "TiO2": 1.41,
+        "Al2O3": 38.2,
+        "Fe2O3": 0.48
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 70,
+        "name": "Tile 6 Kaolin",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.26,
+        "MgO": 0.18,
+        "SiO2": 45.48,
+        "TiO2": 1.1,
+        "Al2O3": 38.9,
+        "Fe2O3": 0.37
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 64,
+        "name": "Velvacast Kaolin",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {
+        "BaO": 6.8,
+        "MgO": 0.4,
+        "ZnO": 3.66,
+        "SiO2": 7.8,
+        "Al2O3": 1.02
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 632,
+        "name": "Zinc Barium frit 90420",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "Al2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 217,
+        "name": "Аломат",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Na2O": 37.81, "Al2O3": 62.19 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 79,
+        "name": "Алюминат натрия, Na2O-Al2O3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "Al2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 429,
+        "name": "Алюминиевая пудра",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 612,
+        "name": "Алюмокалиевые квасцы",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "SiO2": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 219,
+        "name": "Аэросил",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "SnO2": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 69,
+        "name": "Белый оксид олова, SnO2",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 1.01,
+        "K2O": 1.01,
+        "MgO": 2.01,
+        "Na2O": 3.02,
+        "SiO2": 59.33,
+        "Al2O3": 20.12,
+        "Fe2O3": 3.51
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 166,
+        "name": "Бентонит",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "K2O": 32, "Cr2O3": 51.7 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 100,
+        "name": "Бихромат калия, K2Cr2O7",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 37,
+        "MgO": 0.05,
+        "B2O3": 45.6,
+        "SiO2": 0.06,
+        "Fe2O3": 0.01
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 55,
+        "name": "Борат кальция",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "B2O3": 56.4 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 160,
+        "name": "Борная кислота, B2O3 3 H2O",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "B2O3": 36.53, "Na2O": 16.26 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 159,
+        "name": "Бура, Na2O 2 B2O3 10 H2O",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 10.99,
+        "MgO": 22.2,
+        "Li2O": 0.06,
+        "SiO2": 48.99,
+        "Al2O3": 7.96
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 63,
+        "name": "Вермикулит",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 61,
+        "name": "Вода",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 45,
+        "K2O": 0.07,
+        "MgO": 0.8,
+        "Na2O": 0.13,
+        "SiO2": 50,
+        "Al2O3": 1,
+        "Fe2O3": 0.3
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 53,
+        "name": "Волластонит TREMIN 939-300",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CaO": 46, "MgO": 1, "SiO2": 51, "TiO2": 0.01, "Al2O3": 0.2 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 54,
+        "name": "Волластонит МИВОЛЛ",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 1.4,
+        "K2O": 3,
+        "MgO": 1.54,
+        "Na2O": 0.58,
+        "SiO2": 55.3,
+        "TiO2": 1.31,
+        "Al2O3": 20.95,
+        "Fe2O3": 7.08
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 156,
+        "name": "Гжельская масса CG/T",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Al2O3": 65.39 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 171,
+        "name": "Гидроксид алюминия, Al2(OH)6",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 132,
+        "name": "Гипс",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 6.53,
+        "K2O": 0.68,
+        "MgO": 0.26,
+        "ZnO": 1.32,
+        "B2O3": 13.14,
+        "Na2O": 5.39,
+        "SiO2": 60.42,
+        "Al2O3": 12.26
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 52,
+        "name": "Глазурь S-0104",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "BaO": 0.31,
+        "CaO": 2.75,
+        "K2O": 4.29,
+        "MgO": 0.68,
+        "SrO": 9.4,
+        "ZnO": 2.56,
+        "B2O3": 14.91,
+        "Na2O": 1.05,
+        "SiO2": 53.15,
+        "Al2O3": 10.9
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 122,
+        "name": "Глазурь S-0119",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.77,
+        "K2O": 3.34,
+        "MgO": 1.17,
+        "Na2O": 0.1,
+        "P2O5": 0.13,
+        "SiO2": 55.5,
+        "TiO2": 1.32,
+        "Al2O3": 20.9,
+        "Fe2O3": 7.64
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 106,
+        "name": "Глина Никодим Брауни",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.3,
+        "K2O": 3.1,
+        "MgO": 0.4,
+        "SiO2": 66,
+        "TiO2": 1.3,
+        "Al2O3": 27.4,
+        "Fe2O3": 1.2
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 51,
+        "name": "Глинистая добавка, S 6509",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Al2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 172,
+        "name": "Глинозем, Al203",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 50,
+        "name": "Голубой ванадиевый пигмент 6237 Немецкий из ГМ",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 49,
+        "name": "Голубой ванадиевый пигмент JY-3558 из breezecolor.ru",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "Loi": 40, "MoO3": 60 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 355,
+        "name": "Дисульфид Молибдена",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 30.32,
+        "MgO": 21.23,
+        "SiO2": 0.3,
+        "Al2O3": 0.02,
+        "Fe2O3": 0.05
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 48,
+        "name": "Доломит МИДОЛ",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 20.84,
+        "K2O": 22.07,
+        "MgO": 6.64,
+        "Na2O": 6.82,
+        "P2O5": 13.63,
+        "SiO2": 19.84,
+        "Al2O3": 1.44,
+        "Fe2O3": 8.72
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 60,
+        "name": "Древесная зола",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 47,
+        "name": "Желтый пигмент 6354 Немецкий из ГМ",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 46,
+        "name": "Зеленый павлин пигмент JY-3507 из breezecolor.ru",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 45,
+        "name": "Зеленый пигмент IC 18/9983 из Гжель",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 7.9,
+        "K2O": 4.6,
+        "MgO": 15.6,
+        "P2O5": 4.8,
+        "SiO2": 4,
+        "TiO2": 0.4,
+        "Al2O3": 1.1
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 44,
+        "name": "Зола лузги подсолнечника",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.48,
+        "K2O": 0.9,
+        "MgO": 0.22,
+        "MnO": 0.19,
+        "Na2O": 0.26,
+        "P2O5": 0.02,
+        "SiO2": 96,
+        "TiO2": 0.16,
+        "Al2O3": 1,
+        "Fe2O3": 0.04
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 94,
+        "name": "Зола рисовой шелухи",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 41.09,
+        "K2O": 10.96,
+        "MgO": 8.21,
+        "Na2O": 0.77,
+        "P2O5": 4.67,
+        "SiO2": 2,
+        "Fe2O3": 0.07
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 103,
+        "name": "Зола сосны",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "FeO": 47.36, "TiO2": 52.64 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 130,
+        "name": "Ильменит, FeO TiO2",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "K2O": 2.8,
+        "Na2O": 0.1,
+        "SiO2": 51.5,
+        "TiO2": 0.45,
+        "Al2O3": 33.5,
+        "Fe2O3": 0.35
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 42,
+        "name": "Каолин MA Chinafill 200",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.15,
+        "K2O": 1,
+        "Na2O": 0.07,
+        "SiO2": 47,
+        "TiO2": 0.4,
+        "Al2O3": 36,
+        "Fe2O3": 0.6
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 41,
+        "name": "Каолин КЖФ-1",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.4,
+        "SiO2": 48,
+        "TiO2": 0.8,
+        "Al2O3": 36,
+        "Fe2O3": 0.6
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 40,
+        "name": "Каолин КФН-2",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {
+        "CaO": 0.4,
+        "K2O": 1,
+        "MgO": 0.3,
+        "Na2O": 0.2,
+        "P2O5": 0.1,
+        "SiO2": 47,
+        "TiO2": 0.6,
+        "Al2O3": 36,
+        "Fe2O3": 0.6
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 188,
+        "name": "Каолин КЧ-В",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "SiO2": 43.5, "Al2O3": 47, "Fe2O3": 0.3 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 39,
+        "name": "Каолин МИКАО",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 84,
+        "name": "Карбид кремния 1000 меш, SiC",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 83,
+        "name": "Карбид кремния 1200 меш, SiC",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 86,
+        "name": "Карбид кремния 2000 меш, SiC",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 87,
+        "name": "Карбид кремния 60 меш, SiC",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 85,
+        "name": "Карбид кремния 800 меш, SiC",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 82,
+        "name": "Карбид кремния 80 меш, SiC",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "BaO": 77.66 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 169,
+        "name": "Карбонат бария, BaCO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Fe2O3": 68.9 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 128,
+        "name": "Карбонат железа, FeCO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 157,
+        "name": "Карбонат кадмия, CdCO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "K2O": 68 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 105,
+        "name": "Карбонат калия, K2CO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CoO": 63 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 151,
+        "name": "Карбонат кобальта, CoCO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Li2O": 40.74 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 38,
+        "name": "Карбонат лития (литий углекислый)",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "MgO": 47.8 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 116,
+        "name": "Карбонат магния",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "MnO2": 61.62 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 114,
+        "name": "Карбонат марганца",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CuO": 64.38 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 146,
+        "name": "Карбонат меди, CuCO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "NiO": 62.93 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 107,
+        "name": "Карбонат никеля, NiCO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "PbO": 86.51 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 119,
+        "name": "Карбонат свинца, 2PbCO3.Pb(OH)2",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "SrO": 70.2 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 406,
+        "name": "Карбонат Стронция SrCO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "SrO": 70.2 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 72,
+        "name": "Карбонат стронция, SrO",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "ZnO": 64.91 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 58,
+        "name": "Карбонат цинка, ZnCO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.01,
+        "K2O": 0.01,
+        "SiO2": 99.7,
+        "TiO2": 0.01,
+        "Al2O3": 0.21,
+        "Fe2O3": 0.03
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 37,
+        "name": "Кварцевая мука Silverbond 15, Flint",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "SiO2": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 36,
+        "name": "Кварцевая мука Кварцверке W12",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 155,
+        "name": "КМЦ",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 35,
+        "name": "Кобальт голубой пигмент 6226 Немецкий из ГМ",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 34,
+        "name": "Кобальт голубой пигмент JY-0055 из breezecolor.ru",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 1.14,
+        "K2O": 1.13,
+        "Na2O": 2.26,
+        "SiO2": 59.67,
+        "TiO2": 1.14,
+        "Al2O3": 32.96,
+        "Fe2O3": 1.7
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 33,
+        "name": "Комовая глина Веско Прима, Гранитик",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CaO": 55.82, "P2O5": 42.39 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 161,
+        "name": "Костная зола",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.26,
+        "K2O": 4.15,
+        "MgO": 1.59,
+        "Na2O": 0.38,
+        "P2O5": 0.22,
+        "SiO2": 64.95,
+        "TiO2": 1.09,
+        "Al2O3": 15.51,
+        "Fe2O3": 7.05
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 32,
+        "name": "Красножгущаяся керамическая масса CG/T",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 31,
+        "name": "Красный пигмент 6353 Немецкий из ГМ",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 30,
+        "name": "Красный пигмент JY-9852 из breezecolor.ru",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "F": 54.3, "Na2O": 44.3, "Al2O3": 24.3 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 141,
+        "name": "Криолит",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "FeO": 34.98, "Fe2O3": 44.14 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 142,
+        "name": "Крокус Мартис",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Cu2O": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 97,
+        "name": "Куприт, Cu2O",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "K2O": 7.33, "Li2O": 3.01, "SiO2": 47.92, "Al2O3": 27.03 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 118,
+        "name": "Лепидолит",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 28,
+        "name": "Лимонный пигмент 6201 Немецкий из ГМ",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 29,
+        "name": "Лимон пигмент JY-2616 из breezecolor.ru",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 427,
+        "name": "Люминофор MCG-5B",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.3,
+        "K2O": 2.4,
+        "MgO": 0.2,
+        "Na2O": 1.2,
+        "SiO2": 72.4,
+        "TiO2": 0.55,
+        "Al2O3": 22.5,
+        "Fe2O3": 0.5
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 88,
+        "name": "Масса Sibelco WB04048",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.5,
+        "K2O": 2,
+        "MgO": 0.5,
+        "MnO": 0.3,
+        "Na2O": 1,
+        "SiO2": 72,
+        "TiO2": 0.7,
+        "Al2O3": 21.3,
+        "Fe2O3": 2.2
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 43,
+        "name": "Масса Sibelco WM 2502",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CaO": 56.1 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 27,
+        "name": "Мел, CaCO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "Loi": 1, "SiO2": 50, "Al2O3": 42, "Fe2O3": 0.5 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 266,
+        "name": "Метакаолин BMK-45",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "CaO": 13.18, "MoO3": 86.82 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 238,
+        "name": "Молибдат кальция",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 1.2,
+        "K2O": 8.7,
+        "MgO": 0.04,
+        "Na2O": 8.2,
+        "SiO2": 55.5,
+        "Al2O3": 24.8,
+        "Fe2O3": 0.09
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 26,
+        "name": "Нефелин Сиенит (Altaflux-45)",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 1.1,
+        "K2O": 8.8,
+        "MgO": 0.04,
+        "Na2O": 8.1,
+        "SiO2": 55.4,
+        "TiO2": 0.07,
+        "Al2O3": 24.6,
+        "Fe2O3": 0.1
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 25,
+        "name": "Нефелин-сиенит Spectrum N-45",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "K2O": 7.57, "Na2O": 7.09, "SiO2": 62.93, "Al2O3": 20.33 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 216,
+        "name": "Нефелин-сиенит VR13",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {
+        "CaO": 1.2,
+        "K2O": 8.7,
+        "Na2O": 8.2,
+        "SiO2": 55.5,
+        "Al2O3": 24.8,
+        "Fe2O3": 0.09
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 263,
+        "name": "Нефелин-сиенит VR7",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {
+        "CaO": 1.38,
+        "K2O": 7.55,
+        "Loi": 0.8,
+        "Na2O": 8.9,
+        "SiO2": 57.65,
+        "TiO2": 0.08,
+        "Al2O3": 23.55,
+        "Fe2O3": 0.08
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 407,
+        "name": "Нефелин-сиенит А-270",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Na2O": 36.5 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 76,
+        "name": "Нитрат натрия",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 81,
+        "name": "Нитрат серебра, AgNO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 296,
+        "name": "Нитрид кремния",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "B2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 607,
+        "name": "Оксид бора",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "V2O5": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 65,
+        "name": "Оксид ванадия, V2O5",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Bi2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 165,
+        "name": "Оксид висмута",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "WO3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 193,
+        "name": "Оксид вольфрама",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Gd2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 178,
+        "name": "Оксид гадолиния",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Ga2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 183,
+        "name": "Оксид галлия",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "GeO2": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 181,
+        "name": "Оксид германия",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Ho2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 131,
+        "name": "Оксид гольмия",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Dy2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 186,
+        "name": "Оксид диспрозия",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Eu2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 185,
+        "name": "Оксид европия",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Eu2O3": 99.99 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 24,
+        "name": "Оксид европия, 99,99%, Eu2O3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Fe2O3": 90 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 95,
+        "name": "Оксид железа красный, Fe2O3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Y2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 180,
+        "name": "Оксид иттрия",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CoO": 93.35 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 150,
+        "name": "Оксид кобальта, Co3O4",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "La2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 177,
+        "name": "Оксид лантана",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "MgO": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 237,
+        "name": "Оксид магния",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "MnO2": 86.9 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 113,
+        "name": "Оксид марганца",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CuO": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 147,
+        "name": "Оксид меди, CuO",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "MoO3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 111,
+        "name": "Оксид молибдена, MoO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "As2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 187,
+        "name": "Оксид мышьяка",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Nd2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 108,
+        "name": "Оксид неодима",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "NiO": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 134,
+        "name": "Оксид никеля зеленый, NiO",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "Nb2O5": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 236,
+        "name": "Оксид ниобия",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Pr2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 98,
+        "name": "Оксид празеодима, Pr2O3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Sm2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 184,
+        "name": "Оксид самария",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "PbO": 97.67 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 96,
+        "name": "Оксид свинца красный",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Sb2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 179,
+        "name": "Оксид сурьмы",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Tl2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 182,
+        "name": "Оксид таллия",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "TiO2": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 68,
+        "name": "Оксид титана, TiO2",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Tm2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 176,
+        "name": "Оксид тулия",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "U3O8": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 66,
+        "name": "Оксид урана, U3O8",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Cr2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 153,
+        "name": "Оксид хрома, Cr2O3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CeO2": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 154,
+        "name": "Оксид церия",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "ZnO": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 23,
+        "name": "Оксид цинка, ZnO",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "ZrO2": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 57,
+        "name": "Оксид циркония, ZrO2",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Er2O3": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 137,
+        "name": "Оксид эрбия, Er2O3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 22,
+        "name": "Оранжевый пигмент 6356 Немецкий из ГМ",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 21,
+        "name": "Оранжевый пигмент JY-2872C из breezecolor.ru",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "K2O": 29.8, "MnO": 44.9 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 99,
+        "name": "Перманганат калия, KMnO4",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Li2O": 4.87, "SiO2": 78.48, "Al2O3": 16.65 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 104,
+        "name": "Петалит",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 59,
+        "name": "Пигмент",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "F": 40.4, "CaO": 59.6 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 605,
+        "name": "Плавиковый шпат",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.7,
+        "K2O": 8.3,
+        "MgO": 0.03,
+        "Na2O": 4.7,
+        "SiO2": 67.5,
+        "Al2O3": 18.8,
+        "Fe2O3": 0.08
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 19,
+        "name": "Полевой шпат FFF",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.63,
+        "K2O": 5.2,
+        "Na2O": 10,
+        "SiO2": 58.6,
+        "Al2O3": 22.5,
+        "Fe2O3": 0.17
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 18,
+        "name": "Полевой шпат ПШС - Гжель",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "K2O": 68 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 17,
+        "name": "Поташ (Карбонат калия)",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.63,
+        "Na2O": 15.2,
+        "SiO2": 58.6,
+        "Al2O3": 22.5,
+        "Fe2O3": 0.17
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 20,
+        "name": "ПШС",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 7,
+        "K2O": 1.7,
+        "ZnO": 3.9,
+        "B2O3": 13.3,
+        "Na2O": 6,
+        "SiO2": 57,
+        "Al2O3": 11.1
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 93,
+        "name": "Росфрит ex001c1",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "TiO2": 68, "Fe2O3": 9.9 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 92,
+        "name": "Рутил",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 16,
+        "name": "Салатовый пигмент IC 18/9957 из Гжель",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 15,
+        "name": "Салатовый пигмент JY-0336 из breezecolor.ru",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "PbO": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 117,
+        "name": "Свинцовый глет",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {
+        "CaO": 5.5,
+        "K2O": 2,
+        "PbO": 43,
+        "B2O3": 12,
+        "Na2O": 5.5,
+        "SiO2": 22,
+        "Al2O3": 4
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 604,
+        "name": "Свинцовый флюс S-1018 (6Ф Дулево)",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Na2O": 50.78, "SiO2": 49.22 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 75,
+        "name": "Силикат натрия",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "PbO": 85, "SiO2": 15 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 120,
+        "name": "Силикат свинца",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 14,
+        "name": "Сирень пигмент JY-5158 из breezecolor.ru",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "Na2O": 50 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 405,
+        "name": "Сода Кальцинированная Na2CO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Na2O": 50 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 80,
+        "name": "Сода кольцинированная, Na2CO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Na2O": 36.9 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 78,
+        "name": "Сода кулинарная, NaHCO3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Na2O": 53 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 91,
+        "name": "Соль поваренная, NaCl",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Li2O": 8.01, "SiO2": 64.58, "Al2O3": 27.41 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 74,
+        "name": "Сподумен (усредненный)",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Bi2O3": 76.4 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 164,
+        "name": "Субнитрат висмута, BiONO3 H2O",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Al2O3": 29.8 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 170,
+        "name": "Сульфат алюминия, Al2(SO4)3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "BaO": 65.7 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 167,
+        "name": "Сульфат бария, BaSO4",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Fe2O3": 28.7 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 125,
+        "name": "Сульфат железа, FeSO4 7H2O",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CoO": 26.7 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 148,
+        "name": "Сульфат кобальта, CoSO4 7H2O",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "MgO": 16.35 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 138,
+        "name": "Сульфат магния",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CuO": 31.9 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 145,
+        "name": "Сульфат меди, CuSO4",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Cr2O3": 17.1 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 152,
+        "name": "Сульфат хрома, Cr2(SO4)3 15H2O",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CdO": 88.85 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 158,
+        "name": "Сульфид кадмия, CdS",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CaO": 0.2, "MgO": 31, "SiO2": 60, "Al2O3": 5, "Fe2O3": 1 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 13,
+        "name": "Тальк Онотский",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 12,
+        "name": "Теплый желтый пигмент 6354 Немецкий из ГМ",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 1.2,
+        "K2O": 8.7,
+        "Na2O": 8.2,
+        "SiO2": 55.5,
+        "Al2O3": 24.8,
+        "Fe2O3": 0.09
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 11,
+        "name": "Тонкомолотый нефелин-сиенит Altaflux-45",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CaO": 54.22, "P2O5": 45.78 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 67,
+        "name": "Трикальций фосфат",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 428,
+        "name": "Уголь",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 19,
+        "MgO": 2.5,
+        "SrO": 1,
+        "B2O3": 37,
+        "Na2O": 3.5,
+        "SiO2": 4,
+        "Al2O3": 0.25,
+        "Fe2O3": 0.04
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 10,
+        "name": "Улексит (Химпэк)",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.5,
+        "K2O": 2.9,
+        "MgO": 0.4,
+        "Na2O": 1,
+        "SiO2": 69.8,
+        "TiO2": 0.1,
+        "Al2O3": 25,
+        "Fe2O3": 0.4
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 102,
+        "name": "Фарфор Audrey Blackman",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 9,
+        "name": "Фиолетовый пигмент 6239 Немецкий из ГМ",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {
+        "CaO": 11.32,
+        "K2O": 3.02,
+        "B2O3": 10.85,
+        "Na2O": 13.93,
+        "SiO2": 51.53,
+        "Al2O3": 9.35
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 270,
+        "name": "Флюс S-0101 Лаборатория Керамики",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "BaO": 1.26,
+        "K2O": 7.82,
+        "ZnO": 13.56,
+        "B2O3": 12.98,
+        "Na2O": 12.72,
+        "SiO2": 47.9,
+        "TiO2": 1.7,
+        "Al2O3": 2.07
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 121,
+        "name": "Флюс ФЦПС, S-1046",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 11.32,
+        "K2O": 3.02,
+        "B2O3": 10.85,
+        "Na2O": 13.93,
+        "SiO2": 51.53,
+        "Al2O3": 9.35
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 8,
+        "name": "Флюс щелочной S-0101",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "P2O5": 37.99, "Fe2O3": 42.75 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 129,
+        "name": "Фосфат железа",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Na2O": 19.2, "P2O5": 22 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 77,
+        "name": "Фосфат натрия",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CaO": 30, "MgO": 2, "P2O5": 17, "SiO2": 18 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 7,
+        "name": "Фосфоритная мука",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "B2O3": 37, "Na2O": 16, "SiO2": 47 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 175,
+        "name": "Фрита A8962",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "B2O3": 36.5, "Na2O": 16.25, "SiO2": 47.25 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 110,
+        "name": "Фрита D90158",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 1.3,
+        "B2O3": 25.5,
+        "Na2O": 12.5,
+        "SiO2": 42,
+        "Al2O3": 15
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 62,
+        "name": "Фрита  Vernis",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 5,
+        "K2O": 7,
+        "B2O3": 12,
+        "Na2O": 5,
+        "SiO2": 60.5,
+        "Al2O3": 9.5
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 4,
+        "name": "Фритта 100 (Рускерамика)",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {
+        "CaO": 6.29,
+        "K2O": 2.36,
+        "B2O3": 2.64,
+        "Na2O": 15.24,
+        "SiO2": 69.77,
+        "Al2O3": 3.7
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 215,
+        "name": "Фритта 3110",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {
+        "CaO": 14.07,
+        "K2O": 0.68,
+        "B2O3": 13.77,
+        "Na2O": 6.28,
+        "SiO2": 55.3,
+        "Al2O3": 9.9
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 487,
+        "name": "Фритта 3124",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 10,
+        "K2O": 7,
+        "B2O3": 17.5,
+        "SiO2": 52.5,
+        "Al2O3": 12.5
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 2,
+        "name": "Фритта 500 (Рускерамика)",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": { "CaO": 12, "K2O": 4, "MgO": 5, "SiO2": 68, "Al2O3": 11 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 271,
+        "name": "Фритта A4043",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {
+        "CaO": 21.52,
+        "B2O3": 20.25,
+        "Na2O": 10.12,
+        "SiO2": 46.9,
+        "Al2O3": 1.21
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 408,
+        "name": "Фритта Ferro 3134",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": null,
+        "formula": {
+        "CaO": 8.28,
+        "B2O3": 26.71,
+        "SiO2": 45.22,
+        "ZrO2": 4.75,
+        "Al2O3": 15.05
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 272,
+        "name": "Фритта А3021",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Fe2O3": 29.5 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 127,
+        "name": "Хлорид железа",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CoO": 31.5 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 149,
+        "name": "Хлорид кобальта",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "CuO": 46.7 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 144,
+        "name": "Хлорид меди",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "SnO2": 79.5 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 73,
+        "name": "Хлорид олова, SnCl2",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "Cr2O3": 44.2, "Fe2O3": 46.5 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 126,
+        "name": "Хромат железа, FeCr2O4",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "ZnO": 37, "B2O3": 46 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 1,
+        "name": "Цинка борат",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "SiO2": 68, "ZrO2": 67.22 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 56,
+        "name": "Циркон микронный, ZrSiO4",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.8,
+        "K2O": 2,
+        "MgO": 0.3,
+        "SrO": 6,
+        "Na2O": 0.5,
+        "SiO2": 70,
+        "TiO2": 0.6,
+        "Al2O3": 16,
+        "Fe2O3": 0.3
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 89,
+        "name": "Чапаевский каолинит",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {
+        "CaO": 0.21,
+        "K2O": 1.36,
+        "MgO": 1.14,
+        "Na2O": 0.16,
+        "SiO2": 92.58,
+        "TiO2": 0.3,
+        "Al2O3": 3.56,
+        "Fe2O3": 0.1
+        },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 90,
+        "name": "Чапаевский песок",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 3,
+        "name": "Черный кобальт пигмент JY-3936 из breezecolor.ru",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "FeO": 26.07, "Fe2O3": 65.93 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 163,
+        "name": "Черный оксид железа, FeO",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": { "NiO": 100 },
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 162,
+        "name": "Черный оксид никеля, Ni2O3",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 5,
+        "name": "Черный пигмент 6258 Немецкий из ГМ",
+        "isPublic": true,
+        "inInventory": false
+    },
+    {
+        "description": "",
+        "formula": {},
+        "userId": "4f493955-a716-44d4-8d6b-efe4a2f02b7a",
+        "id": 6,
+        "name": "Черный пигмент RinColor",
+        "isPublic": true,
+        "inInventory": false
+    }
+]
