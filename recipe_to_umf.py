@@ -7,6 +7,7 @@
 # pylint: disable=broad-exception-caught, missing-function-docstring, missing-class-docstring
 # pylint: disable=f-string-without-interpolation
 # pylance: disable=reportMissingImports, reportMissingModuleSource
+# type: ignore
 
 import json
 import os

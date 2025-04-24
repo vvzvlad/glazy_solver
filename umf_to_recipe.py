@@ -7,14 +7,13 @@
 # pylint: disable=broad-exception-caught, missing-function-docstring, missing-class-docstring
 # pylint: disable=f-string-without-interpolation
 # pylance: disable=reportMissingImports, reportMissingModuleSource
+# type: ignore
 
 import json
 import argparse
 import os
 import numpy as np
 from scipy.optimize import nnls
-
-
 
 def weights_to_umf(weight_composition):
     """
@@ -321,10 +320,12 @@ def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, err
     n_materials = len(available_materials)
     used_combinations = set()
     
+    # Определяем минимально необходимое количество материалов
+    min_required = max(3, len(target_oxides) - 3)  # Даем себе больше свободы в выборе минимума
+    
     # Сначала попробуем решения с МИНИМАЛЬНЫМ количеством материалов
     if min_materials:
         # Начнем с очень малого количества материалов и постепенно увеличиваем
-        min_required = max(3, len(target_oxides) - 3)  # Даем себе больше свободы в выборе минимума
         
         # Пробуем от min_required до min_required + 5 материалов (более приоритетно)
         for subset_size in range(min_required, min(n_materials, min_required + 5)):
