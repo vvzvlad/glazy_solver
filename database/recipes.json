@@ -1,0 +1,730 @@
+[
+    {
+        "recipeId": 2184,
+        "name": "Прозрачная глазурь △6",
+        "type": "Основы OVO △6",
+        "recipe": [
+        {
+            "material": {
+            "id": 216,
+            "name": "Нефелин-сиенит VR13",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 30,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 36,
+            "name": "Кварцевая мука Кварцверке W12",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 20,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 54,
+            "name": "Волластонит МИВОЛЛ",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 20,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 10,
+            "name": "Улексит (Химпэк)",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 15,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 41,
+            "name": "Каолин КЖФ-1",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 15,
+            "isAddition": false
+        }
+        ],
+        "includeAdditionsIntoCalculations": false
+    },
+    {
+        "recipeId": 2185,
+        "name": "Матовая кальциевая глазурь △6",
+        "type": "Основы OVO △6",
+        "recipe": [
+        {
+            "material": {
+            "id": 216,
+            "name": "Нефелин-сиенит VR13",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 40,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 54,
+            "name": "Волластонит МИВОЛЛ",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 25,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 41,
+            "name": "Каолин КЖФ-1",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 25,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 10,
+            "name": "Улексит (Химпэк)",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 10,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 68,
+            "name": "Оксид титана, TiO2",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 4,
+            "isAddition": true
+        }
+        ],
+        "includeAdditionsIntoCalculations": false
+    },
+    {
+        "recipeId": 2186,
+        "name": "Магниевая матовая глазурь △6",
+        "type": "Основы OVO △6",
+        "recipe": [
+        {
+            "material": {
+            "id": 216,
+            "name": "Нефелин-сиенит VR13",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 30,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 13,
+            "name": "Тальк Онотский",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 25,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 54,
+            "name": "Волластонит МИВОЛЛ",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 15,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 36,
+            "name": "Кварцевая мука Кварцверке W12",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 15,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 10,
+            "name": "Улексит (Химпэк)",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 5,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 41,
+            "name": "Каолин КЖФ-1",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 5,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 23,
+            "name": "Оксид цинка, ZnO",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 5,
+            "isAddition": false
+        }
+        ],
+        "includeAdditionsIntoCalculations": false
+    },
+    {
+        "recipeId": 2187,
+        "name": "Матовая недожога △6",
+        "type": "Основы OVO △6",
+        "recipe": [
+        {
+            "material": {
+            "id": 27,
+            "name": "Мел, CaCO3",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 40,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 216,
+            "name": "Нефелин-сиенит VR13",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 30,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 36,
+            "name": "Кварцевая мука Кварцверке W12",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 20,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 41,
+            "name": "Каолин КЖФ-1",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 10,
+            "isAddition": false
+        }
+        ],
+        "includeAdditionsIntoCalculations": false
+    },
+    {
+        "recipeId": 2188,
+        "name": "Флотинг △6",
+        "type": "Основы OVO △6",
+        "recipe": [
+        {
+            "material": {
+            "id": 216,
+            "name": "Нефелин-сиенит VR13",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 30,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 36,
+            "name": "Кварцевая мука Кварцверке W12",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 25,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 10,
+            "name": "Улексит (Химпэк)",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 20,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 41,
+            "name": "Каолин КЖФ-1",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 10,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 54,
+            "name": "Волластонит МИВОЛЛ",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 10,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 13,
+            "name": "Тальк Онотский",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 5,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 68,
+            "name": "Оксид титана, TiO2",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 5,
+            "isAddition": true
+        },
+        {
+            "material": {
+            "id": 95,
+            "name": "Оксид железа красный, Fe2O3",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 3,
+            "isAddition": true
+        }
+        ],
+        "includeAdditionsIntoCalculations": false
+    },
+    {
+        "recipeId": 2189,
+        "name": "Сборка △6",
+        "type": "Основы OVO △6",
+        "recipe": [
+        {
+            "material": {
+            "id": 216,
+            "name": "Нефелин-сиенит VR13",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 50,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 41,
+            "name": "Каолин КЖФ-1",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 25,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 23,
+            "name": "Оксид цинка, ZnO",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 20,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 36,
+            "name": "Кварцевая мука Кварцверке W12",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 5,
+            "isAddition": false
+        }
+        ],
+        "includeAdditionsIntoCalculations": false
+    },
+    {
+        "recipeId": 2190,
+        "name": "Цинковая кристаллическая глазурь △6",
+        "type": "Основы OVO △6",
+        "recipe": [
+        {
+            "material": {
+            "id": 216,
+            "name": "Нефелин-сиенит VR13",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 35,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 36,
+            "name": "Кварцевая мука Кварцверке W12",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 30,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 23,
+            "name": "Оксид цинка, ZnO",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 20,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 27,
+            "name": "Мел, CaCO3",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 10,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 68,
+            "name": "Оксид титана, TiO2",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 5,
+            "isAddition": false
+        }
+        ],
+        "includeAdditionsIntoCalculations": false
+    },
+    {
+        "recipeId": 2191,
+        "name": "Пенная глазурь △6",
+        "type": "Основы OVO △6",
+        "recipe": [
+        {
+            "material": {
+            "id": 216,
+            "name": "Нефелин-сиенит VR13",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 35,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 27,
+            "name": "Мел, CaCO3",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 25,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 36,
+            "name": "Кварцевая мука Кварцверке W12",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 20,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 41,
+            "name": "Каолин КЖФ-1",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 20,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 68,
+            "name": "Оксид титана, TiO2",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 10,
+            "isAddition": true
+        },
+        {
+            "material": {
+            "id": 82,
+            "name": "Карбид кремния 80 меш, SiC",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 0.5,
+            "isAddition": true
+        }
+        ],
+        "includeAdditionsIntoCalculations": false
+    },
+    {
+        "recipeId": 2192,
+        "name": "Белая глянцевая глазурь △6",
+        "type": "Основы OVO △6",
+        "recipe": [
+        {
+            "material": {
+            "id": 216,
+            "name": "Нефелин-сиенит VR13",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 30,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 41,
+            "name": "Каолин КЖФ-1",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 20,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 54,
+            "name": "Волластонит МИВОЛЛ",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 15,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 36,
+            "name": "Кварцевая мука Кварцверке W12",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 15,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 10,
+            "name": "Улексит (Химпэк)",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 10,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 13,
+            "name": "Тальк Онотский",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 5,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 23,
+            "name": "Оксид цинка, ZnO",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 5,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 56,
+            "name": "Циркон микронный, ZrSiO4",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 7,
+            "isAddition": true
+        },
+        {
+            "material": {
+            "id": 69,
+            "name": "Белый оксид олова, SnO2",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 6,
+            "isAddition": true
+        }
+        ],
+        "includeAdditionsIntoCalculations": false
+    },
+    {
+        "recipeId": 2193,
+        "name": "Марганцевый металлик △6",
+        "type": "Основы OVO △6",
+        "recipe": [
+        {
+            "material": {
+            "id": 113,
+            "name": "Оксид марганца",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 50,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 41,
+            "name": "Каолин КЖФ-1",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 30,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 36,
+            "name": "Кварцевая мука Кварцверке W12",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 20,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 146,
+            "name": "Карбонат меди, CuCO3",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 8,
+            "isAddition": true
+        },
+        {
+            "material": {
+            "id": 151,
+            "name": "Карбонат кобальта, CoCO3",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 2,
+            "isAddition": true
+        },
+        {
+            "material": {
+            "id": 95,
+            "name": "Оксид железа красный, Fe2O3",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 3,
+            "isAddition": true
+        }
+        ],
+        "includeAdditionsIntoCalculations": false
+    },
+    {
+        "recipeId": 3074,
+        "name": "Глуп △6",
+        "type": "Основы OVO △6",
+        "recipe": [
+        {
+            "material": {
+            "id": 216,
+            "name": "Нефелин-сиенит VR13",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 20,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 41,
+            "name": "Каолин КЖФ-1",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 26,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 37,
+            "name": "Кварцевая мука Silverbond 15, Flint",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 37,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 27,
+            "name": "Мел, CaCO3",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 12,
+            "isAddition": false
+        },
+        {
+            "material": {
+            "id": 10,
+            "name": "Улексит (Химпэк)",
+            "isPublic": true,
+            "inInventory": false
+            },
+            "value": 5,
+            "isAddition": false
+        }
+        ],
+        "includeAdditionsIntoCalculations": false
+    }
+]
