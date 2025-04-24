@@ -53,6 +53,14 @@ class TestRecipesFromJson(unittest.TestCase):
             
             # Шаг 1: Анализ рецепта для получения UMF
             try:
+                print(f"Оригинальный рецепт:")
+                total_original = sum(original_recipe.values())
+                for material, value in sorted(original_recipe.items()):
+                    percentage = (value / total_original) * 100
+                    print(f"  {material}: {value} ({percentage:.2f}%)")
+
+                print("\n")
+
                 analysis = analyze_recipe(original_recipe)
                 if 'umf' not in analysis or not analysis['umf']:
                     print(f"Пропускаем: не удалось рассчитать UMF для рецепта")
@@ -64,21 +72,20 @@ class TestRecipesFromJson(unittest.TestCase):
                     print(f"  {oxide}: {value}")
                 
                 # Шаг 2: Использование UMF для восстановления рецепта
-                solution = solve_glaze_recipe(target_umf)
+                solutions = find_multiple_solutions(target_umf, min_materials=True, error_tolerance=0.1)
                 
-                if 'error' in solution and isinstance(solution['error'], str):
-                    print(f"Ошибка при решении: {solution['error']}")
+                # Проверяем, что solutions - это не словарь с ошибкой
+                if isinstance(solutions, dict) and 'error' in solutions:
+                    print(f"Ошибка при решении: {solutions['error']}")
                     continue
                 
-                solved_recipe = solution['recipe']
+                # Берем первое (лучшее) решение
+                if not solutions or len(solutions) == 0:
+                    print("Решения не найдены")
+                    continue
                 
-                # Шаг 3: Сравнение оригинального и восстановленного рецептов
-                print(f"\nСравнение рецептов:")
-                print(f"Оригинальный рецепт:")
-                total_original = sum(original_recipe.values())
-                for material, value in sorted(original_recipe.items()):
-                    percentage = (value / total_original) * 100
-                    print(f"  {material}: {value} ({percentage:.2f}%)")
+                best_solution = solutions[0]
+                solved_recipe = best_solution['recipe']
                 
                 print(f"\nВосстановленный рецепт:")
                 for material, percentage in sorted(solved_recipe.items()):
@@ -127,10 +134,12 @@ class TestRecipesFromJson(unittest.TestCase):
                         print(f"  {material}: оригинал {orig:.2f}%, решение {solved:.2f}%, разница {diff:.2f}%")
                 
                 # Проверка ошибки в UMF
-                print(f"\nОшибка в UMF: {solution['error']}")
+                print(f"\nОшибка в UMF: {best_solution['error']}")
                     
             except Exception as e:
                 print(f"Ошибка при обратном тестировании: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
 
 if __name__ == "__main__":

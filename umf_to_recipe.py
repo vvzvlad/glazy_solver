@@ -108,11 +108,11 @@ def load_inventory():
         inventory = json.load(f)
     return inventory
 
-# Фильтрация материалов по доступным id
+# Фильтрация материалов по доступным именам
 def filter_materials_by_inventory(materials, inventory):
     available_materials = []
     for material in materials:
-        if material.get('id') in inventory:
+        if material.get('name') in inventory:
             available_materials.append(material)
     return available_materials
 
@@ -231,7 +231,8 @@ def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=N
             'error': round(error, 4),
             'target_composition': target_umf,
             'actual_composition': {oxide: round(value, 4) for oxide, value in actual_umf.items()},
-            'weight_composition': {oxide: round(value, 2) for oxide, value in composition.items()}
+            'weight_composition': {oxide: round(value, 2) for oxide, value in composition.items()},
+            'materials_count': len(recipe)  # Добавляем количество материалов в решении
         }
     
     except Exception as e:
@@ -269,7 +270,19 @@ def solve_glaze_recipe(target_umf):
     return solution
 
 # Функция для поиска нескольких решений с различными комбинациями материалов
-def find_multiple_solutions(target_umf, max_solutions=5):
+def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, error_tolerance=0.01, logging=False):
+    """
+    Найти несколько решений для заданной UMF-формулы
+    
+    Args:
+        target_umf: целевая UMF-формула
+        max_solutions: максимальное количество решений
+        min_materials: если True, предпочитать решения с меньшим количеством материалов
+        error_tolerance: допустимое увеличение ошибки для решений с меньшим числом материалов
+    
+    Returns:
+        Список решений, отсортированный по предпочтительности
+    """
     materials = load_materials()
     inventory = load_inventory()
     
@@ -293,45 +306,134 @@ def find_multiple_solutions(target_umf, max_solutions=5):
     n_materials = len(available_materials)
     used_combinations = set()
     
-    # Различные комбинации материалов
-    for subset_size in range(max(2, len(target_oxides)), min(n_materials, 10)):
-        # Простой поиск решений для случайных подмножеств материалов
-        for attempt in range(min(20, n_materials)):
-            subset_indices = np.random.choice(n_materials, subset_size, replace=False)
-            subset_key = tuple(sorted(subset_indices))
-            
-            if subset_key in used_combinations:
-                continue
-            
-            used_combinations.add(subset_key)
-            
-            # Создание подматрицы для выбранных материалов
-            subset_matrix = full_oxide_matrix[:, subset_indices]
-            subset_names = [material_names[i] for i in subset_indices]
-            subset_materials = [available_materials[i] for i in subset_indices]
-            
-            solution = solve_recipe(subset_matrix, target_umf, subset_names, subset_materials)
-            
-            # Если найдено приемлемое решение, добавляем в список
-            if solution['recipe'] and solution['error'] < base_solution['error'] * 3:
-                solutions.append(solution)
-                
-                if len(solutions) >= max_solutions:
-                    break
+    # Сначала попробуем решения с МИНИМАЛЬНЫМ количеством материалов
+    if min_materials:
+        # Начнем с очень малого количества материалов и постепенно увеличиваем
+        min_required = max(3, len(target_oxides) - 3)  # Даем себе больше свободы в выборе минимума
         
-        if len(solutions) >= max_solutions:
-            break
+        # Пробуем от min_required до min_required + 5 материалов (более приоритетно)
+        for subset_size in range(min_required, min(n_materials, min_required + 5)):
+            # Генерируем больше комбинаций для маленьких подмножеств
+            attempts = min(200, n_materials * 3)
+            
+            if logging:
+                print(f"Ищем решения с {subset_size} материалами...")
+            
+            for attempt in range(attempts):
+                subset_indices = np.random.choice(n_materials, subset_size, replace=False)
+                subset_key = tuple(sorted(subset_indices))
+                
+                if subset_key in used_combinations:
+                    continue
+                
+                used_combinations.add(subset_key)
+                
+                # Создание подматрицы для выбранных материалов
+                subset_matrix = full_oxide_matrix[:, subset_indices]
+                subset_names = [material_names[i] for i in subset_indices]
+                subset_materials = [available_materials[i] for i in subset_indices]
+                
+                # Проверка ранга матрицы (должен быть не слишком малым)
+                rank = np.linalg.matrix_rank(subset_matrix)
+                if rank < min_required - 1:  # Даем небольшой запас для ранга
+                    continue
+                
+                solution = solve_recipe(subset_matrix, target_umf, subset_names, subset_materials)
+                
+                # Используем более высокий допуск ошибки для решений с меньшим количеством материалов
+                # Чем меньше материалов, тем больше допуск
+                actual_error_tolerance = error_tolerance * (1 + (max(6, n_materials) - subset_size) * 0.05)
+                
+                # Если найдено приемлемое решение с допустимой ошибкой
+                if solution['recipe'] and solution['error'] < base_solution['error'] * (1 + actual_error_tolerance):
+                    solutions.append(solution)
+                    if len(solutions) > 1:
+                        if logging:
+                            print(f"Найдено решение с {len(solution['recipe'])} материалами и ошибкой {solution['error']}")
     
-    # Сортировка решений по ошибке
-    solutions.sort(key=lambda x: x['error'])
+    # Если все еще нужны решения, ищем с разным количеством материалов
+    if len(solutions) < max_solutions:
+        for subset_size in range(min_required, min(n_materials, 12)):
+            # Простой поиск решений для случайных подмножеств материалов
+            for attempt in range(min(30, n_materials)):
+                subset_indices = np.random.choice(n_materials, subset_size, replace=False)
+                subset_key = tuple(sorted(subset_indices))
+                
+                if subset_key in used_combinations:
+                    continue
+                
+                used_combinations.add(subset_key)
+                
+                # Создание подматрицы для выбранных материалов
+                subset_matrix = full_oxide_matrix[:, subset_indices]
+                subset_names = [material_names[i] for i in subset_indices]
+                subset_materials = [available_materials[i] for i in subset_indices]
+                
+                solution = solve_recipe(subset_matrix, target_umf, subset_names, subset_materials)
+                
+                # Если найдено приемлемое решение, добавляем в список
+                if solution['recipe'] and solution['error'] < base_solution['error'] * 3:
+                    solutions.append(solution)
+                    
+                    if len(solutions) >= max_solutions * 2:  # Генерируем больше решений для последующей сортировки
+                        break
+            
+            if len(solutions) >= max_solutions * 2:
+                break
     
-    return solutions
+    # Сортировка решений с учетом как ошибки, так и количества материалов
+    if min_materials:
+        # Создаем композитную метрику для сортировки: 
+        # решения с меньшим количеством материалов предпочтительнее,
+        # если их ошибка не превышает ошибку лучшего решения более чем на error_tolerance
+        best_error = min(solution['error'] for solution in solutions)
+        
+        def sort_key(solution):
+            num_materials = solution['materials_count']
+            err = solution['error']
+            
+            # Коэффициент увеличения допустимой ошибки в зависимости от кол-ва материалов
+            # Чем меньше материалов, тем выше допуск
+            error_multiplier = 1 + (0.1 * (8 - num_materials)) if num_materials < 8 else 1
+            error_threshold = best_error * error_multiplier
+            
+            if err <= error_threshold:
+                # Приоритизируем решения с меньшим числом материалов,
+                # если ошибка в пределах увеличенного допуска
+                return (0, num_materials, err)
+            else:
+                # Иначе сортируем по ошибке
+                return (1, err, num_materials)
+        
+        solutions.sort(key=sort_key)
+    else:
+        # Сортировка только по ошибке
+        solutions.sort(key=lambda x: x['error'])
+    
+    # Удаляем дубликаты по составу рецептов
+    unique_solutions = []
+    seen_recipes = set()
+    
+    for sol in solutions:
+        # Создаем уникальный идентификатор рецепта
+        recipe_key = tuple(sorted((k, round(v, 1)) for k, v in sol['recipe'].items()))
+        if recipe_key not in seen_recipes:
+            seen_recipes.add(recipe_key)
+            unique_solutions.append(sol)
+            
+            if len(unique_solutions) >= max_solutions:
+                break
+    
+    # Возвращаем указанное количество лучших решений
+    return unique_solutions
 
 # Команда для использования из консоли
 def main():
     parser = argparse.ArgumentParser(description='Glaze Recipe Solver')
     parser.add_argument('--umf', type=str, required=True, help='Target UMF composition as JSON string, e.g., \'{"SiO2": 4, "Al2O3": 1, "Na2O": 0.5, "K2O": 0.5}\'')
     parser.add_argument('--solutions', type=int, default=3, help='Number of solutions to find (default: 3)')
+    parser.add_argument('--min-materials', action='store_true', help='Prefer solutions with fewer materials')
+    parser.add_argument('--error-tolerance', type=float, default=0.01, help='Acceptable error increase for solutions with fewer materials (default: 0.01)')
     
     args = parser.parse_args()
     
@@ -341,7 +443,12 @@ def main():
         print("Ошибка: неверный формат JSON для UMF")
         return
     
-    solutions = find_multiple_solutions(target_umf, max_solutions=args.solutions)
+    solutions = find_multiple_solutions(
+        target_umf, 
+        max_solutions=args.solutions,
+        min_materials=args.min_materials,
+        error_tolerance=args.error_tolerance
+    )
     
     if isinstance(solutions, dict) and 'error' in solutions:
         print(f"Ошибка: {solutions['error']}")
@@ -349,7 +456,7 @@ def main():
         print(f"\nНайдено {len(solutions)} решений для заданной UMF-формулы:")
         
         for i, solution in enumerate(solutions):
-            print(f"\n[Решение {i+1}] Ошибка: {solution['error']}")
+            print(f"\n[Решение {i+1}] Ошибка: {solution['error']} | Материалов: {solution['materials_count']}")
             print("\nСостав рецепта (вес в %):")
             
             for material, percentage in solution['recipe'].items():
