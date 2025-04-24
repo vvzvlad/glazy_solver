@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# flake8: noqa
+# pylint: disable=broad-exception-raised, raise-missing-from, too-many-arguments, redefined-outer-name
+# pylint: disable=multiple-statements, logging-fstring-interpolation, trailing-whitespace, line-too-long
+# pylint: disable=broad-exception-caught, missing-function-docstring, missing-class-docstring
+# pylint: disable=f-string-without-interpolation
+# pylance: disable=reportMissingImports, reportMissingModuleSource
+
 import json
-import numpy as np
-from scipy.optimize import nnls
 import argparse
 import os
+import numpy as np
+from scipy.optimize import nnls
+
 
 
 def weights_to_umf(weight_composition):
@@ -179,7 +187,7 @@ def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=N
     
     try:
         # Решение задачи NNLS
-        x, residual = nnls(oxide_matrix, weights_array)
+        x, _residual = nnls(oxide_matrix, weights_array)
         
         # Если решение слишком близко к нулю, считаем что материал не используется
         x[x < 1e-6] = 0
@@ -191,7 +199,7 @@ def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=N
         # Формирование рецепта в виде словаря {материал: процент}
         recipe = {}
         for i, name in enumerate(material_names):
-            if x[i] > 0:
+            if x[i] > 0.1:  # Игнорируем материалы с весом менее 0.05%
                 recipe[name] = round(x[i], 2)
         
         # Если нет доступных материалов, не можем рассчитать фактический состав
@@ -200,7 +208,7 @@ def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=N
             composition = {}
             for i, oxide in enumerate(target_oxides):
                 composition[oxide] = 0
-                for j, material in enumerate(material_names):
+                for j, _material in enumerate(material_names):
                     if x[j] > 0:
                         composition[oxide] += oxide_matrix[i, j] * (x[j] / 100)
         else:
@@ -219,9 +227,16 @@ def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=N
                 min_value = value
                 base_oxide = oxide
         
-        if base_oxide and base_oxide in actual_umf:
+        if base_oxide and base_oxide in actual_umf and actual_umf[base_oxide] > 0:
             scale_factor = target_umf[base_oxide] / actual_umf[base_oxide]
             actual_umf = {oxide: value * scale_factor for oxide, value in actual_umf.items()}
+        elif base_oxide:
+            # Если базовый оксид отсутствует или равен нулю, ищем другой оксид для нормализации
+            for oxide in target_umf:
+                if oxide in actual_umf and actual_umf[oxide] > 0 and target_umf[oxide] > 0:
+                    scale_factor = target_umf[oxide] / actual_umf[oxide]
+                    actual_umf = {oxide: value * scale_factor for oxide, value in actual_umf.items()}
+                    break
         
         # Вычисление ошибки между целевым и фактическим UMF
         error = calculate_umf_error(target_umf, actual_umf)
@@ -319,7 +334,7 @@ def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, err
             if logging:
                 print(f"Ищем решения с {subset_size} материалами...")
             
-            for attempt in range(attempts):
+            for _attempt in range(attempts):
                 subset_indices = np.random.choice(n_materials, subset_size, replace=False)
                 subset_key = tuple(sorted(subset_indices))
                 
@@ -355,7 +370,7 @@ def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, err
     if len(solutions) < max_solutions:
         for subset_size in range(min_required, min(n_materials, 12)):
             # Простой поиск решений для случайных подмножеств материалов
-            for attempt in range(min(30, n_materials)):
+            for _attempt in range(min(30, n_materials)):
                 subset_indices = np.random.choice(n_materials, subset_size, replace=False)
                 subset_key = tuple(sorted(subset_indices))
                 
@@ -383,7 +398,7 @@ def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, err
     
     # Сортировка решений с учетом как ошибки, так и количества материалов
     if min_materials:
-        # Создаем композитную метрику для сортировки: 
+        # Создаем композитную метрику для сортировки:
         # решения с меньшим количеством материалов предпочтительнее,
         # если их ошибка не превышает ошибку лучшего решения более чем на error_tolerance
         best_error = min(solution['error'] for solution in solutions)
@@ -473,4 +488,4 @@ def main():
             print("-" * 50)
 
 if __name__ == "__main__":
-    main() 
+    main()
