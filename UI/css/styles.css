@@ -511,41 +511,64 @@ input:checked + .slider:before {
 /* UMF Container */
 .solution-umf {
     margin-top: 15px;
-    padding-top: 15px;
-    border-top: 1px solid #e1e1e1;
+    border-top: 1px solid #ddd;
+    padding-top: 10px;
 }
 
 .solution-umf-title {
-    font-size: 14px;
-    font-weight: 500;
+    font-weight: bold;
     margin-bottom: 10px;
+    color: #333;
+}
+
+/* Стили для групп UMF */
+.solution-umf-groups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+}
+
+.solution-umf-group {
+    flex: 1;
+    min-width: 120px;
+}
+
+.solution-umf-group-title {
+    font-weight: bold;
+    font-size: 0.9em;
+    margin-bottom: 8px;
     color: #666;
+    text-align: center;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 5px;
 }
 
 .solution-umf-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px;
+}
+
+.solution-umf-grid.single-column {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 5px;
 }
 
 .solution-umf-item {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 5px;
-    background-color: #f0f0f0;
-    border-radius: 3px;
+    padding: 3px 0;
 }
 
 .solution-umf-name {
-    font-size: 12px;
-    color: #666;
+    font-size: 0.9em;
 }
 
 .solution-umf-value {
-    font-size: 12px;
-    font-weight: 500;
-    color: #4285F4;
+    font-weight: bold;
+    font-size: 0.9em;
 }
 
 .solution-actions {

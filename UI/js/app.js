@@ -176,8 +176,9 @@ function create_umf_element(recipe_umf) {
     umf_title.className = 'solution-umf-title';
     umf_title.textContent = 'UMF решения:';
     
-    const umf_grid = document.createElement('div');
-    umf_grid.className = 'solution-umf-grid';
+    // Создаем контейнер для всех групп UMF
+    const umf_groups_container = document.createElement('div');
+    umf_groups_container.className = 'solution-umf-groups';
     
     // Отбираем только значимые оксиды (> 0.001)
     const filtered_umf = {};
@@ -187,35 +188,66 @@ function create_umf_element(recipe_umf) {
         }
     }
     
-    // Сортируем оксиды и отображаем в сетке
-    const sorted_oxides = Object.keys(filtered_umf).sort((a, b) => {
-        // Приоритет групп: SiO2, Al2O3, затем по алфавиту
-        if (a === 'SiO2') return -1;
-        if (b === 'SiO2') return 1;
-        if (a === 'Al2O3') return -1;
-        if (b === 'Al2O3') return 1;
-        return a.localeCompare(b);
-    });
+    // Разделяем оксиды по группам
+    const groupR2O_RO = ['Na2O', 'K2O', 'MgO', 'CaO', 'SrO', 'ZnO', 'BaO', 'Li2O', 'PbO'];
+    const groupR2O3 = ['Al2O3', 'B2O3', 'Fe2O3', 'TiO2', 'ZrO2', 'MnO', 'P2O5', 'Cr2O3'];
+    const groupRO2 = ['SiO2', 'SnO2'];
     
-    sorted_oxides.forEach(oxide => {
-        const umf_item = document.createElement('div');
-        umf_item.className = 'solution-umf-item';
+    // Создаем группы
+    const createGroup = (title, oxides) => {
+        const groupContainer = document.createElement('div');
+        groupContainer.className = 'solution-umf-group';
         
-        const oxide_name = document.createElement('div');
-        oxide_name.className = 'solution-umf-name';
-        oxide_name.innerHTML = format_oxide_name(oxide);
+        const groupTitle = document.createElement('div');
+        groupTitle.className = 'solution-umf-group-title';
+        groupTitle.innerHTML = title;
         
-        const oxide_value = document.createElement('div');
-        oxide_value.className = 'solution-umf-value';
-        oxide_value.textContent = filtered_umf[oxide].toFixed(3);
+        const umf_grid = document.createElement('div');
+        umf_grid.className = 'solution-umf-grid single-column';
         
-        umf_item.appendChild(oxide_name);
-        umf_item.appendChild(oxide_value);
-        umf_grid.appendChild(umf_item);
-    });
+        // Фильтруем и сортируем оксиды в группе
+        const groupOxides = oxides.filter(oxide => filtered_umf[oxide] !== undefined);
+        
+        // Если группа пустая, не создаем её
+        if (groupOxides.length === 0) {
+            return null;
+        }
+        
+        groupOxides.forEach(oxide => {
+            const umf_item = document.createElement('div');
+            umf_item.className = 'solution-umf-item';
+            
+            const oxide_name = document.createElement('div');
+            oxide_name.className = 'solution-umf-name';
+            oxide_name.innerHTML = format_oxide_name(oxide);
+            
+            const oxide_value = document.createElement('div');
+            oxide_value.className = 'solution-umf-value';
+            oxide_value.textContent = filtered_umf[oxide].toFixed(3);
+            
+            umf_item.appendChild(oxide_name);
+            umf_item.appendChild(oxide_value);
+            umf_grid.appendChild(umf_item);
+        });
+        
+        groupContainer.appendChild(groupTitle);
+        groupContainer.appendChild(umf_grid);
+        
+        return groupContainer;
+    };
+    
+    // Создаем группы оксидов
+    const groupR2O_RO_element = createGroup('R<sub>2</sub>O/RO', groupR2O_RO);
+    const groupR2O3_element = createGroup('R<sub>2</sub>O<sub>3</sub>', groupR2O3);
+    const groupRO2_element = createGroup('RO<sub>2</sub>', groupRO2);
+    
+    // Добавляем группы в контейнер
+    if (groupR2O_RO_element) umf_groups_container.appendChild(groupR2O_RO_element);
+    if (groupR2O3_element) umf_groups_container.appendChild(groupR2O3_element);
+    if (groupRO2_element) umf_groups_container.appendChild(groupRO2_element);
     
     umf_container.appendChild(umf_title);
-    umf_container.appendChild(umf_grid);
+    umf_container.appendChild(umf_groups_container);
     
     return umf_container;
 }
