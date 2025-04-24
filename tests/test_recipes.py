@@ -7,6 +7,7 @@
 # pylint: disable=broad-exception-caught, missing-function-docstring, missing-class-docstring
 # pylint: disable=f-string-without-interpolation
 # pylance: disable=reportMissingImports, reportMissingModuleSource
+# type: ignore
 
 import unittest
 import sys
@@ -15,8 +16,8 @@ import json
 
 # Fix imports by adding parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from recipe_to_umf import analyze_recipe, print_recipe_analysis
-from umf_to_recipe import solve_glaze_recipe, find_multiple_solutions
+from recipe_to_umf import analyze_recipe
+from umf_to_recipe import find_multiple_solutions
 
 class TestRecipesFromJson(unittest.TestCase):
     

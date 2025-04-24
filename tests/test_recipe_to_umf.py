@@ -15,7 +15,7 @@ import os
 
 # Fix imports by adding parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from recipe_to_umf import calculate_umf_from_recipe, analyze_umf, analyze_recipe
+from recipe_to_umf import analyze_recipe
 
 class TestUMFCalculation(unittest.TestCase):
     
