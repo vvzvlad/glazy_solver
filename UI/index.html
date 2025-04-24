@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UMF Solver</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="glaze-card">
+            <div class="header">
+                <h1 id="recipe_name">UMF Solver</h1>
+            </div>
+
+            <div class="composition-grid">
+                <div class="composition-table">
+                    <div class="table-header">R<sub>2</sub>O/RO</div>
+                    <table id="r2o_ro_table">
+                        <tr>
+                            <td>Na<sub>2</sub>O</td>
+                            <td>
+                                <input type="number" id="Na2O" class="oxide-input" step="0.01" value="0.143">
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>K<sub>2</sub>O</td>
+                            <td>
+                                <input type="number" id="K2O" class="oxide-input" step="0.01" value="0.086">
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>MgO</td>
+                            <td>
+                                <input type="number" id="MgO" class="oxide-input" step="0.01" value="0.048">
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>CaO</td>
+                            <td>
+                                <input type="number" id="CaO" class="oxide-input" step="0.01" value="0.717">
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>SrO</td>
+                            <td>
+                                <input type="number" id="SrO" class="oxide-input" step="0.01" value="0.000">
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <div class="composition-table">
+                    <div class="table-header">R<sub>2</sub>O<sub>3</sub></div>
+                    <table id="r2o3_table">
+                        <tr>
+                            <td>Al<sub>2</sub>O<sub>3</sub></td>
+                            <td>
+                                <input type="number" id="Al2O3" class="oxide-input" step="0.01" value="0.378">
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>B<sub>2</sub>O<sub>3</sub></td>
+                            <td>
+                                <input type="number" id="B2O3" class="oxide-input" step="0.01" value="0.265">
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Fe<sub>2</sub>O<sub>3</sub></td>
+                            <td>
+                                <input type="number" id="Fe2O3" class="oxide-input" step="0.01" value="0.000">
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>TiO<sub>2</sub></td>
+                            <td>
+                                <input type="number" id="TiO2" class="oxide-input" step="0.01" value="0.000">
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <div class="composition-table">
+                    <div class="table-header">RO<sub>2</sub></div>
+                    <table id="ro2_table">
+                        <tr>
+                            <td>SiO<sub>2</sub></td>
+                            <td>
+                                <input type="number" id="SiO2" class="oxide-input" step="0.01" value="3.144">
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <div id="solutions_container" class="solutions-container">
+                <!-- Здесь будут отображаться найденные рецепты -->
+            </div>
+        </div>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html> 

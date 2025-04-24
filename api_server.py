@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# flake8: noqa
+# pylint: disable=broad-exception-raised, raise-missing-from, too-many-arguments, redefined-outer-name
+# pylint: disable=multiple-statements, logging-fstring-interpolation, trailing-whitespace, line-too-long
+# pylint: disable=broad-exception-caught, missing-function-docstring, missing-class-docstring
+# pylint: disable=f-string-without-interpolation
+# pylance: disable=reportMissingImports, reportMissingModuleSource
+# type: ignore
+
 import json
 import logging
-from flask import Flask, request, jsonify
+import os
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from umf_to_recipe import find_multiple_solutions, weights_to_umf, umf_to_weights
 
@@ -15,8 +24,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger('glaze_recipe_api')
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder=None)
 CORS(app)  # Разрешаем CORS для всех маршрутов
+
+# Путь к директории UI
+UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'UI')
 
 @app.route('/api/solve', methods=['POST'])
 def solve_recipe():
@@ -39,7 +51,8 @@ def solve_recipe():
             "target_composition": {"SiO2": 4, "Al2O3": 1, ...},
             "actual_composition": {"SiO2": 3.98, "Al2O3": 1.02, ...},
             "weight_composition": {"SiO2": 65.2, "Al2O3": 18.1, ...},
-            "materials_count": 2
+            "materials_count": 2,
+            "recipe_umf": {"SiO2": 3.98, "Al2O3": 1.02, ...}  // UMF для конкретного рецепта
         },
         ...
     ]
@@ -68,6 +81,12 @@ def solve_recipe():
         if isinstance(solutions, dict) and 'error' in solutions:
             logger.error(f"calculation_error: {solutions['error']}")
             return jsonify({"error": "calculation_error", "message": solutions['error']}), 500
+        
+        # Добавляем информацию о UMF для каждого рецепта
+        for solution in solutions:
+            # UMF для конкретного рецепта уже содержится в actual_composition, но также добавим его как отдельное поле
+            # для удобства использования на фронтенде
+            solution['recipe_umf'] = solution['actual_composition']
         
         logger.info(f"found {len(solutions)} solutions")
         return jsonify(solutions)
@@ -149,6 +168,19 @@ def health_check():
     """
     logger.debug("health check requested")
     return jsonify({"status": "ok"})
+
+# Отдача UI статических файлов
+@app.route('/', defaults={'path': 'index.html'})
+@app.route('/<path:path>')
+def serve_ui(path):
+    """
+    Отдача статических файлов UI
+    """
+    if path.startswith('api/'):
+        return jsonify({"error": "not_found", "message": "API endpoint not found"}), 404
+    
+    logger.debug(f"serving ui file: {path}")
+    return send_from_directory(UI_DIR, path)
 
 if __name__ == '__main__':
     logger.info("starting glaze recipe api server on 0.0.0.0:5000")
