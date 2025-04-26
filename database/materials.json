@@ -346,7 +346,7 @@
         "id": 429,
         "name": "Алюминиевая пудра",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": null,
@@ -390,7 +390,7 @@
         "id": 166,
         "name": "Бентонит",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -414,7 +414,7 @@
         "id": 55,
         "name": "Борат кальция",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -432,7 +432,7 @@
         "id": 159,
         "name": "Бура, Na2O 2 B2O3 10 H2O",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -482,7 +482,7 @@
         "id": 54,
         "name": "Волластонит МИВОЛЛ",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -601,7 +601,7 @@
         "id": 172,
         "name": "Глинозем, Al203",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -643,7 +643,7 @@
         "id": 48,
         "name": "Доломит МИДОЛ",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -661,7 +661,7 @@
         "id": 60,
         "name": "Древесная зола",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -784,7 +784,7 @@
         "id": 41,
         "name": "Каолин КЖФ-1",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -890,7 +890,7 @@
         "id": 169,
         "name": "Карбонат бария, BaCO3",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -899,7 +899,7 @@
         "id": 128,
         "name": "Карбонат железа, FeCO3",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -917,7 +917,7 @@
         "id": 105,
         "name": "Карбонат калия, K2CO3",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -935,7 +935,7 @@
         "id": 38,
         "name": "Карбонат лития (литий углекислый)",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -944,7 +944,7 @@
         "id": 116,
         "name": "Карбонат магния",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -953,7 +953,7 @@
         "id": 114,
         "name": "Карбонат марганца",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -962,7 +962,7 @@
         "id": 146,
         "name": "Карбонат меди, CuCO3",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -971,7 +971,7 @@
         "id": 107,
         "name": "Карбонат никеля, NiCO3",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -1007,7 +1007,7 @@
         "id": 58,
         "name": "Карбонат цинка, ZnCO3",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -1032,7 +1032,7 @@
         "id": 36,
         "name": "Кварцевая мука Кварцверке W12",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -1085,7 +1085,7 @@
         "id": 161,
         "name": "Костная зола",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -1231,7 +1231,7 @@
         "id": 27,
         "name": "Мел, CaCO3",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": null,
@@ -1240,7 +1240,7 @@
         "id": 266,
         "name": "Метакаолин BMK-45",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": null,
@@ -1293,7 +1293,7 @@
         "id": 216,
         "name": "Нефелин-сиенит VR13",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": null,
@@ -1363,7 +1363,7 @@
         "id": 607,
         "name": "Оксид бора",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -1462,7 +1462,7 @@
         "id": 95,
         "name": "Оксид железа красный, Fe2O3",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -1480,7 +1480,7 @@
         "id": 150,
         "name": "Оксид кобальта, Co3O4",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -1507,7 +1507,7 @@
         "id": 113,
         "name": "Оксид марганца",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -1516,7 +1516,7 @@
         "id": 147,
         "name": "Оксид меди, CuO",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -1615,7 +1615,7 @@
         "id": 68,
         "name": "Оксид титана, TiO2",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -1660,7 +1660,7 @@
         "id": 23,
         "name": "Оксид цинка, ZnO",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -1749,7 +1749,7 @@
         "id": 19,
         "name": "Полевой шпат FFF",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -2021,7 +2021,7 @@
         "id": 13,
         "name": "Тальк Онотский",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -2082,7 +2082,7 @@
         "id": 10,
         "name": "Улексит (Химпэк)",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",
@@ -2235,7 +2235,7 @@
         "id": 4,
         "name": "Фритта 100 (Рускерамика)",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": null,
@@ -2439,7 +2439,7 @@
         "id": 163,
         "name": "Черный оксид железа, FeO",
         "isPublic": true,
-        "inInventory": false
+        "inInventory": true
     },
     {
         "description": "",

@@ -90,7 +90,7 @@ function load_umf_from_storage() {
     try {
         const hash = window.location.hash.substring(1);
         if (hash) {
-            current_umf = JSON.parse(hash);
+            current_umf = JSON.parse(decodeURIComponent(hash));
             console.log('loaded_umf_from_url:', current_umf);
         }
     } catch (error) {
@@ -102,7 +102,8 @@ function load_umf_from_storage() {
 function save_umf_to_storage(umf) {
     try {
         const umf_json = JSON.stringify(umf);
-        window.location.hash = umf_json;
+        // Кодируем JSON в URL-safe формат
+        window.location.hash = encodeURIComponent(umf_json);
         console.log('saved_umf_to_url:', umf);
     } catch (error) {
         console.error('failed_to_save_umf_to_url:', error);
@@ -609,6 +610,20 @@ async function solve_recipe() {
     }
 }
 
+// Функция для отключения материала в списке
+function disable_material_in_list(material_name) {
+    const material_id = `material_${material_name.replace(/\s+/g, '_')}`;
+    const checkbox = document.getElementById(material_id);
+    
+    if (checkbox) {
+        checkbox.checked = false;
+        // Вызываем функцию обновления выбранных материалов (определена в index.html)
+        if (typeof update_selected_materials === 'function') {
+            update_selected_materials();
+        }
+    }
+}
+
 // Display found solutions
 function display_solutions() {
     elements.solutions_container.innerHTML = '';
@@ -647,6 +662,22 @@ function display_solutions() {
             const recipe_item = document.createElement('div');
             recipe_item.className = 'solution-recipe-item';
             
+            const material_action = document.createElement('div');
+            material_action.className = 'solution-recipe-action';
+            
+            // Добавляем крестик для отключения материала
+            const disable_button = document.createElement('button');
+            disable_button.type = 'button';
+            disable_button.className = 'disable-material-btn';
+            disable_button.innerHTML = '&#10005;'; // Более тонкий символ крестика
+            disable_button.title = 'Исключить материал из расчета';
+            disable_button.dataset.material = material;
+            disable_button.addEventListener('click', function() {
+                disable_material_in_list(material);
+            });
+            
+            material_action.appendChild(disable_button);
+            
             const material_name = document.createElement('div');
             material_name.className = 'solution-recipe-name';
             material_name.textContent = material;
@@ -655,6 +686,7 @@ function display_solutions() {
             material_amount.className = 'solution-recipe-amount';
             material_amount.textContent = `${amount.toFixed(1)}%`;
             
+            recipe_item.appendChild(material_action);
             recipe_item.appendChild(material_name);
             recipe_item.appendChild(material_amount);
             solution_recipe.appendChild(recipe_item);

@@ -14,6 +14,7 @@ import argparse
 import os
 import numpy as np
 from scipy.optimize import nnls
+import math
 
 def weights_to_umf(weight_composition):
     """
@@ -294,6 +295,27 @@ def solve_glaze_recipe(target_umf, inventory_data=None):
     solution = solve_recipe(oxide_matrix, target_umf, material_names, available_materials)
     
     return solution
+
+# Функция для преобразования результатов к безопасному для JSON формату
+def make_json_safe(obj):
+    """
+    Преобразует объект для безопасной сериализации в JSON,
+    заменяя бесконечные значения на строки 'Infinity'
+    
+    Args:
+        obj: исходный объект (словарь, список или простой тип)
+    
+    Returns:
+        объект, безопасный для сериализации в JSON
+    """
+    if isinstance(obj, dict):
+        return {k: make_json_safe(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_safe(v) for v in obj]
+    elif isinstance(obj, float) and (math.isinf(obj) or math.isnan(obj)):
+        return "Infinity" if obj > 0 else "-Infinity" if obj < 0 else "NaN"
+    else:
+        return obj
 
 # Функция для поиска нескольких решений с различными комбинациями материалов
 def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, error_tolerance=0.01, logging=False, inventory_data=None):

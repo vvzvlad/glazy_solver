@@ -14,7 +14,7 @@ import logging
 import os
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from umf_to_recipe import find_multiple_solutions, weights_to_umf, umf_to_weights, load_materials, load_inventory
+from umf_to_recipe import find_multiple_solutions, weights_to_umf, umf_to_weights, load_materials, make_json_safe
 
 # Настройка логирования
 logging.basicConfig(
@@ -93,8 +93,11 @@ def solve_recipe():
             # для удобства использования на фронтенде
             solution['recipe_umf'] = solution['actual_composition']
         
+        # Обрабатываем результаты для безопасной сериализации в JSON
+        safe_solutions = make_json_safe(solutions)
+        
         logger.info(f"found {len(solutions)} solutions")
-        return jsonify(solutions)
+        return jsonify(safe_solutions)
     
     except Exception as e:
         logger.exception(f"server_error: {str(e)}")
@@ -230,10 +233,8 @@ def get_materials():
         materials = load_materials()
         
         if inventory_only:
-            # Если нужны только материалы из инвентаря, загружаем инвентарь
-            inventory = load_inventory()
-            # Фильтруем материалы по инвентарю
-            materials = [material for material in materials if material.get('name') in inventory]
+            # Фильтруем материалы по флагу inInventory
+            materials = [material for material in materials if material.get('inInventory', False)]
         
         logger.info(f"returning {len(materials)} materials, inventory_only={inventory_only}")
         return jsonify(materials)
