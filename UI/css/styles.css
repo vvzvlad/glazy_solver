@@ -750,4 +750,61 @@ input:checked + .slider:before {
     .solution-umf-groups {
         flex-direction: column;
     }
+}
+
+/* Стили для сравнения UMF */
+.solution-umf-value.diff-high {
+    color: #e74c3c;
+    font-weight: bold;
+}
+
+.solution-umf-value.diff-medium {
+    color: #f39c12;
+    font-weight: bold;
+}
+
+.solution-umf-value.diff-low {
+    color: #27ae60;
+}
+
+.umf-comparison-legend {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed #eee;
+    font-size: 11px;
+    color: #777;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.legend-title {
+    font-weight: bold;
+    margin-right: 5px;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.legend-color {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    display: inline-block;
+}
+
+.legend-color.diff-high {
+    background-color: #e74c3c;
+}
+
+.legend-color.diff-medium {
+    background-color: #f39c12;
+}
+
+.legend-color.diff-low {
+    background-color: #27ae60;
 } 

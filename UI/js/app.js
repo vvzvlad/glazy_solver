@@ -405,7 +405,6 @@ function create_umf_element(recipe_umf) {
     
     const umf_title = document.createElement('div');
     umf_title.className = 'solution-umf-title';
-    //umf_title.textContent = 'UMF решения:';
     
     // Создаем контейнер для всех групп UMF
     const umf_groups_container = document.createElement('div');
@@ -452,6 +451,30 @@ function create_umf_element(recipe_umf) {
             
             const oxide_value = document.createElement('div');
             oxide_value.className = 'solution-umf-value';
+            
+            // Сравниваем с целевым UMF
+            if (current_umf[oxide] !== undefined && current_umf[oxide] > 0) {
+                const target_value = current_umf[oxide];
+                const solution_value = filtered_umf[oxide];
+                const abs_diff = Math.abs(solution_value - target_value);
+                
+                // Добавляем класс в зависимости от величины абсолютной разницы
+                if (abs_diff > 0.1) {
+                    oxide_value.classList.add('diff-high');
+                } else if (abs_diff > 0.02) {
+                    oxide_value.classList.add('diff-medium');
+                } else {
+                    oxide_value.classList.add('diff-low');
+                }
+                
+                // Добавляем тултип с информацией о различии
+                oxide_value.title = `Целевое: ${target_value.toFixed(3)}, Разница: ${abs_diff.toFixed(3)}`;
+            } else {
+                // Если оксида нет в целевом UMF или его значение 0, подсвечиваем красным
+                oxide_value.classList.add('diff-high');
+                oxide_value.title = 'Этот оксид отсутствует в целевом UMF';
+            }
+            
             oxide_value.textContent = filtered_umf[oxide].toFixed(3);
             
             umf_item.appendChild(oxide_name);
@@ -475,8 +498,17 @@ function create_umf_element(recipe_umf) {
     if (groupR2O3_element) umf_groups_container.appendChild(groupR2O3_element);
     if (groupRO2_element) umf_groups_container.appendChild(groupRO2_element);
     
+    // Добавляем информацию о сравнении
+    const legend = document.createElement('div');
+    legend.className = 'umf-comparison-legend';
+    legend.innerHTML = '<div class="legend-title">Разница с целевым UMF:</div>' +
+                       '<div class="legend-item"><span class="legend-color diff-high"></span> >0.1</div>' +
+                       '<div class="legend-item"><span class="legend-color diff-medium"></span> 0.02-0.1</div>' +
+                       '<div class="legend-item"><span class="legend-color diff-low"></span> <0.02</div>';
+    
     umf_container.appendChild(umf_title);
     umf_container.appendChild(umf_groups_container);
+    umf_container.appendChild(legend);
     
     return umf_container;
 }
