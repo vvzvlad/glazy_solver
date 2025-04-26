@@ -599,14 +599,32 @@ input:checked + .slider:before {
 }
 
 .material-item {
-    padding: 10px;
-    border-bottom: 1px solid #f0f0f0;
-    cursor: pointer;
+    display: flex;
+    align-items: center;
+    padding: 2px 4px;
+    border-radius: 3px;
     transition: background-color 0.2s;
+    font-size: 13px;
+    margin-bottom: 1px;
+    cursor: default;
+}
+
+.material-item.has-tooltip {
+    cursor: help;
+    position: relative;
 }
 
 .material-item:hover {
-    background-color: #f9f9f9;
+    background-color: #eee;
+}
+
+.material-item input[type="checkbox"] {
+    margin-right: 4px;
+}
+
+.material-item label {
+    cursor: pointer;
+    user-select: none;
 }
 
 /* Solutions container */

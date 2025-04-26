@@ -146,6 +146,37 @@
                 const label = document.createElement('label');
                 label.htmlFor = checkbox.id;
                 label.textContent = material.name;
+                
+                // Создаем всплывающую подсказку с составом материала
+                if (material.formula && Object.keys(material.formula).length > 0) {
+                    // Сортируем оксиды по убыванию количества
+                    const sortedOxides = Object.entries(material.formula)
+                        .sort((a, b) => b[1] - a[1]);
+                    
+                    // Формируем текст подсказки
+                    let tooltipText = 'Состав:\n';
+                    
+                    // Сначала фильтруем оксиды с содержанием >= 1%
+                    const filteredOxides = sortedOxides.filter(([_, amount]) => amount >= 1);
+                    
+                    // Затем отображаем отфильтрованные оксиды
+                    filteredOxides.forEach(([oxide, amount], index) => {
+                        const formattedOxide = oxide.replace(/(\d+)/g, '$1');
+                        const isLast = index === filteredOxides.length - 1;
+                        tooltipText += `${formattedOxide}: ${amount.toFixed(2)}%${!isLast ? '\n' : ''}`;
+                    });
+                    
+                    // Если все значения меньше 1%, показываем сообщение
+                    if (filteredOxides.length === 0) {
+                        tooltipText = 'Состав: нет значений >= 1%';
+                    }
+                    
+                    // Добавляем подсказку к элементу
+                    materialItem.title = tooltipText;
+                    materialItem.classList.add('has-tooltip');
+                } else {
+                    materialItem.title = 'Нет данных о составе';
+                }
 
                 materialItem.appendChild(checkbox);
                 materialItem.appendChild(label);
