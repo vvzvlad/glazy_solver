@@ -459,13 +459,11 @@ function create_umf_element(recipe_umf) {
                 const abs_diff = Math.abs(solution_value - target_value);
                 
                 // Добавляем класс в зависимости от величины абсолютной разницы
-                if (abs_diff > 0.1) {
-                    oxide_value.classList.add('diff-high');
-                } else if (abs_diff > 0.02) {
-                    oxide_value.classList.add('diff-medium');
-                } else {
-                    oxide_value.classList.add('diff-low');
-                }
+                if (abs_diff >= 0 && abs_diff < 0.01) { oxide_value.classList.add('diff-low'); }
+                if (abs_diff >= 0.01 && abs_diff < 0.1) { oxide_value.classList.add('diff-medium'); }
+                if (abs_diff >= 0.1) { oxide_value.classList.add('diff-high'); }
+                
+                
                 
                 // Добавляем тултип с информацией о различии
                 oxide_value.title = `Целевое: ${target_value.toFixed(3)}, Разница: ${abs_diff.toFixed(3)}`;
@@ -503,8 +501,8 @@ function create_umf_element(recipe_umf) {
     legend.className = 'umf-comparison-legend';
     legend.innerHTML = '<div class="legend-title">Разница с целевым UMF:</div>' +
                        '<div class="legend-item"><span class="legend-color diff-high"></span> >0.1</div>' +
-                       '<div class="legend-item"><span class="legend-color diff-medium"></span> 0.02-0.1</div>' +
-                       '<div class="legend-item"><span class="legend-color diff-low"></span> <0.02</div>';
+                       '<div class="legend-item"><span class="legend-color diff-medium"></span> 0.01-0.1</div>' +
+                       '<div class="legend-item"><span class="legend-color diff-low"></span> <0.01</div>';
     
     umf_container.appendChild(umf_title);
     umf_container.appendChild(umf_groups_container);
