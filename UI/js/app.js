@@ -41,6 +41,10 @@ const api = {
     
     async check_health() {
         return this.request('health');
+    },
+    
+    async get_molar_masses() {
+        return this.request('molar_masses');
     }
 };
 
@@ -60,32 +64,46 @@ let current_umf = {
 
 let current_solutions = [];
 let calculate_timer = null;
+let all_oxides = {}; // Будет содержать все доступные оксиды из molar_masses.json
+
+// Определение групп оксидов
+const oxide_groups = {
+    'r2o_ro': ['Na2O', 'K2O', 'Li2O', 'MgO', 'CaO', 'SrO', 'BaO', 'ZnO', 'PbO', 'CdO', 'CuO', 'FeO', 'MnO'],
+    'r2o3': ['Al2O3', 'B2O3', 'Fe2O3', 'Cr2O3', 'Bi2O3', 'La2O3', 'Y2O3', 'P2O5', 'V2O5'],
+    'ro2': ['SiO2', 'TiO2', 'ZrO2', 'SnO2', 'MnO2', 'GeO2']
+};
 
 // DOM Elements
 const elements = {
     recipe_name: document.getElementById('recipe_name'),
     solutions_container: document.getElementById('solutions_container'),
-    
-    // Get all UMF input elements
-    SiO2: document.getElementById('SiO2'),
-    Al2O3: document.getElementById('Al2O3'),
-    B2O3: document.getElementById('B2O3'),
-    Na2O: document.getElementById('Na2O'),
-    K2O: document.getElementById('K2O'),
-    MgO: document.getElementById('MgO'),
-    CaO: document.getElementById('CaO'),
-    SrO: document.getElementById('SrO'),
-    Fe2O3: document.getElementById('Fe2O3'),
-    TiO2: document.getElementById('TiO2')
+    r2o_ro_table: document.getElementById('r2o_ro_table'),
+    r2o3_table: document.getElementById('r2o3_table'),
+    ro2_table: document.getElementById('ro2_table'),
+    add_oxide_buttons: document.querySelectorAll('.add-oxide-btn')
 };
 
 // Initialize the app
-function init() {
+async function init() {
+    // Загружаем доступные оксиды из API
+    try {
+        all_oxides = await api.get_molar_masses();
+        console.log('Loaded molar masses:', all_oxides);
+    } catch (error) {
+        console.error('Failed to load molar masses, using defaults:', error);
+        // Используем дефолтное значение, если не удалось загрузить
+        all_oxides = {
+            'SiO2': 60.084, 'Al2O3': 101.961, 'B2O3': 69.620, 'Na2O': 61.979,
+            'K2O': 94.196, 'MgO': 40.304, 'CaO': 56.077, 'SrO': 103.620,
+            'BaO': 153.326, 'ZnO': 81.380, 'TiO2': 79.866, 'Fe2O3': 159.688
+        };
+    }
+    
     // Check API health
     check_api_health();
     
-    // Set initial UMF values
-    display_umf_values();
+    // Добавляем начальные оксиды
+    add_initial_oxides();
     
     // Setup event listeners
     setup_event_listeners();
@@ -105,14 +123,171 @@ async function check_api_health() {
     }
 }
 
-// Display UMF values in inputs
-function display_umf_values() {
+// Добавление начальных оксидов
+function add_initial_oxides() {
+    // Добавляем стандартные оксиды из current_umf
     for (const [oxide, value] of Object.entries(current_umf)) {
-        const element = elements[oxide];
-        if (element) {
-            element.value = value.toFixed(3);
+        if (value !== undefined) {
+            const group = get_oxide_group(oxide);
+            if (group) {
+                add_oxide_to_table(group, oxide, value);
+            }
         }
     }
+}
+
+// Определяем группу оксида
+function get_oxide_group(oxide) {
+    for (const [group, oxides] of Object.entries(oxide_groups)) {
+        if (oxides.includes(oxide)) {
+            return group;
+        }
+    }
+    
+    // Если не найдено, определяем по химической формуле
+    if (oxide.includes('2O3') || oxide.includes('2O5')) {
+        return 'r2o3';
+    } else if (oxide.includes('O2')) {
+        return 'ro2';
+    } else if (oxide.includes('2O') || oxide.includes('O')) {
+        return 'r2o_ro';
+    }
+    
+    return 'r2o_ro'; // По умолчанию
+}
+
+// Добавляем оксид в таблицу
+function add_oxide_to_table(group, selected_oxide = null, value = 0) {
+    const table = elements[`${group}_table`];
+    if (!table) return;
+    
+    const row = document.createElement('tr');
+    
+    // Создаем селект для выбора оксида
+    const select_cell = document.createElement('td');
+    const select = document.createElement('select');
+    select.className = 'oxide-select';
+    select.dataset.group = group;
+    
+    // Добавляем пустой option
+    const empty_option = document.createElement('option');
+    empty_option.value = '';
+    empty_option.textContent = 'Выберите оксид';
+    select.appendChild(empty_option);
+    
+    // Получаем список оксидов, которые еще не выбраны в этой группе
+    const used_oxides = get_used_oxides();
+    
+    // Добавляем оксиды в селект, принадлежащие к нужной группе
+    for (const oxide of oxide_groups[group]) {
+        if (all_oxides[oxide] && (selected_oxide === oxide || !used_oxides.includes(oxide))) {
+            const option = document.createElement('option');
+            option.value = oxide;
+            option.innerHTML = format_oxide_name(oxide);
+            option.selected = (oxide === selected_oxide);
+            select.appendChild(option);
+        }
+    }
+    
+    // Добавляем остальные оксиды из molar_masses.json, которые могут подходить к этой группе
+    for (const oxide in all_oxides) {
+        if (!oxide_groups.r2o_ro.includes(oxide) && 
+            !oxide_groups.r2o3.includes(oxide) && 
+            !oxide_groups.ro2.includes(oxide) && 
+            (selected_oxide === oxide || !used_oxides.includes(oxide))) {
+            // Определяем группу оксида
+            const detected_group = get_oxide_group(oxide);
+            if (detected_group === group) {
+                const option = document.createElement('option');
+                option.value = oxide;
+                option.innerHTML = format_oxide_name(oxide);
+                option.selected = (oxide === selected_oxide);
+                select.appendChild(option);
+            }
+        }
+    }
+    
+    select_cell.appendChild(select);
+    
+    // Создаем input для значения
+    const value_cell = document.createElement('td');
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.className = 'oxide-input';
+    input.id = selected_oxide || '';
+    input.step = '0.01';
+    input.value = value;
+    value_cell.appendChild(input);
+    
+    // Создаем кнопку удаления
+    const delete_cell = document.createElement('td');
+    const delete_button = document.createElement('button');
+    delete_button.type = 'button';
+    delete_button.className = 'delete-oxide-btn';
+    delete_button.textContent = '✕';
+    delete_cell.appendChild(delete_button);
+    
+    // Собираем row
+    row.appendChild(select_cell);
+    row.appendChild(value_cell);
+    row.appendChild(delete_cell);
+    
+    // Добавляем в таблицу
+    table.appendChild(row);
+    
+    // Добавляем обработчики событий
+    setup_oxide_row_events(select, input, delete_button);
+}
+
+// Получаем список уже использованных оксидов
+function get_used_oxides() {
+    const selects = document.querySelectorAll('.oxide-select');
+    const used = [];
+    
+    selects.forEach(select => {
+        if (select.value) {
+            used.push(select.value);
+        }
+    });
+    
+    return used;
+}
+
+// Добавляем обработчики событий для строки оксида
+function setup_oxide_row_events(select, input, delete_button) {
+    // При изменении выбранного оксида
+    select.addEventListener('change', () => {
+        // Обновляем ID инпута
+        input.id = select.value;
+        
+        // Обновляем current_umf
+        current_umf = get_umf_from_inputs();
+        
+        // Запускаем расчет
+        debounce_solve();
+    });
+    
+    // При изменении значения
+    input.addEventListener('input', () => {
+        // Обновляем current_umf
+        current_umf = get_umf_from_inputs();
+        
+        // Запускаем расчет
+        debounce_solve();
+    });
+    
+    // При нажатии на кнопку удаления
+    delete_button.addEventListener('click', () => {
+        // Удаляем строку
+        const row = delete_button.closest('tr');
+        row.remove();
+        
+        // Обновляем current_umf
+        current_umf = get_umf_from_inputs();
+        
+        // Запускаем расчет
+        debounce_solve();
+    });
 }
 
 // Get current UMF values from inputs
@@ -121,9 +296,11 @@ function get_umf_from_inputs() {
     const umf = {};
     
     oxide_inputs.forEach(input => {
-        const value = parseFloat(input.value);
-        if (!isNaN(value) && value > 0) {
-            umf[input.id] = value;
+        if (input.id) {
+            const value = parseFloat(input.value);
+            if (!isNaN(value) && value > 0) {
+                umf[input.id] = value;
+            }
         }
     });
     
@@ -188,13 +365,8 @@ function create_umf_element(recipe_umf) {
         }
     }
     
-    // Разделяем оксиды по группам
-    const groupR2O_RO = ['Na2O', 'K2O', 'MgO', 'CaO', 'SrO', 'ZnO', 'BaO', 'Li2O', 'PbO'];
-    const groupR2O3 = ['Al2O3', 'B2O3', 'Fe2O3', 'TiO2', 'ZrO2', 'MnO', 'P2O5', 'Cr2O3'];
-    const groupRO2 = ['SiO2', 'SnO2'];
-    
     // Создаем группы
-    const createGroup = (title, oxides) => {
+    const createGroup = (title, group_id) => {
         const groupContainer = document.createElement('div');
         groupContainer.className = 'solution-umf-group';
         
@@ -205,8 +377,11 @@ function create_umf_element(recipe_umf) {
         const umf_grid = document.createElement('div');
         umf_grid.className = 'solution-umf-grid single-column';
         
-        // Фильтруем и сортируем оксиды в группе
-        const groupOxides = oxides.filter(oxide => filtered_umf[oxide] !== undefined);
+        // Фильтруем оксиды в группе
+        const groupOxides = Object.keys(filtered_umf).filter(oxide => {
+            const group = get_oxide_group(oxide);
+            return group === group_id;
+        });
         
         // Если группа пустая, не создаем её
         if (groupOxides.length === 0) {
@@ -237,9 +412,9 @@ function create_umf_element(recipe_umf) {
     };
     
     // Создаем группы оксидов
-    const groupR2O_RO_element = createGroup('R<sub>2</sub>O/RO', groupR2O_RO);
-    const groupR2O3_element = createGroup('R<sub>2</sub>O<sub>3</sub>', groupR2O3);
-    const groupRO2_element = createGroup('RO<sub>2</sub>', groupRO2);
+    const groupR2O_RO_element = createGroup('R<sub>2</sub>O/RO', 'r2o_ro');
+    const groupR2O3_element = createGroup('R<sub>2</sub>O<sub>3</sub>', 'r2o3');
+    const groupRO2_element = createGroup('RO<sub>2</sub>', 'ro2');
     
     // Добавляем группы в контейнер
     if (groupR2O_RO_element) umf_groups_container.appendChild(groupR2O_RO_element);
@@ -376,11 +551,11 @@ function display_solutions() {
 
 // Setup event listeners
 function setup_event_listeners() {
-    // Oxide inputs change
-    document.querySelectorAll('.oxide-input').forEach(input => {
-        input.addEventListener('input', () => {
-            current_umf = get_umf_from_inputs();
-            debounce_solve();
+    // Добавляем обработчики для кнопок добавления оксидов
+    elements.add_oxide_buttons.forEach(button => {
+        button.addEventListener('click', () => {
+            const group = button.dataset.group;
+            add_oxide_to_table(group);
         });
     });
 }

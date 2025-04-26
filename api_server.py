@@ -29,6 +29,8 @@ CORS(app)  # Разрешаем CORS для всех маршрутов
 
 # Путь к директории UI
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'UI')
+# Путь к директории с данными
+DATABASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database')
 
 @app.route('/api/solve', methods=['POST'])
 def solve_recipe():
@@ -93,6 +95,35 @@ def solve_recipe():
     
     except Exception as e:
         logger.exception(f"server_error: {str(e)}")
+        return jsonify({"error": "server_error", "message": str(e)}), 500
+
+@app.route('/api/molar_masses', methods=['GET'])
+def get_molar_masses():
+    """
+    API endpoint для получения списка оксидов и их молярных масс
+    
+    Возвращает:
+    {
+        "SiO2": 60.084,
+        "Al2O3": 101.961,
+        ...
+    }
+    """
+    try:
+        molar_masses_path = os.path.join(DATABASE_DIR, 'molar_masses.json')
+        
+        if not os.path.exists(molar_masses_path):
+            logger.error(f"molar_masses_file_not_found: {molar_masses_path}")
+            return jsonify({"error": "file_not_found", "message": "Molar masses file not found"}), 404
+        
+        with open(molar_masses_path, 'r', encoding='utf-8') as f:
+            molar_masses = json.load(f)
+        
+        logger.info(f"returning {len(molar_masses)} molar masses")
+        return jsonify(molar_masses)
+    
+    except Exception as e:
+        logger.exception(f"molar_masses_error: {str(e)}")
         return jsonify({"error": "server_error", "message": str(e)}), 500
 
 @app.route('/api/umf_to_weights', methods=['POST'])
