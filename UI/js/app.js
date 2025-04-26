@@ -26,7 +26,7 @@ const api = {
     },
     
     async solve_recipe(umf, options = {}) {
-        const { max_solutions = 5, min_materials = true, error_tolerance = 0.01 } = options;
+        const { max_solutions = 10, min_materials = true, error_tolerance = 0.1 } = options;
         
         return this.request('solve', {
             method: 'POST',
@@ -66,6 +66,7 @@ let current_solutions = [];
 let calculate_timer = null;
 let all_oxides = {}; // Будет содержать все доступные оксиды из molar_masses.json
 let is_calculating = false;
+let use_min_materials = true; // Добавляем переменную для хранения значения min_materials
 
 // Определение групп оксидов
 const oxide_groups = {
@@ -82,7 +83,8 @@ const elements = {
     r2o3_table: document.getElementById('r2o3_table'),
     ro2_table: document.getElementById('ro2_table'),
     add_oxide_buttons: document.querySelectorAll('.add-oxide-btn'),
-    calculation_status: document.getElementById('calculation_status')
+    calculation_status: document.getElementById('calculation_status'),
+    min_materials_toggle: document.getElementById('min_materials_toggle')
 };
 
 // Загрузить UMF из URL
@@ -567,7 +569,7 @@ async function solve_recipe() {
         // Call API to solve recipe
         const solutions = await api.solve_recipe(umf, {
             max_solutions: 15,  // Запрашиваем больше для полноценной сортировки
-            min_materials: true,
+            min_materials: use_min_materials, // Используем значение из параметра
             error_tolerance: 0.05
         });
         
@@ -714,6 +716,16 @@ function setup_event_listeners() {
             add_oxide_to_table(group);
         });
     });
+
+    // Добавляем обработчик для переключателя min_materials
+    const min_materials_checkbox = document.getElementById('min_materials_toggle');
+    if (min_materials_checkbox) {
+        min_materials_checkbox.checked = use_min_materials;
+        min_materials_checkbox.addEventListener('change', function() {
+            use_min_materials = this.checked;
+            solve_recipe();
+        });
+    }
 }
 
 // Initialize when DOM is loaded

@@ -318,7 +318,7 @@ def make_json_safe(obj):
         return obj
 
 # Функция для поиска нескольких решений с различными комбинациями материалов
-def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, error_tolerance=0.01, logging=False, inventory_data=None):
+def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, error_tolerance=1, logging=True, inventory_data=None):
     """
     Найти несколько решений для заданной UMF-формулы
     

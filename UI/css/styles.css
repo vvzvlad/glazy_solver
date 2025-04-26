@@ -19,36 +19,44 @@ body {
 
 /* Главная обертка для размещения калькулятора и списка материалов рядом */
 .main-wrapper {
-    display: block;
+    display: flex;
     margin-bottom: 20px;
     position: relative;
     min-height: 0;
 }
 
+/* Левая и правая колонки */
+.left-column {
+    flex: 1;
+}
+
+.right-column {
+    width: 300px;
+    margin-left: 20px;
+    display: flex;
+    flex-direction: column;
+}
+
 /* Стили для блока калькулятора */
 .glaze-card {
-    width: 900px;
+    width: 100%;
     background-color: #fff;
     border-radius: 10px;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
     overflow: auto;
     padding: 20px;
     height: auto;
-    display: inline-block;
-    vertical-align: top;
 }
 
 /* Стили для блока материалов */
 .materials-card {
-    width: 300px;
+    width: 100%;
     background-color: #fff;
     border-radius: 10px;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
     overflow: hidden;
     padding: 0;
-    display: inline-block;
-    vertical-align: top;
-    margin-left: 20px;
+    margin-bottom: 20px;
 }
 
 .materials-card .table-header {
@@ -89,13 +97,16 @@ body {
 /* Адаптивность для мобильных устройств */
 @media (max-width: 1180px) {
     .main-wrapper {
-        display: block;
+        flex-direction: column;
     }
     
-    .glaze-card, .materials-card {
+    .left-column, .right-column {
         width: 100%;
-        display: block;
         margin-left: 0;
+    }
+    
+    .glaze-card, .materials-card, .settings-card {
+        width: 100%;
         margin-bottom: 20px;
     }
 }
@@ -1008,4 +1019,117 @@ input:checked + .slider:before {
         max-width: none;
         width: 100%;
     }
+}
+
+/* Стили для секции настроек */
+.control-section {
+    margin: 10px 0 20px 0;
+    padding: 10px;
+    background-color: #f8f8f8;
+    border-radius: 5px;
+    border: 1px solid #e0e0e0;
+}
+
+.control-section h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    font-size: 16px;
+    color: #333;
+}
+
+.control-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+/* Стилизация чекбоксов */
+.control-checkbox {
+    display: flex;
+    align-items: center;
+    position: relative;
+    padding-left: 20px;
+    margin-right: 15px;
+    cursor: pointer;
+    font-size: 13px;
+    user-select: none;
+}
+
+.control-checkbox input {
+    position: absolute;
+    opacity: 0;
+    cursor: pointer;
+    height: 0;
+    width: 0;
+}
+
+.checkmark {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 14px;
+    width: 14px;
+    background-color: #fff;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+}
+
+.control-checkbox:hover input ~ .checkmark {
+    background-color: #f0f0f0;
+}
+
+.control-checkbox input:checked ~ .checkmark {
+    background-color: #2196F3;
+    border-color: #2196F3;
+}
+
+.checkmark:after {
+    content: "";
+    position: absolute;
+    display: none;
+}
+
+.control-checkbox input:checked ~ .checkmark:after {
+    display: block;
+}
+
+.control-checkbox .checkmark:after {
+    left: 5px;
+    top: 2px;
+    width: 3px;
+    height: 7px;
+    border: solid white;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+.checkbox-label {
+    font-size: 13px;
+    color: #333;
+}
+
+/* Стили для блока настроек */
+.settings-card {
+    width: 100%;
+    background-color: #fff;
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+    padding: 0;
+}
+
+.settings-content {
+    padding: 15px;
+}
+
+.settings-content .control-checkbox {
+    display: flex;
+    align-items: center;
+    position: relative;
+    padding-left: 20px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    user-select: none;
 } 
