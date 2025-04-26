@@ -47,5 +47,97 @@
     </div>
 
     <script src="js/app.js"></script>
+    
+    <script>
+        // Функции для работы с URL вместо localStorage
+        const url_utils = {
+            // Получить UMF из URL
+            get_umf_from_url() {
+                try {
+                    const hash = window.location.hash.substring(1);
+                    if (hash) {
+                        return JSON.parse(hash);
+                    }
+                } catch (error) {
+                    console.error('failed_to_parse_url_hash', error);
+                }
+                return null;
+            },
+
+            // Сохранить UMF в URL
+            save_umf_to_url(umf) {
+                try {
+                    const umf_json = JSON.stringify(umf);
+                    window.location.hash = umf_json;
+                    console.log('saved_umf_to_url', umf);
+                } catch (error) {
+                    console.error('failed_to_save_umf_to_url', error);
+                }
+            }
+        };
+
+        // Сохраняем оригинальные функции
+        const original_save_umf_to_storage = save_umf_to_storage;
+        const original_load_umf_from_storage = load_umf_from_storage;
+
+        // Переопределяем функцию сохранения
+        save_umf_to_storage = function(umf) {
+            try {
+                // Сохраняем в URL
+                url_utils.save_umf_to_url(umf);
+                // Сохраняем в localStorage через оригинальную функцию
+                original_save_umf_to_storage(umf);
+            } catch (error) {
+                console.error('save_umf_error', error);
+                original_save_umf_to_storage(umf);
+            }
+        };
+
+        // Переопределяем функцию загрузки
+        load_umf_from_storage = function() {
+            try {
+                const url_umf = url_utils.get_umf_from_url();
+                if (url_umf) {
+                    console.log('loaded_umf_from_url', url_umf);
+                    // Устанавливаем UMF из URL
+                    current_umf = url_umf;
+                    return;
+                }
+                
+                // Если в URL нет данных, используем оригинальную функцию
+                original_load_umf_from_storage();
+            } catch (error) {
+                console.error('load_umf_error', error);
+                original_load_umf_from_storage();
+            }
+        };
+
+        // Если формула уже была загружена, повторно вызываем загрузку
+        if (typeof init === 'function') {
+            // Сначала загрузим из URL, если там есть данные
+            const url_umf = url_utils.get_umf_from_url();
+            if (url_umf) {
+                current_umf = url_umf;
+                add_initial_oxides();
+                solve_recipe();
+            }
+        }
+
+        // Добавляем обработчик изменения хеша URL для загрузки формулы при изменении URL
+        window.addEventListener('hashchange', function() {
+            const url_umf = url_utils.get_umf_from_url();
+            if (url_umf) {
+                current_umf = url_umf;
+                // Очищаем таблицы
+                elements.r2o_ro_table.innerHTML = '';
+                elements.r2o3_table.innerHTML = '';
+                elements.ro2_table.innerHTML = '';
+                // Заново добавляем оксиды
+                add_initial_oxides();
+                // Пересчитываем рецепт
+                solve_recipe();
+            }
+        });
+    </script>
 </body>
 </html> 
