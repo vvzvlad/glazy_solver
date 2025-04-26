@@ -418,6 +418,14 @@ function create_umf_element(recipe_umf) {
         }
     }
     
+    // Находим оксиды, которые есть в текущем UMF, но отсутствуют в решении
+    const missing_oxides = {};
+    for (const [oxide, value] of Object.entries(current_umf)) {
+        if (value > 0.001 && !filtered_umf[oxide]) {
+            missing_oxides[oxide] = value;
+        }
+    }
+    
     // Создаем группы
     const createGroup = (title, group_id) => {
         const groupContainer = document.createElement('div');
@@ -430,17 +438,27 @@ function create_umf_element(recipe_umf) {
         const umf_grid = document.createElement('div');
         umf_grid.className = 'solution-umf-grid single-column';
         
-        // Фильтруем оксиды в группе
+        // Фильтруем оксиды в группе для тех, что есть в решении
         const groupOxides = Object.keys(filtered_umf).filter(oxide => {
             const group = get_oxide_group(oxide);
             return group === group_id;
         });
         
+        // Фильтруем отсутствующие оксиды в этой группе
+        const missingGroupOxides = Object.keys(missing_oxides).filter(oxide => {
+            const group = get_oxide_group(oxide);
+            return group === group_id;
+        });
+        
+        // Объединяем оба списка
+        const allGroupOxides = [...groupOxides, ...missingGroupOxides];
+        
         // Если группа пустая, не создаем её
-        if (groupOxides.length === 0) {
+        if (allGroupOxides.length === 0) {
             return null;
         }
         
+        // Добавляем оксиды из решения
         groupOxides.forEach(oxide => {
             const umf_item = document.createElement('div');
             umf_item.className = 'solution-umf-item';
@@ -480,6 +498,25 @@ function create_umf_element(recipe_umf) {
             umf_grid.appendChild(umf_item);
         });
         
+        // Добавляем отсутствующие оксиды
+        missingGroupOxides.forEach(oxide => {
+            const umf_item = document.createElement('div');
+            umf_item.className = 'solution-umf-item';
+            
+            const oxide_name = document.createElement('div');
+            oxide_name.className = 'solution-umf-name';
+            oxide_name.innerHTML = format_oxide_name(oxide);
+            
+            const oxide_value = document.createElement('div');
+            oxide_value.className = 'solution-umf-value diff-missing';
+            oxide_value.title = `Этот оксид отсутствует в решении. Целевое значение: ${missing_oxides[oxide].toFixed(3)}`;
+            oxide_value.textContent = '? ' + missing_oxides[oxide].toFixed(3);
+            
+            umf_item.appendChild(oxide_name);
+            umf_item.appendChild(oxide_value);
+            umf_grid.appendChild(umf_item);
+        });
+        
         groupContainer.appendChild(groupTitle);
         groupContainer.appendChild(umf_grid);
         
@@ -501,8 +538,8 @@ function create_umf_element(recipe_umf) {
     legend.className = 'umf-comparison-legend';
     legend.innerHTML = '<div class="legend-title">Разница с целевым UMF:</div>' +
                        '<div class="legend-item"><span class="legend-color diff-high"></span> >0.1</div>' +
-                       '<div class="legend-item"><span class="legend-color diff-medium"></span> 0.01-0.1</div>' +
-                       '<div class="legend-item"><span class="legend-color diff-low"></span> <0.01</div>';
+                       '<div class="legend-item"><span class="legend-color diff-medium"></span> 0.02-0.1</div>' +
+                       '<div class="legend-item"><span class="legend-color diff-low"></span> <0.02</div>'
     
     umf_container.appendChild(umf_title);
     umf_container.appendChild(umf_groups_container);

@@ -767,6 +767,11 @@ input:checked + .slider:before {
     color: #27ae60;
 }
 
+.solution-umf-value.diff-missing {
+    color: #8e44ad;
+    font-weight: bold;
+}
+
 .umf-comparison-legend {
     margin-top: 10px;
     padding-top: 8px;
