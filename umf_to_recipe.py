@@ -107,7 +107,19 @@ def load_materials():
     return materials
 
 # Загрузка доступных материалов из inventory.json
-def load_inventory():
+def load_inventory(inventory_data=None):
+    """
+    Загружает инвентарь материалов из переданных данных или из файла inventory.json
+    
+    Args:
+        inventory_data: опциональный словарь или список с данными инвентаря
+    
+    Returns:
+        список или словарь имен доступных материалов
+    """
+    if inventory_data is not None:
+        return inventory_data
+    
     script_dir = os.path.dirname(os.path.abspath(__file__))
     inventory_file = os.path.join(script_dir, 'database', 'inventory.json')
     
@@ -256,15 +268,15 @@ def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=N
         }
 
 # Основная функция решения для заданной UMF-формулы
-def solve_glaze_recipe(target_umf):
+def solve_glaze_recipe(target_umf, inventory_data=None):
     materials = load_materials()
-    inventory = load_inventory()
+    inventory = load_inventory(inventory_data)
     
     # Фильтрация материалов по инвентарю
     available_materials = filter_materials_by_inventory(materials, inventory)
     
     if not available_materials:
-        return {'error': 'Нет доступных материалов в инвентаре'}
+        return {'error': 'нет_доступных_материалов_в_инвентаре'}
     
     # Определение всех оксидов в целевой формуле
     target_oxides = list(target_umf.keys())
@@ -276,7 +288,7 @@ def solve_glaze_recipe(target_umf):
     rank = np.linalg.matrix_rank(oxide_matrix)
     
     if rank < len(target_oxides):
-        print(f"Предупреждение: ранг матрицы ({rank}) меньше количества оксидов ({len(target_oxides)}). Точное решение невозможно.")
+        print(f"предупреждение: ранг матрицы ({rank}) меньше количества оксидов ({len(target_oxides)}). точное решение невозможно.")
     
     # Решение задачи
     solution = solve_recipe(oxide_matrix, target_umf, material_names, available_materials)
@@ -284,7 +296,7 @@ def solve_glaze_recipe(target_umf):
     return solution
 
 # Функция для поиска нескольких решений с различными комбинациями материалов
-def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, error_tolerance=0.01, logging=False):
+def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, error_tolerance=0.01, logging=False, inventory_data=None):
     """
     Найти несколько решений для заданной UMF-формулы
     
@@ -293,18 +305,20 @@ def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, err
         max_solutions: максимальное количество решений
         min_materials: если True, предпочитать решения с меньшим количеством материалов
         error_tolerance: допустимое увеличение ошибки для решений с меньшим числом материалов
+        logging: включить логирование процесса поиска
+        inventory_data: опциональные данные инвентаря вместо загрузки из файла
     
     Returns:
         Список решений, отсортированный по предпочтительности
     """
     materials = load_materials()
-    inventory = load_inventory()
+    inventory = load_inventory(inventory_data)
     
     # Фильтрация материалов по инвентарю
     available_materials = filter_materials_by_inventory(materials, inventory)
     
     if not available_materials:
-        return {'error': 'Нет доступных материалов в инвентаре'}
+        return {'error': 'нет_доступных_материалов_в_инвентаре'}
     
     # Определение всех оксидов в целевой формуле
     target_oxides = list(target_umf.keys())
@@ -450,39 +464,45 @@ def main():
     parser.add_argument('--solutions', type=int, default=3, help='Number of solutions to find (default: 3)')
     parser.add_argument('--min-materials', action='store_true', help='Prefer solutions with fewer materials')
     parser.add_argument('--error-tolerance', type=float, default=0.01, help='Acceptable error increase for solutions with fewer materials (default: 0.01)')
+    parser.add_argument('--inventory', type=str, help='Custom inventory as JSON string, instead of using inventory.json')
     
     args = parser.parse_args()
     
     try:
         target_umf = json.loads(args.umf)
-    except json.JSONDecodeError:
-        print("Ошибка: неверный формат JSON для UMF")
+        inventory_data = json.loads(args.inventory) if args.inventory else None
+    except json.JSONDecodeError as e:
+        if args.inventory and 'args.inventory' in str(e):
+            print("ошибка: неверный формат JSON для инвентаря")
+        else:
+            print("ошибка: неверный формат JSON для UMF")
         return
     
     solutions = find_multiple_solutions(
         target_umf, 
         max_solutions=args.solutions,
         min_materials=args.min_materials,
-        error_tolerance=args.error_tolerance
+        error_tolerance=args.error_tolerance,
+        inventory_data=inventory_data
     )
     
     if isinstance(solutions, dict) and 'error' in solutions:
-        print(f"Ошибка: {solutions['error']}")
+        print(f"ошибка: {solutions['error']}")
     else:
-        print(f"\nНайдено {len(solutions)} решений для заданной UMF-формулы:")
+        print(f"\nнайдено {len(solutions)} решений для заданной UMF-формулы:")
         
         for i, solution in enumerate(solutions):
-            print(f"\n[Решение {i+1}] Ошибка: {solution['error']} | Материалов: {solution['materials_count']}")
-            print("\nСостав рецепта (вес в %):")
+            print(f"\n[решение {i+1}] ошибка: {solution['error']} | материалов: {solution['materials_count']}")
+            print("\nсостав рецепта (вес в %):")
             
             for material, percentage in solution['recipe'].items():
                 print(f"  {material}: {percentage}%")
             
-            print("\nЦелевой состав (UMF):")
+            print("\nцелевой состав (UMF):")
             for oxide, value in sorted(solution['target_composition'].items()):
                 print(f"  {oxide}: {value}")
             
-            print("\nФактический состав (UMF):")
+            print("\nфактический состав (UMF):")
             for oxide, value in sorted(solution['actual_composition'].items()):
                 print(f"  {oxide}: {value}")
             

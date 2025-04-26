@@ -14,7 +14,7 @@ import logging
 import os
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from umf_to_recipe import find_multiple_solutions, weights_to_umf, umf_to_weights
+from umf_to_recipe import find_multiple_solutions, weights_to_umf, umf_to_weights, load_materials, load_inventory
 
 # Настройка логирования
 logging.basicConfig(
@@ -42,7 +42,8 @@ def solve_recipe():
         "umf": {"SiO2": 4, "Al2O3": 1, "Na2O": 0.5, "K2O": 0.5},
         "max_solutions": 3,  // опционально, по умолчанию 3
         "min_materials": true,  // опционально, по умолчанию true
-        "error_tolerance": 0.01  // опционально, по умолчанию 0.01
+        "error_tolerance": 0.01,  // опционально, по умолчанию 0.01
+        "inventory": ["Material1", "Material2", ...]  // опционально, список доступных материалов
     }
     
     Возвращает:
@@ -70,6 +71,7 @@ def solve_recipe():
         max_solutions = data.get('max_solutions', 3)
         min_materials = data.get('min_materials', True)
         error_tolerance = data.get('error_tolerance', 0.01)
+        inventory_data = data.get('inventory', None)
         
         logger.info(f"solving recipe for umf: {umf}, max_solutions: {max_solutions}, min_materials: {min_materials}")
         
@@ -77,7 +79,8 @@ def solve_recipe():
             umf, 
             max_solutions=max_solutions,
             min_materials=min_materials,
-            error_tolerance=error_tolerance
+            error_tolerance=error_tolerance,
+            inventory_data=inventory_data
         )
         
         if isinstance(solutions, dict) and 'error' in solutions:
@@ -199,6 +202,45 @@ def health_check():
     """
     logger.debug("health check requested")
     return jsonify({"status": "ok"})
+
+@app.route('/api/materials', methods=['GET'])
+def get_materials():
+    """
+    API endpoint для получения списка всех доступных материалов
+    
+    GET параметры:
+        inventory_only (bool, optional): Если True, возвращает только материалы из инвентаря
+    
+    Возвращает:
+    [
+        {
+            "name": "Материал 1",
+            "formula": {"SiO2": 65.2, "Al2O3": 18.1, ...},
+            "description": "Описание материала",
+            "id": 123,
+            ...
+        },
+        ...
+    ]
+    """
+    try:
+        inventory_only = request.args.get('inventory_only', 'false').lower() == 'true'
+        
+        # Загружаем все материалы
+        materials = load_materials()
+        
+        if inventory_only:
+            # Если нужны только материалы из инвентаря, загружаем инвентарь
+            inventory = load_inventory()
+            # Фильтруем материалы по инвентарю
+            materials = [material for material in materials if material.get('name') in inventory]
+        
+        logger.info(f"returning {len(materials)} materials, inventory_only={inventory_only}")
+        return jsonify(materials)
+    
+    except Exception as e:
+        logger.exception(f"materials_error: {str(e)}")
+        return jsonify({"error": "server_error", "message": str(e)}), 500
 
 # Отдача UI статических файлов
 @app.route('/', defaults={'path': 'index.html'})
