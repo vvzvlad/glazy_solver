@@ -97,6 +97,9 @@
         // Глобальный список материалов
         let all_materials = [];
         let selected_materials = [];
+        
+        // Переменная для хранения таймера debounce материалов
+        let materials_timer = null;
 
         // Загрузка списка материалов при инициализации страницы
         document.addEventListener('DOMContentLoaded', function() {
@@ -204,8 +207,14 @@
             update_selected_materials();
         }
 
-        // Обновление списка выбранных материалов
+        // Обновление списка выбранных материалов с debounce
         function update_selected_materials() {
+            // Отменяем предыдущий таймер, если он есть
+            if (materials_timer) {
+                clearTimeout(materials_timer);
+            }
+            
+            // Обновляем список выбранных материалов
             selected_materials = [];
             const checkboxes = document.querySelectorAll('#materials_list input[type="checkbox"]:checked');
             checkboxes.forEach(checkbox => {
@@ -213,8 +222,10 @@
             });
             console.log('selected_materials_updated:', selected_materials);
             
-            // Запускаем перерасчет рецепта при изменении выбора материалов
-            solve_recipe();
+            // Запускаем перерасчет рецепта через 500мс
+            materials_timer = setTimeout(() => {
+                solve_recipe();
+            }, 800);
         }
 
         // Модифицируем функцию solve_recipe для отправки выбранных материалов
@@ -287,28 +298,65 @@
         };
 
         // Добавляем обработчик изменения хеша URL для загрузки формулы при изменении URL
-        window.addEventListener('hashchange', function() {
-            try {
-                const hash = window.location.hash.substring(1);
-                if (hash) {
-                    // Декодируем URL-safe формат и получаем UMF из URL
-                    current_umf = JSON.parse(decodeURIComponent(hash));
-                    console.log('hash_changed_loading_umf:', current_umf);
-                    
-                    // Очищаем таблицы
-                    elements.r2o_ro_table.innerHTML = '';
-                    elements.r2o3_table.innerHTML = '';
-                    elements.ro2_table.innerHTML = '';
-                    
-                    // Заново добавляем оксиды
-                    add_initial_oxides();
-                    
-                    // Пересчитываем рецепт
-                    solve_recipe();
-                }
-            } catch (error) {
-                console.error('hash_change_parse_error:', error);
+        let hash_timer = null;
+        window.is_internal_hash_change = false;
+        
+        window.addEventListener('hashchange', function(event) {
+            // Игнорируем события, вызванные внутренними изменениями
+            if (window.is_internal_hash_change) {
+                window.is_internal_hash_change = false;
+                return;
             }
+            
+            // Отменяем предыдущий таймер, если он есть
+            if (hash_timer) {
+                clearTimeout(hash_timer);
+            }
+            
+            // Сохраняем текущий активный элемент
+            const active_element = document.activeElement;
+            const active_element_id = active_element ? active_element.id : null;
+            const active_element_selection_start = active_element && active_element.selectionStart ? active_element.selectionStart : null;
+            const active_element_selection_end = active_element && active_element.selectionEnd ? active_element.selectionEnd : null;
+            
+            // Устанавливаем новый таймер
+            hash_timer = setTimeout(() => {
+                try {
+                    const hash = window.location.hash.substring(1);
+                    if (hash) {
+                        // Декодируем URL-safe формат и получаем UMF из URL
+                        current_umf = JSON.parse(decodeURIComponent(hash));
+                        console.log('hash_changed_loading_umf:', current_umf);
+                        
+                        // Очищаем таблицы
+                        elements.r2o_ro_table.innerHTML = '';
+                        elements.r2o3_table.innerHTML = '';
+                        elements.ro2_table.innerHTML = '';
+                        
+                        // Заново добавляем оксиды
+                        add_initial_oxides();
+                        
+                        // Пересчитываем рецепт
+                        solve_recipe();
+                        
+                        // Восстанавливаем фокус
+                        if (active_element_id) {
+                            setTimeout(() => {
+                                const element = document.getElementById(active_element_id);
+                                if (element) {
+                                    element.focus();
+                                    if (active_element_selection_start !== null && active_element_selection_end !== null) {
+                                        element.selectionStart = active_element_selection_start;
+                                        element.selectionEnd = active_element_selection_end;
+                                    }
+                                }
+                            }, 0);
+                        }
+                    }
+                } catch (error) {
+                    console.error('hash_change_parse_error:', error);
+                }
+            }, 800);
         });
     </script>
 </body>

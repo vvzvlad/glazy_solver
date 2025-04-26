@@ -189,11 +189,11 @@ body {
 .composition-table td {
     padding: 8px 10px;
     font-size: 14px;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: none;
 }
 
 .composition-table td:first-child {
-    border-right: 1px solid #f0f0f0;
+    border-right: none;
     width: 40%;
 }
 
@@ -1132,4 +1132,23 @@ input:checked + .slider:before {
     cursor: pointer;
     font-size: 13px;
     user-select: none;
+}
+
+/* Стиль для разделителя между R2O и RO оксидами */
+.r2o-ro-divider {
+    border-bottom: 1px solid rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Применяем стиль разделителя к строкам таблицы */
+tr.r2o-ro-divider {
+    border-bottom: 1px solid rgba(0, 0, 0, 0.4) !important;
+}
+
+tr.r2o-ro-divider td {
+    padding-bottom: 10px;
+    margin-bottom: 8px;
+}
+
+tr.r2o-ro-divider + tr td {
+    padding-top: 10px;
 } 

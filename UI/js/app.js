@@ -50,15 +50,15 @@ const api = {
 
 // App State
 let current_umf = {
-    'SiO2': 3.144,
-    'Al2O3': 0.378,
-    'B2O3': 0.265,
-    'Na2O': 0.143,
     'K2O': 0.086,
+    'Na2O': 0.143,
     'MgO': 0.048,
     'CaO': 0.717,
     'SrO': 0.000,
+    'Al2O3': 0.378,
+    'B2O3': 0.265,
     'Fe2O3': 0.000,
+    'SiO2': 3.144,
     'TiO2': 0.000
 };
 
@@ -70,7 +70,7 @@ let use_min_materials = true; // Добавляем переменную для 
 
 // Определение групп оксидов
 const oxide_groups = {
-    'r2o_ro': ['Na2O', 'K2O', 'Li2O', 'MgO', 'CaO', 'SrO', 'BaO', 'ZnO', 'PbO', 'CdO', 'CuO', 'FeO', 'MnO'],
+    'r2o_ro': ['K2O', 'Na2O', 'Li2O', 'MgO', 'CaO', 'SrO', 'BaO', 'ZnO', 'PbO', 'CdO', 'CuO', 'FeO', 'MnO'],
     'r2o3': ['Al2O3', 'B2O3', 'Fe2O3', 'Cr2O3', 'Bi2O3', 'La2O3', 'Y2O3', 'P2O5', 'V2O5'],
     'ro2': ['SiO2', 'TiO2', 'ZrO2', 'SnO2', 'MnO2', 'GeO2']
 };
@@ -104,8 +104,40 @@ function load_umf_from_storage() {
 function save_umf_to_storage(umf) {
     try {
         const umf_json = JSON.stringify(umf);
-        // Кодируем JSON в URL-safe формат
-        window.location.hash = encodeURIComponent(umf_json);
+        const new_hash = encodeURIComponent(umf_json);
+        
+        // Сохраняем текущий активный элемент
+        const active_element = document.activeElement;
+        const active_element_id = active_element ? active_element.id : null;
+        const active_element_selection_start = active_element && active_element.selectionStart ? active_element.selectionStart : null;
+        const active_element_selection_end = active_element && active_element.selectionEnd ? active_element.selectionEnd : null;
+        
+        // Меняем хеш URL только если он отличается от текущего
+        if (window.location.hash !== '#' + new_hash) {
+            // Устанавливаем флаг, что изменение хеша - внутреннее
+            if (typeof window.is_internal_hash_change !== 'undefined') {
+                window.is_internal_hash_change = true;
+            }
+            
+            // Устанавливаем новый хеш URL
+            window.location.hash = new_hash;
+            
+            // Восстанавливаем фокус на активном элементе
+            if (active_element_id) {
+                setTimeout(() => {
+                    const element = document.getElementById(active_element_id);
+                    if (element) {
+                        element.focus();
+                        // Если был выделен текст, восстанавливаем выделение
+                        if (active_element_selection_start !== null && active_element_selection_end !== null) {
+                            element.selectionStart = active_element_selection_start;
+                            element.selectionEnd = active_element_selection_end;
+                        }
+                    }
+                }, 0);
+            }
+        }
+        
         console.log('saved_umf_to_url:', umf);
     } catch (error) {
         console.error('failed_to_save_umf_to_url:', error);
@@ -157,14 +189,64 @@ async function check_api_health() {
 
 // Добавление начальных оксидов
 function add_initial_oxides() {
-    // Добавляем стандартные оксиды из current_umf
+    // Группируем оксиды по категориям
+    const r2o_oxides = [];
+    const ro_oxides = [];
+    const r2o3_oxides = [];
+    const ro2_oxides = [];
+    
     for (const [oxide, value] of Object.entries(current_umf)) {
         if (value !== undefined) {
             const group = get_oxide_group(oxide);
-            if (group) {
-                add_oxide_to_table(group, oxide, value);
+            if (group === 'r2o_ro') {
+                // R2O оксиды
+                if (['K2O', 'Na2O', 'Li2O'].includes(oxide)) {
+                    r2o_oxides.push([oxide, value]);
+                } else {
+                    // RO оксиды
+                    ro_oxides.push([oxide, value]);
+                }
+            } else if (group === 'r2o3') {
+                r2o3_oxides.push([oxide, value]);
+            } else if (group === 'ro2') {
+                ro2_oxides.push([oxide, value]);
             }
         }
+    }
+    
+    // Сортируем R2O оксиды в нужном порядке
+    r2o_oxides.sort((a, b) => {
+        const order = ['K2O', 'Na2O', 'Li2O'];
+        return order.indexOf(a[0]) - order.indexOf(b[0]);
+    });
+    
+    // Добавляем R2O оксиды
+    for (const [oxide, value] of r2o_oxides) {
+        add_oxide_to_table('r2o_ro', oxide, value, true);
+    }
+    
+    // Добавляем разделитель между R2O и RO
+    if (r2o_oxides.length > 0 && ro_oxides.length > 0) {
+        // Находим последний добавленный R2O оксид
+        const lastR2ORow = elements.r2o_ro_table.querySelector('tr:last-child');
+        if (lastR2ORow) {
+            lastR2ORow.classList.add('r2o-ro-divider');
+        }
+    }
+    
+    // Добавляем RO оксиды
+    for (const [oxide, value] of ro_oxides) {
+        add_oxide_to_table('r2o_ro', oxide, value);
+    }
+    
+    // Добавляем R2O3 оксиды
+    for (const [oxide, value] of r2o3_oxides) {
+        add_oxide_to_table('r2o3', oxide, value);
+    }
+    
+    // Добавляем RO2 оксиды
+    for (const [oxide, value] of ro2_oxides) {
+        add_oxide_to_table('ro2', oxide, value);
     }
 }
 
@@ -189,11 +271,39 @@ function get_oxide_group(oxide) {
 }
 
 // Добавляем оксид в таблицу
-function add_oxide_to_table(group, selected_oxide = null, value = 0) {
+function add_oxide_to_table(group, selected_oxide = null, value = 0, is_r2o = false) {
     const table = elements[`${group}_table`];
     if (!table) return;
     
+    // Определим порядок оксидов в группе r2o_ro
+    const r2o_ro_order = ['K2O', 'Na2O', 'Li2O', 'MgO', 'CaO', 'SrO', 'BaO', 'ZnO', 'PbO', 'CdO', 'CuO', 'FeO', 'MnO'];
+    
+    // Сортируем оксиды в dropdown согласно определенному порядку для r2o_ro
+    let oxide_options = [];
+    if (group === 'r2o_ro') {
+        oxide_options = [...oxide_groups[group]].sort((a, b) => {
+            const a_index = r2o_ro_order.indexOf(a);
+            const b_index = r2o_ro_order.indexOf(b);
+            
+            // Если оба оксида есть в r2o_ro_order, сортируем по их позициям
+            if (a_index >= 0 && b_index >= 0) {
+                return a_index - b_index;
+            }
+            // Если только один из них есть в r2o_ro_order, тот, который есть, идет первым
+            if (a_index >= 0) return -1;
+            if (b_index >= 0) return 1;
+            // В противном случае сортируем по алфавиту
+            return a.localeCompare(b);
+        });
+    } else {
+        oxide_options = [...oxide_groups[group]];
+    }
+    
     const row = document.createElement('tr');
+    // Если это R2O оксид и стоит в конце своей группы, добавляем класс для разделителя
+    if (is_r2o) {
+        row.dataset.isR2o = "true";
+    }
     
     // Создаем селект для выбора оксида
     const select_cell = document.createElement('td');
@@ -211,7 +321,7 @@ function add_oxide_to_table(group, selected_oxide = null, value = 0) {
     const used_oxides = get_used_oxides();
     
     // Добавляем оксиды в селект, принадлежащие к нужной группе
-    for (const oxide of oxide_groups[group]) {
+    for (const oxide of oxide_options) {
         if (all_oxides[oxide] && (selected_oxide === oxide || !used_oxides.includes(oxide))) {
             const option = document.createElement('option');
             option.value = oxide;
@@ -285,12 +395,48 @@ function get_used_oxides() {
     return used;
 }
 
+// Обновление разделителя между R2O и RO оксидами
+function update_r2o_ro_divider() {
+    const table = elements.r2o_ro_table;
+    if (!table) return;
+    
+    // Сначала удаляем класс разделителя со всех строк
+    const rows = table.querySelectorAll('tr');
+    rows.forEach(row => row.classList.remove('r2o-ro-divider'));
+    
+    // Находим последний R2O оксид
+    const r2o_rows = Array.from(rows).filter(row => row.dataset.isR2o === "true");
+    const ro_rows = Array.from(rows).filter(row => !row.dataset.isR2o || row.dataset.isR2o !== "true");
+    
+    // Если есть и R2O и RO оксиды, добавляем разделитель
+    if (r2o_rows.length > 0 && ro_rows.length > 0) {
+        r2o_rows[r2o_rows.length - 1].classList.add('r2o-ro-divider');
+    }
+}
+
 // Добавляем обработчики событий для строки оксида
 function setup_oxide_row_events(select, input, delete_button) {
     // При изменении выбранного оксида
     select.addEventListener('change', () => {
+        // Получаем текущее значение выбранного оксида
+        const selected_oxide = select.value;
+        
         // Обновляем ID инпута
-        input.id = select.value;
+        input.id = selected_oxide;
+        
+        // Определяем, является ли это R2O оксидом
+        const is_r2o = ['K2O', 'Na2O', 'Li2O'].includes(selected_oxide);
+        const row = select.closest('tr');
+        
+        if (row) {
+            if (is_r2o) {
+                row.dataset.isR2o = "true";
+            } else {
+                delete row.dataset.isR2o;
+            }
+            // Обновляем разделитель
+            update_r2o_ro_divider();
+        }
         
         // Обновляем current_umf
         current_umf = get_umf_from_inputs();
@@ -298,7 +444,7 @@ function setup_oxide_row_events(select, input, delete_button) {
         // Сохраняем в URL
         save_umf_to_storage(current_umf);
         
-        // Запускаем расчет
+        // Запускаем расчет с debounce
         debounce_solve();
     });
     
@@ -310,7 +456,7 @@ function setup_oxide_row_events(select, input, delete_button) {
         // Сохраняем в URL
         save_umf_to_storage(current_umf);
         
-        // Запускаем расчет
+        // Запускаем расчет с debounce
         debounce_solve();
     });
     
@@ -320,13 +466,16 @@ function setup_oxide_row_events(select, input, delete_button) {
         const row = delete_button.closest('tr');
         row.remove();
         
+        // Обновляем разделитель
+        update_r2o_ro_divider();
+        
         // Обновляем current_umf
         current_umf = get_umf_from_inputs();
         
         // Сохраняем в URL
         save_umf_to_storage(current_umf);
         
-        // Запускаем расчет
+        // Запускаем расчет с debounce
         debounce_solve();
     });
 }
@@ -387,7 +536,7 @@ function debounce_solve() {
         clearTimeout(calculate_timer);
     }
     
-    // Устанавливаем статус расчета
+    // Устанавливаем статус расчета только при первом вызове
     if (!is_calculating) {
         show_calculation_status(true);
         is_calculating = true;
@@ -459,10 +608,50 @@ function create_umf_element(recipe_umf) {
             return null;
         }
         
+        // Сортируем оксиды для группы R2O/RO так, чтобы сначала шли R2O, потом RO
+        let sortedGroupOxides = [...groupOxides];
+        let sortedMissingGroupOxides = [...missingGroupOxides];
+        
+        if (group_id === 'r2o_ro') {
+            // Функция для определения, является ли оксид типом R2O
+            const is_r2o = (oxide) => ['Na2O', 'K2O', 'Li2O'].includes(oxide);
+            
+            // Сортируем существующие оксиды в правильном порядке
+            sortedGroupOxides = [
+                // Сначала K2O, Na2O, Li2O в этом порядке, если они есть
+                ...(sortedGroupOxides.filter(oxide => oxide === 'K2O')),
+                ...(sortedGroupOxides.filter(oxide => oxide === 'Na2O')),
+                ...(sortedGroupOxides.filter(oxide => oxide === 'Li2O')),
+                // Потом остальные R2O, если такие появятся в будущем
+                ...(sortedGroupOxides.filter(oxide => is_r2o(oxide) && 
+                    !['K2O', 'Na2O', 'Li2O'].includes(oxide))),
+                // В конце все оксиды RO
+                ...(sortedGroupOxides.filter(oxide => !is_r2o(oxide)))
+            ];
+            
+            // Сортируем отсутствующие оксиды так же
+            sortedMissingGroupOxides = [
+                ...(sortedMissingGroupOxides.filter(oxide => oxide === 'K2O')),
+                ...(sortedMissingGroupOxides.filter(oxide => oxide === 'Na2O')),
+                ...(sortedMissingGroupOxides.filter(oxide => oxide === 'Li2O')),
+                ...(sortedMissingGroupOxides.filter(oxide => is_r2o(oxide) && 
+                    !['K2O', 'Na2O', 'Li2O'].includes(oxide))),
+                ...(sortedMissingGroupOxides.filter(oxide => !is_r2o(oxide)))
+            ];
+        }
+        
         // Добавляем оксиды из решения
-        groupOxides.forEach(oxide => {
+        sortedGroupOxides.forEach((oxide, index) => {
             const umf_item = document.createElement('div');
             umf_item.className = 'solution-umf-item';
+            
+            // Добавляем визуальный разделитель между R2O и RO в группе r2o_ro
+            if (group_id === 'r2o_ro' &&
+                ['Na2O', 'K2O', 'Li2O'].includes(oxide) &&
+                index < sortedGroupOxides.length - 1 &&
+                !['Na2O', 'K2O', 'Li2O'].includes(sortedGroupOxides[index + 1])) {
+                umf_item.classList.add('r2o-ro-divider');
+            }
             
             const oxide_name = document.createElement('div');
             oxide_name.className = 'solution-umf-name';
@@ -500,9 +689,17 @@ function create_umf_element(recipe_umf) {
         });
         
         // Добавляем отсутствующие оксиды
-        missingGroupOxides.forEach(oxide => {
+        sortedMissingGroupOxides.forEach((oxide, index) => {
             const umf_item = document.createElement('div');
             umf_item.className = 'solution-umf-item';
+            
+            // Добавляем визуальный разделитель между R2O и RO в группе r2o_ro для отсутствующих оксидов
+            if (group_id === 'r2o_ro' &&
+                ['Na2O', 'K2O', 'Li2O'].includes(oxide) &&
+                index < sortedMissingGroupOxides.length - 1 &&
+                !['Na2O', 'K2O', 'Li2O'].includes(sortedMissingGroupOxides[index + 1])) {
+                umf_item.classList.add('r2o-ro-divider');
+            }
             
             const oxide_name = document.createElement('div');
             oxide_name.className = 'solution-umf-name';
@@ -713,7 +910,30 @@ function setup_event_listeners() {
     elements.add_oxide_buttons.forEach(button => {
         button.addEventListener('click', () => {
             const group = button.dataset.group;
-            add_oxide_to_table(group);
+            // Если добавляем оксид в группу R2O/RO,
+            // приоритезируем оксиды из подгруппы R2O
+            if (group === 'r2o_ro') {
+                // Получаем список неиспользуемых оксидов
+                const used_oxides = get_used_oxides();
+                
+                // Проверяем, есть ли доступные R2O оксиды
+                const r2o_oxides = ['K2O', 'Na2O', 'Li2O'];
+                const available_r2o = r2o_oxides.filter(oxide => 
+                    !used_oxides.includes(oxide) && all_oxides[oxide]);
+                
+                // Если есть доступные R2O оксиды, добавляем первый из них
+                if (available_r2o.length > 0) {
+                    add_oxide_to_table(group, available_r2o[0], 0, true);
+                } else {
+                    // Иначе добавляем пустую строку
+                    add_oxide_to_table(group);
+                }
+                
+                // Обновляем разделитель
+                update_r2o_ro_divider();
+            } else {
+                add_oxide_to_table(group);
+            }
         });
     });
 
