@@ -65,6 +65,7 @@ let current_umf = {
 let current_solutions = [];
 let calculate_timer = null;
 let all_oxides = {}; // Будет содержать все доступные оксиды из molar_masses.json
+let is_calculating = false;
 
 // Определение групп оксидов
 const oxide_groups = {
@@ -80,7 +81,8 @@ const elements = {
     r2o_ro_table: document.getElementById('r2o_ro_table'),
     r2o3_table: document.getElementById('r2o3_table'),
     ro2_table: document.getElementById('ro2_table'),
-    add_oxide_buttons: document.querySelectorAll('.add-oxide-btn')
+    add_oxide_buttons: document.querySelectorAll('.add-oxide-btn'),
+    calculation_status: document.getElementById('calculation_status')
 };
 
 // Initialize the app
@@ -119,7 +121,7 @@ async function check_api_health() {
         console.log('API server is running');
     } catch (error) {
         console.error('API server is not available. Some features may not work correctly.');
-        show_status_message('API сервер недоступен. Некоторые функции могут не работать корректно.');
+        show_error_message('API сервер недоступен. Некоторые функции могут не работать корректно.');
     }
 }
 
@@ -307,12 +309,23 @@ function get_umf_from_inputs() {
     return umf;
 }
 
-// Show status message in solutions container
-function show_status_message(message, is_loading = false) {
+// Показать статус расчета рядом с заголовком
+function show_calculation_status(is_loading) {
+    if (is_loading) {
+        elements.calculation_status.innerHTML = '<span class="loader"></span> Расчет...';
+        elements.calculation_status.classList.add('visible');
+    } else {
+        elements.calculation_status.innerHTML = '';
+        elements.calculation_status.classList.remove('visible');
+    }
+}
+
+// Показать сообщение об ошибке в контейнере решений
+function show_error_message(message) {
     elements.solutions_container.innerHTML = '';
     
     const status_elem = document.createElement('div');
-    status_elem.className = is_loading ? 'loading-status' : 'status-message';
+    status_elem.className = 'status-message';
     status_elem.textContent = message;
     
     elements.solutions_container.appendChild(status_elem);
@@ -335,8 +348,11 @@ function debounce_solve() {
         clearTimeout(calculate_timer);
     }
     
-    // Показываем сообщение о расчете
-    show_status_message('Расчет...', true);
+    // Устанавливаем статус расчета
+    if (!is_calculating) {
+        show_calculation_status(true);
+        is_calculating = true;
+    }
     
     // Запускаем таймер на выполнение расчета через 500мс
     calculate_timer = setTimeout(() => {
@@ -438,12 +454,11 @@ async function solve_recipe() {
         const umf = get_umf_from_inputs();
         
         if (Object.keys(umf).length === 0) {
-            show_status_message('Введите значения UMF для решения.');
+            show_calculation_status(false);
+            is_calculating = false;
+            show_error_message('Введите значения UMF для решения.');
             return;
         }
-        
-        // Show loading
-        show_status_message('Выполняется решение...', true);
         
         // Call API to solve recipe
         const solutions = await api.solve_recipe(umf, {
@@ -451,6 +466,10 @@ async function solve_recipe() {
             min_materials: true,
             error_tolerance: 0.05
         });
+        
+        // Убираем индикатор расчета
+        show_calculation_status(false);
+        is_calculating = false;
         
         if (solutions && solutions.length > 0) {
             // Новая логика сортировки:
@@ -477,11 +496,13 @@ async function solve_recipe() {
             
             display_solutions();
         } else {
-            show_status_message('Не удалось найти подходящие решения.');
+            show_error_message('Не удалось найти подходящие решения.');
         }
     } catch (error) {
         console.error('Error solving recipe:', error);
-        show_status_message(`Ошибка при поиске решения: ${error.message}`);
+        show_calculation_status(false);
+        is_calculating = false;
+        show_error_message(`Ошибка при поиске решения: ${error.message}`);
     }
 }
 
@@ -490,7 +511,7 @@ function display_solutions() {
     elements.solutions_container.innerHTML = '';
     
     if (current_solutions.length === 0) {
-        show_status_message('Решения не найдены.');
+        show_error_message('Решения не найдены.');
         return;
     }
     
