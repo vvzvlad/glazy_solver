@@ -469,13 +469,13 @@ function create_umf_element(recipe_umf) {
                 
                 // Добавляем тултип с информацией о различии
                 oxide_value.title = `Целевое: ${target_value.toFixed(3)}, Разница: ${abs_diff.toFixed(3)}`;
+                oxide_value.textContent = filtered_umf[oxide].toFixed(3);
             } else {
                 // Если оксида нет в целевом UMF или его значение 0, подсвечиваем красным
                 oxide_value.classList.add('diff-high');
                 oxide_value.title = 'Этот оксид отсутствует в целевом UMF';
+                oxide_value.textContent = '! ' + filtered_umf[oxide].toFixed(3);
             }
-            
-            oxide_value.textContent = filtered_umf[oxide].toFixed(3);
             
             umf_item.appendChild(oxide_name);
             umf_item.appendChild(oxide_value);
