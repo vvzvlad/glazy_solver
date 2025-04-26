@@ -1,6 +1,9 @@
 // API Configuration
 const API_URL = '/api';
 
+// Local Storage Key
+const STORAGE_KEY = 'glazy_solver_umf';
+
 // API Client
 const api = {
     async request(endpoint, options = {}) {
@@ -104,6 +107,9 @@ async function init() {
     // Check API health
     check_api_health();
     
+    // Загружаем формулу из localStorage если есть
+    load_umf_from_storage();
+    
     // Добавляем начальные оксиды
     add_initial_oxides();
     
@@ -122,6 +128,29 @@ async function check_api_health() {
     } catch (error) {
         console.error('API server is not available. Some features may not work correctly.');
         show_error_message('API сервер недоступен. Некоторые функции могут не работать корректно.');
+    }
+}
+
+// Загрузить UMF из localStorage
+function load_umf_from_storage() {
+    try {
+        const saved_umf = localStorage.getItem(STORAGE_KEY);
+        if (saved_umf) {
+            current_umf = JSON.parse(saved_umf);
+            console.log('Loaded UMF from localStorage:', current_umf);
+        }
+    } catch (error) {
+        console.error('Failed to load UMF from localStorage:', error);
+    }
+}
+
+// Сохранить UMF в localStorage
+function save_umf_to_storage(umf) {
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(umf));
+        console.log('Saved UMF to localStorage:', umf);
+    } catch (error) {
+        console.error('Failed to save UMF to localStorage:', error);
     }
 }
 
@@ -265,6 +294,9 @@ function setup_oxide_row_events(select, input, delete_button) {
         // Обновляем current_umf
         current_umf = get_umf_from_inputs();
         
+        // Сохраняем в localStorage
+        save_umf_to_storage(current_umf);
+        
         // Запускаем расчет
         debounce_solve();
     });
@@ -273,6 +305,9 @@ function setup_oxide_row_events(select, input, delete_button) {
     input.addEventListener('input', () => {
         // Обновляем current_umf
         current_umf = get_umf_from_inputs();
+        
+        // Сохраняем в localStorage
+        save_umf_to_storage(current_umf);
         
         // Запускаем расчет
         debounce_solve();
@@ -286,6 +321,9 @@ function setup_oxide_row_events(select, input, delete_button) {
         
         // Обновляем current_umf
         current_umf = get_umf_from_inputs();
+        
+        // Сохраняем в localStorage
+        save_umf_to_storage(current_umf);
         
         // Запускаем расчет
         debounce_solve();
@@ -367,7 +405,7 @@ function create_umf_element(recipe_umf) {
     
     const umf_title = document.createElement('div');
     umf_title.className = 'solution-umf-title';
-    umf_title.textContent = 'UMF решения:';
+    //umf_title.textContent = 'UMF решения:';
     
     // Создаем контейнер для всех групп UMF
     const umf_groups_container = document.createElement('div');

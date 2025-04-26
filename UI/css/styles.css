@@ -521,6 +521,9 @@ input:checked + .slider:before {
     margin-top: 20px;
     border-top: 1px solid #e1e1e1;
     padding-top: 20px;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 15px;
 }
 
 .solution-item {
@@ -731,6 +734,10 @@ input:checked + .slider:before {
     
     .composition-table td:nth-child(2) {
         width: 35%;
+    }
+    
+    .solutions-container {
+        grid-template-columns: 1fr;
     }
 }
 
