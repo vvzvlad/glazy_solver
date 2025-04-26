@@ -1,9 +1,6 @@
 // API Configuration
 const API_URL = '/api';
 
-// Local Storage Key
-const STORAGE_KEY = 'glazy_solver_umf';
-
 // API Client
 const api = {
     async request(endpoint, options = {}) {
@@ -88,14 +85,38 @@ const elements = {
     calculation_status: document.getElementById('calculation_status')
 };
 
+// Загрузить UMF из URL
+function load_umf_from_storage() {
+    try {
+        const hash = window.location.hash.substring(1);
+        if (hash) {
+            current_umf = JSON.parse(hash);
+            console.log('loaded_umf_from_url:', current_umf);
+        }
+    } catch (error) {
+        console.error('failed_to_parse_url_hash:', error);
+    }
+}
+
+// Сохранить UMF в URL
+function save_umf_to_storage(umf) {
+    try {
+        const umf_json = JSON.stringify(umf);
+        window.location.hash = umf_json;
+        console.log('saved_umf_to_url:', umf);
+    } catch (error) {
+        console.error('failed_to_save_umf_to_url:', error);
+    }
+}
+
 // Initialize the app
 async function init() {
     // Загружаем доступные оксиды из API
     try {
         all_oxides = await api.get_molar_masses();
-        console.log('Loaded molar masses:', all_oxides);
+        console.log('loaded_molar_masses:', all_oxides);
     } catch (error) {
-        console.error('Failed to load molar masses, using defaults:', error);
+        console.error('failed_to_load_molar_masses_using_defaults:', error);
         // Используем дефолтное значение, если не удалось загрузить
         all_oxides = {
             'SiO2': 60.084, 'Al2O3': 101.961, 'B2O3': 69.620, 'Na2O': 61.979,
@@ -107,7 +128,7 @@ async function init() {
     // Check API health
     check_api_health();
     
-    // Загружаем формулу из localStorage если есть
+    // Загружаем формулу из URL
     load_umf_from_storage();
     
     // Добавляем начальные оксиды
@@ -124,33 +145,10 @@ async function init() {
 async function check_api_health() {
     try {
         await api.check_health();
-        console.log('API server is running');
+        console.log('api_server_is_running');
     } catch (error) {
-        console.error('API server is not available. Some features may not work correctly.');
+        console.error('api_server_is_not_available');
         show_error_message('API сервер недоступен. Некоторые функции могут не работать корректно.');
-    }
-}
-
-// Загрузить UMF из localStorage
-function load_umf_from_storage() {
-    try {
-        const saved_umf = localStorage.getItem(STORAGE_KEY);
-        if (saved_umf) {
-            current_umf = JSON.parse(saved_umf);
-            console.log('Loaded UMF from localStorage:', current_umf);
-        }
-    } catch (error) {
-        console.error('Failed to load UMF from localStorage:', error);
-    }
-}
-
-// Сохранить UMF в localStorage
-function save_umf_to_storage(umf) {
-    try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(umf));
-        console.log('Saved UMF to localStorage:', umf);
-    } catch (error) {
-        console.error('Failed to save UMF to localStorage:', error);
     }
 }
 
@@ -294,7 +292,7 @@ function setup_oxide_row_events(select, input, delete_button) {
         // Обновляем current_umf
         current_umf = get_umf_from_inputs();
         
-        // Сохраняем в localStorage
+        // Сохраняем в URL
         save_umf_to_storage(current_umf);
         
         // Запускаем расчет
@@ -306,7 +304,7 @@ function setup_oxide_row_events(select, input, delete_button) {
         // Обновляем current_umf
         current_umf = get_umf_from_inputs();
         
-        // Сохраняем в localStorage
+        // Сохраняем в URL
         save_umf_to_storage(current_umf);
         
         // Запускаем расчет
@@ -322,7 +320,7 @@ function setup_oxide_row_events(select, input, delete_button) {
         // Обновляем current_umf
         current_umf = get_umf_from_inputs();
         
-        // Сохраняем в localStorage
+        // Сохраняем в URL
         save_umf_to_storage(current_umf);
         
         // Запускаем расчет
