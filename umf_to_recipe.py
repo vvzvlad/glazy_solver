@@ -142,10 +142,10 @@ def create_oxide_matrix(materials, target_oxides):
 
 # Расчет ошибки между целевым и фактическим UMF
 def calculate_umf_error(target_umf, actual_umf):
-    all_oxides = set(target_umf.keys()) | set(actual_umf.keys())
+    # Используем только оксиды из целевого UMF
     squared_error = 0.0
     
-    for oxide in all_oxides:
+    for oxide in target_umf.keys():
         target_value = target_umf.get(oxide, 0.0)
         actual_value = actual_umf.get(oxide, 0.0)
         squared_error += (target_value - actual_value) ** 2
