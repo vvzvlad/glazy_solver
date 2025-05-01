@@ -414,7 +414,7 @@
         "id": 55,
         "name": "Борат кальция",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -890,7 +890,7 @@
         "id": 169,
         "name": "Карбонат бария, BaCO3",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -899,7 +899,7 @@
         "id": 128,
         "name": "Карбонат железа, FeCO3",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -917,7 +917,7 @@
         "id": 105,
         "name": "Карбонат калия, K2CO3",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -935,7 +935,7 @@
         "id": 38,
         "name": "Карбонат лития (литий углекислый)",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -944,7 +944,7 @@
         "id": 116,
         "name": "Карбонат магния",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -953,7 +953,7 @@
         "id": 114,
         "name": "Карбонат марганца",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -962,7 +962,7 @@
         "id": 146,
         "name": "Карбонат меди, CuCO3",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -971,7 +971,7 @@
         "id": 107,
         "name": "Карбонат никеля, NiCO3",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -1240,7 +1240,7 @@
         "id": 266,
         "name": "Метакаолин BMK-45",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": null,
@@ -1363,7 +1363,7 @@
         "id": 607,
         "name": "Оксид бора",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -1462,7 +1462,7 @@
         "id": 95,
         "name": "Оксид железа красный, Fe2O3",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -1480,7 +1480,7 @@
         "id": 150,
         "name": "Оксид кобальта, Co3O4",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -1507,7 +1507,7 @@
         "id": 113,
         "name": "Оксид марганца",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -1516,7 +1516,7 @@
         "id": 147,
         "name": "Оксид меди, CuO",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",
@@ -2439,7 +2439,7 @@
         "id": 163,
         "name": "Черный оксид железа, FeO",
         "isPublic": true,
-        "inInventory": true
+        "inInventory": false
     },
     {
         "description": "",

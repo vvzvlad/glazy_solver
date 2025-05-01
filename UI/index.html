@@ -98,6 +98,32 @@
         let all_materials = [];
         let selected_materials = [];
         
+        // Список материалов, выбранных по умолчанию
+        const default_materials = [
+            'Волластонит МИВОЛЛ',
+            'Доломит МИДОЛ',
+            'Каолин КЖФ-1',
+            'Карбонат бария, BaCO3',
+            'Карбонат лития (литий углекислый)',
+            'Карбонат магния',
+            'Карбонат марганца',
+            'Карбонат меди, CuCO3',
+            'Карбонат никеля, NiCO3',
+            'Карбонат цинка, ZnCO3',
+            'Кварцевая мука Кварцверке W12',
+            'Мел, CaCO3',
+            'Нефелин-сиенит VR13',
+            'Оксид бора',
+            'Оксид железа красный, Fe2O3',
+            'Оксид кобальта, Co3O4',
+            'Оксид марганца',
+            'Оксид меди, CuO',
+            'Оксид титана, TiO2',
+            'Оксид цинка, ZnO',
+            'Тальк Онотский',
+            'Улексит (Химпэк)'
+        ];
+        
         // Переменная для хранения таймера debounce материалов
         let materials_timer = null;
 
@@ -160,7 +186,7 @@
                 checkbox.type = 'checkbox';
                 checkbox.id = `material_${material.name.replace(/\s+/g, '_')}`;
                 checkbox.value = material.name;
-                checkbox.checked = true;
+                checkbox.checked = default_materials.includes(material.name);
                 checkbox.addEventListener('change', update_selected_materials);
 
                 const label = document.createElement('label');
@@ -247,7 +273,7 @@
                 // Добавляем выбранные материалы в параметры запроса
                 const request_data = {
                     umf: current_umf,
-                    max_solutions: 5,
+                    max_solutions: 15,
                     min_materials: true,
                     error_tolerance: 0.001
                 };
