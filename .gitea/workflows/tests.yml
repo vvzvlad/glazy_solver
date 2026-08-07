@@ -1,0 +1,41 @@
+name: Tests
+
+# Split out from image-check-publish.yml on purpose: that workflow must never
+# run on pull_request, because a PR build would push :latest and watchtower
+# (polling every 2 minutes on island) would deploy it. Tests alone are safe here
+# and are what a PR actually needs — without this workflow a broken test only
+# surfaces after the merge into main.
+on:
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read   # checkout
+
+# Unlike the image workflow, cancelling is right here: this job produces no
+# artifacts, so a superseded test run is just wasted runner time.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        # Matches `FROM python:3.11-slim` in the Dockerfile, so the tests run on
+        # the same interpreter that ships in the image.
+        python-version: "3.11"
+
+    - name: Install dependencies
+      run: pip install -r requirements-dev.txt
+
+    - name: Run tests
+      # The tests are written with unittest but are collected by pytest;
+      # `python -m unittest discover` does NOT work here because tests/ is not a
+      # package. No ENV is needed — nothing under tests/ reads the environment.
+      run: pytest tests -q
