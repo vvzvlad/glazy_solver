@@ -69,6 +69,18 @@ let is_calculating = false;
 let use_min_materials = true; // Добавляем переменную для хранения значения min_materials
 let is_importing_from_glazy = false; // A Glazy import is in flight, see import_from_glazy
 
+// Solver engines. The iterative one is the default here and on the server: it is
+// more accurate, faster and deterministic, while the classic one draws random
+// subsets of materials and answers the same request differently every time.
+const SOLVER_ITERATIVE = 'iterative';
+const SOLVER_CLASSIC = 'classic';
+const DEFAULT_SOLVER = SOLVER_ITERATIVE;
+// The UMF lives in the URL hash because that is what a shared link has to carry.
+// The engine is a preference of this browser rather than a part of the formula,
+// so it goes to localStorage instead and keeps the shared links unchanged.
+const SOLVER_STORAGE_KEY = 'glazy_solver_engine';
+let current_solver = DEFAULT_SOLVER;
+
 // Определение групп оксидов
 const oxide_groups = {
     'r2o_ro': ['K2O', 'Na2O', 'Li2O', 'MgO', 'CaO', 'SrO', 'BaO', 'ZnO', 'PbO', 'CdO', 'CuO', 'FeO', 'MnO'],
@@ -89,7 +101,8 @@ const elements = {
     glazy_import_input: document.getElementById('glazy_import_input'),
     glazy_import_btn: document.getElementById('glazy_import_btn'),
     glazy_import_status: document.getElementById('glazy_import_status'),
-    glazy_source: document.getElementById('glazy_source')
+    glazy_source: document.getElementById('glazy_source'),
+    solver_radios: document.querySelectorAll('input[name="solver_engine"]')
 };
 
 // How the source card reads umf_basis_diff of the server (the largest per-oxide
@@ -102,6 +115,63 @@ const elements = {
 // prominently. Mirrors UMF_BASIS_DIFF_NOTE / UMF_BASIS_DIFF_WARNING of glazy_import.py.
 const GLAZY_UMF_DIFF_NOTE_THRESHOLD = 0.01;
 const GLAZY_UMF_DIFF_WARNING_THRESHOLD = 0.5;
+
+// The engine currently selected in the interface
+function get_current_solver() {
+    return current_solver;
+}
+
+// Load the selected engine from localStorage
+function load_solver_from_storage() {
+    try {
+        const stored = window.localStorage.getItem(SOLVER_STORAGE_KEY);
+        if (stored === SOLVER_ITERATIVE || stored === SOLVER_CLASSIC) {
+            current_solver = stored;
+            console.log('loaded_solver_from_storage:', current_solver);
+        }
+    } catch (error) {
+        // localStorage can be unavailable (private mode, storage disabled by
+        // policy). That is no reason to break the page: the default just stays.
+        console.error('failed_to_read_solver_from_storage:', error);
+    }
+}
+
+// Save the selected engine to localStorage
+function save_solver_to_storage(solver) {
+    try {
+        window.localStorage.setItem(SOLVER_STORAGE_KEY, solver);
+        console.log('saved_solver_to_storage:', solver);
+    } catch (error) {
+        console.error('failed_to_save_solver_to_storage:', error);
+    }
+}
+
+// min_materials (and error_tolerance) are understood by the classic engine
+// only; the iterative one ignores them, so the checkbox is greyed out while
+// the iterative engine is selected
+function sync_solver_dependent_controls() {
+    const checkbox = elements.min_materials_toggle;
+    if (!checkbox) {
+        return;
+    }
+
+    const is_classic = current_solver === SOLVER_CLASSIC;
+    checkbox.disabled = !is_classic;
+
+    const item = checkbox.closest('.material-item');
+    if (item) {
+        item.classList.toggle('disabled', !is_classic);
+        item.title = is_classic ? '' : 'Работает только с классическим движком';
+    }
+}
+
+// Bring the engine switch in the interface to the current state
+function apply_solver_to_controls() {
+    elements.solver_radios.forEach(radio => {
+        radio.checked = radio.value === current_solver;
+    });
+    sync_solver_dependent_controls();
+}
 
 // Загрузить UMF из URL
 function load_umf_from_storage() {
@@ -181,7 +251,10 @@ async function init() {
     
     // Загружаем формулу из URL
     load_umf_from_storage();
-    
+
+    // Load the selected solver engine
+    load_solver_from_storage();
+
     // Добавляем начальные оксиды
     add_initial_oxides();
     
@@ -1249,6 +1322,22 @@ function setup_event_listeners() {
             solve_recipe();
         });
     }
+
+    // Handler of the solver engine switch
+    elements.solver_radios.forEach(radio => {
+        radio.addEventListener('change', function() {
+            if (!this.checked) {
+                return;
+            }
+            current_solver = this.value;
+            save_solver_to_storage(current_solver);
+            sync_solver_dependent_controls();
+            solve_recipe();
+        });
+    });
+
+    // The switch has to show the stored choice, not only what the markup says
+    apply_solver_to_controls();
 }
 
 // Initialize when DOM is loaded

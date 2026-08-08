@@ -1134,6 +1134,46 @@ input:checked + .slider:before {
     user-select: none;
 }
 
+/* A group inside the settings card: a title and the controls under it */
+.settings-group {
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #e1e1e1;
+}
+
+.settings-group-title {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 6px;
+}
+
+.settings-content .material-item input[type="radio"] {
+    margin-right: 4px;
+    flex-shrink: 0;
+}
+
+.settings-hint {
+    margin-top: 6px;
+    font-size: 11px;
+    line-height: 1.35;
+    color: #888;
+}
+
+/* A setting the selected engine ignores: still visible, but inert */
+.settings-content .material-item.disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.settings-content .material-item.disabled label,
+.settings-content .material-item.disabled input {
+    cursor: not-allowed;
+}
+
+.settings-content .material-item.disabled:hover {
+    background-color: transparent;
+}
+
 /* Стиль для разделителя между R2O и RO оксидами */
 .r2o-ro-divider {
     border-bottom: 1px solid rgba(0, 0, 0, 0.4) !important;

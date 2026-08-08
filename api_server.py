@@ -36,11 +36,20 @@ UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'UI')
 # Path to the data directory
 DATABASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database')
 
-# Available solver engines; the classic one stays the default so that the
-# behaviour without the "solver" parameter is unchanged
+# Available solver engines. The iterative one is the default: measured on the 11
+# reference recipes of compare_solvers.py (see REFACTORING.md, section 8) it is
+# more accurate (median sum of per-oxide UMF deviations 0.0020 against 0.0030),
+# more than three times faster, and it reproduces the exact original set of
+# materials in 10 recipes out of 11 against 2 for the classic one. It is also
+# deterministic, while the classic engine draws random subsets of materials, so
+# two identical requests to it can return different recipes - on the live server
+# the very same query returned 5 materials with an error of 0.002 and then 6
+# materials with an error of 0.015.
+# The classic engine stays available through an explicit "solver" parameter.
 SOLVER_CLASSIC = 'classic'
 SOLVER_ITERATIVE = 'iterative'
 AVAILABLE_SOLVERS = (SOLVER_CLASSIC, SOLVER_ITERATIVE)
+DEFAULT_SOLVER = SOLVER_ITERATIVE
 
 # How hard the iterative solver pushes an oxide the request did not mention
 # towards zero. 1.0 ("not listed = must be zero") is both the library default of
@@ -125,10 +134,12 @@ def solve_recipe():
     {
         "umf": {"SiO2": 4, "Al2O3": 1, "Na2O": 0.5, "K2O": 0.5},
         "max_solutions": 3,  // optional, 3 by default
-        "min_materials": true,  // optional, true by default, classic solver only
-        "error_tolerance": 0.01,  // optional, 0.01 by default, classic solver only
+        "min_materials": true,  // optional, true by default, classic solver only:
+                                // the iterative solver ignores it
+        "error_tolerance": 0.01,  // optional, 0.01 by default, classic solver only:
+                                  // the iterative solver ignores it
         "inventory": ["Material1", "Material2", ...],  // optional, list of available materials
-        "solver": "classic",  // optional, "classic" (default) or "iterative"
+        "solver": "iterative",  // optional, "iterative" (default) or "classic"
         "penalize_unlisted": 1.0  // optional, 1.0 by default, iterative solver only:
                                   // how hard an oxide missing from "umf" is pushed to
                                   // zero. 1.0/true = not listed means "must be zero"
@@ -149,7 +160,8 @@ def solve_recipe():
             "weight_composition": {"SiO2": 65.2, "Al2O3": 18.1, ...},
             "materials_count": 2,
             "recipe_umf": {"SiO2": 3.98, "Al2O3": 1.02, ...},  // UMF of this particular recipe
-            // iterative solver only, see iterative_solutions_to_classic_format:
+            // iterative solver only (so, by default), see
+            // iterative_solutions_to_classic_format:
             "objective_error": 0.0123,
             "unlisted_weight": 1.0,
             "unity_scale": 1.0
@@ -169,7 +181,7 @@ def solve_recipe():
         min_materials = data.get('min_materials', True)
         error_tolerance = data.get('error_tolerance', 0.01)
         inventory_data = data.get('inventory', None)
-        solver_name = data.get('solver', SOLVER_CLASSIC)
+        solver_name = data.get('solver', DEFAULT_SOLVER)
         penalize_unlisted = data.get('penalize_unlisted', DEFAULT_PENALIZE_UNLISTED)
 
         if solver_name not in AVAILABLE_SOLVERS:
