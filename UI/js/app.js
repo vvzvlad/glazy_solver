@@ -45,6 +45,10 @@ const api = {
     
     async get_molar_masses() {
         return this.request('molar_masses');
+    },
+
+    async get_oxide_groups() {
+        return this.request('oxide_groups');
     }
 };
 
@@ -69,7 +73,9 @@ let is_calculating = false;
 let use_min_materials = true; // Добавляем переменную для хранения значения min_materials
 
 // Определение групп оксидов
-const oxide_groups = {
+// Filled from GET /api/oxide_groups on init(); the literal below is the
+// fallback used when that endpoint is unreachable.
+let oxide_groups = {
     'r2o_ro': ['K2O', 'Na2O', 'Li2O', 'MgO', 'CaO', 'SrO', 'BaO', 'ZnO', 'PbO', 'CdO', 'CuO', 'FeO', 'MnO'],
     'r2o3': ['Al2O3', 'B2O3', 'Fe2O3', 'Cr2O3', 'Bi2O3', 'La2O3', 'Y2O3', 'P2O5', 'V2O5'],
     'ro2': ['SiO2', 'TiO2', 'ZrO2', 'SnO2', 'MnO2', 'GeO2']
@@ -159,7 +165,21 @@ async function init() {
             'BaO': 153.326, 'ZnO': 81.380, 'TiO2': 79.866, 'Fe2O3': 159.688
         };
     }
-    
+
+    // The oxide classification lives in database/oxide_classification.json and
+    // is served by the API; the hardcoded groups above stay as the fallback
+    try {
+        const groups = await api.get_oxide_groups();
+        oxide_groups = {
+            'r2o_ro': [...(groups.r2o || []), ...(groups.ro || [])],
+            'r2o3': [...(groups.r2o3 || [])],
+            'ro2': [...(groups.ro2 || [])]
+        };
+        console.log('loaded_oxide_groups:', oxide_groups);
+    } catch (error) {
+        console.warn('failed_to_load_oxide_groups_using_defaults:', error);
+    }
+
     // Check API health
     check_api_health();
     
@@ -275,30 +295,14 @@ function add_oxide_to_table(group, selected_oxide = null, value = 0, is_r2o = fa
     const table = elements[`${group}_table`];
     if (!table) return;
     
-    // Определим порядок оксидов в группе r2o_ro
-    const r2o_ro_order = ['K2O', 'Na2O', 'Li2O', 'MgO', 'CaO', 'SrO', 'BaO', 'ZnO', 'PbO', 'CdO', 'CuO', 'FeO', 'MnO'];
-    
-    // Сортируем оксиды в dropdown согласно определенному порядку для r2o_ro
-    let oxide_options = [];
-    if (group === 'r2o_ro') {
-        oxide_options = [...oxide_groups[group]].sort((a, b) => {
-            const a_index = r2o_ro_order.indexOf(a);
-            const b_index = r2o_ro_order.indexOf(b);
-            
-            // Если оба оксида есть в r2o_ro_order, сортируем по их позициям
-            if (a_index >= 0 && b_index >= 0) {
-                return a_index - b_index;
-            }
-            // Если только один из них есть в r2o_ro_order, тот, который есть, идет первым
-            if (a_index >= 0) return -1;
-            if (b_index >= 0) return 1;
-            // В противном случае сортируем по алфавиту
-            return a.localeCompare(b);
-        });
-    } else {
-        oxide_options = [...oxide_groups[group]];
-    }
-    
+    // Порядок оксидов в dropdown - это порядок группы в классификации
+    // r2o_ro used to be re-sorted here against a hardcoded order. It no longer
+    // needs to be: the group is built as r2o followed by ro, so it already
+    // arrives in the intended order, and unlike a literal it covers every oxide
+    // of the classification (CoO and NiO used to fall into the alphabetical
+    // tail of the list because the literal did not mention them).
+    const oxide_options = [...oxide_groups[group]];
+
     const row = document.createElement('tr');
     // Если это R2O оксид и стоит в конце своей группы, добавляем класс для разделителя
     if (is_r2o) {

@@ -11,10 +11,18 @@
 import unittest
 import sys
 import os
+from unittest import mock
 
 # Fix imports by adding parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from solver_classic import solve_glaze_recipe, find_multiple_solutions
+import common
+from common import load_materials, weights_to_umf
+from solver_classic import (
+    calculate_recipe_composition,
+    find_multiple_solutions,
+    solve_glaze_recipe,
+)
+from solver_iterative import find_best_recipe
 
 # Target UMF of the reference transparent glaze
 TEST_UMF = {
@@ -86,6 +94,25 @@ class TestSolveGlazeRecipe(unittest.TestCase):
 
         self.assertLess(self.solution['error'], 0.1)
 
+    def test_reported_umf_is_the_umf_of_the_recipe(self):
+        """actual_composition — это UMF самого рецепта, без подгонки под цель.
+
+        Решатель когда-то домасштабировал результат по наименьшему оксиду цели,
+        из-за чего репортуемая ошибка была меньше настоящей, а сумма флюсов
+        переставала быть единицей. Тест держит эту перенормировку удалённой.
+        """
+        materials = load_materials(only_inventory=False, priority=True)
+        recomputed = weights_to_umf(
+            calculate_recipe_composition(materials, self.solution['recipe']))
+
+        self.assertEqual(sorted(recomputed.keys()),
+                         sorted(self.solution['actual_composition'].keys()))
+        for oxide, value in recomputed.items():
+            self.assertAlmostEqual(
+                self.solution['actual_composition'][oxide], value, places=4,
+                msg=f"{oxide}: reported {self.solution['actual_composition'][oxide]}, "
+                    f"recipe gives {value}")
+
     def test_custom_inventory_reproduces_original_recipe(self):
         """With only the original five materials available the recipe is recovered"""
         solution = solve_glaze_recipe(TEST_UMF, inventory_data=EXPECTED_MATERIALS)
@@ -148,6 +175,93 @@ class TestFindMultipleSolutions(unittest.TestCase):
 
         self.assertIsInstance(result, dict)
         self.assertIn('error', result)
+
+    def test_same_seed_gives_the_same_solutions(self):
+        """Один и тот же seed — побитово тот же список решений"""
+        first = find_multiple_solutions(
+            TEST_UMF, max_solutions=3, error_tolerance=0.01, logging=False, seed=1234)
+        second = find_multiple_solutions(
+            TEST_UMF, max_solutions=3, error_tolerance=0.01, logging=False, seed=1234)
+
+        self.assertEqual([solution['recipe'] for solution in first],
+                         [solution['recipe'] for solution in second])
+        self.assertEqual([solution['error'] for solution in first],
+                         [solution['error'] for solution in second])
+
+    def test_another_seed_also_gives_valid_solutions(self):
+        """Другой seed вправе дать другие решения, но они обязаны быть валидными.
+
+        Совпадение списков не запрещено — поиск случайный, и разные seed'ы
+        вполне могут сойтись к одному набору, — поэтому проверяется только
+        качество, а не различие.
+        """
+        solutions = find_multiple_solutions(
+            TEST_UMF, max_solutions=3, error_tolerance=0.01, logging=False, seed=99)
+
+        self.assertIsInstance(solutions, list)
+        self.assertGreater(len(solutions), 0)
+
+        for solution in solutions:
+            self.assertGreater(len(solution['recipe']), 0)
+            self.assertAlmostEqual(sum(solution['recipe'].values()), 100.0, delta=TOTAL_DELTA)
+            self.assertLess(solution['error'], 0.1)
+
+
+class TestCorruptClassificationIsNotAnEmptyAnswer(unittest.TestCase):
+    """Битая классификация обязана долетать до вызывающего, а не превращаться в «решений нет».
+
+    Оба движка считают состав через solver_classic.solve_recipe, у которого
+    широкий `except Exception`. Без отдельной ветки `except ClassificationError:
+    raise` перед ним классический решатель вернул бы {'error': ...} и упал бы
+    дальше на KeyError('materials_count'), а итеративный — пустой список,
+    неотличимый от честного «решений не найдено». Тесты держат эту ветку на
+    месте.
+    """
+
+    def setUp(self):
+        # The helper below resets the cache, so the real one is put back
+        # afterwards whatever happens
+        self.saved_cache = common._OXIDE_CLASSIFICATION_CACHE
+        self.addCleanup(self.restore_cache)
+
+    def restore_cache(self):
+        common._OXIDE_CLASSIFICATION_CACHE = self.saved_cache
+
+    def broken_classification(self):
+        """Подменяет загрузчик классификации на падающий.
+
+        Патчится именно загрузчик, а не кэш: кэш заполняется уже проверенными
+        данными и повторно не валидируется, поэтому «битый кэш» ошибку бы не
+        поднял. _oxide_classification() — та самая точка, где реальный битый
+        файл и кидает ClassificationError.
+        """
+        common._OXIDE_CLASSIFICATION_CACHE = None
+        return mock.patch(
+            'common._oxide_classification',
+            side_effect=common.ClassificationError('broken.json: "unity" must be a non-empty list'))
+
+    def test_classic_single_solution_raises(self):
+        with self.broken_classification():
+            with self.assertRaises(common.ClassificationError):
+                solve_glaze_recipe(TEST_UMF)
+
+    def test_classic_search_raises_instead_of_reporting_an_error_dict(self):
+        with self.broken_classification():
+            with self.assertRaises(common.ClassificationError):
+                find_multiple_solutions(TEST_UMF, max_solutions=1, logging=False)
+
+    def test_iterative_raises_instead_of_returning_an_empty_list(self):
+        with self.broken_classification():
+            with self.assertRaises(common.ClassificationError):
+                find_best_recipe(EXPECTED_MATERIALS, TEST_UMF)
+
+    def test_an_ordinary_failure_is_still_reported_as_a_result(self):
+        """Широкий except не должен пострадать: обычная численная беда — по-прежнему словарь"""
+        with mock.patch('solver_classic.weights_to_umf', side_effect=ValueError('degenerate')):
+            solution = solve_glaze_recipe(TEST_UMF)
+
+        self.assertIn('error', solution)
+        self.assertEqual(solution['recipe'], {})
 
 
 if __name__ == "__main__":

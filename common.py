@@ -11,20 +11,208 @@
 
 import json
 import argparse
+import logging
 import os
 import numpy as np
 from scipy.optimize import nnls
 import math
 
+logger = logging.getLogger(__name__)
+
+# Keys that may appear in a material formula or a weight composition without
+# being an oxide at all. Loss on ignition is bookkeeping, not a lost oxide, so
+# it must not be reported as one.
+NON_OXIDE_KEYS = frozenset({"Loi", "LOI"})
+
+# Structural oxide groups of the classification, in the order the UMF columns
+# are printed. "unity" is a meta key (it names the groups that form the unity
+# basis), not a group of oxides, and therefore never leaves this module as one.
+OXIDE_GROUP_NAMES = ('r2o', 'ro', 'r2o3', 'ro2')
+
+# Keys of the classification file that are not oxide groups. "unity" holds the
+# names of the groups forming the normalization basis, so it can never name
+# itself; stage 7 adds "unity_presets" here.
+CLASSIFICATION_META_KEYS = frozenset({'unity'})
+
+# The classification is read-only reference data that never changes while the
+# process runs, and it is consulted on every UMF conversion, so the file is
+# parsed once and kept in memory - same reasoning as the molar masses below.
+_OXIDE_CLASSIFICATION_CACHE = None
+
+
+class ClassificationError(Exception):
+    """
+    The oxide classification file cannot be used
+
+    Deliberately not a subclass of ValueError: the solvers catch ValueError (and
+    the classic one catches Exception) around their numeric work and turn it
+    into "no solution", which is exactly the wrong answer for corrupt reference
+    data. Keeping this class off the ValueError branch lets it travel past
+    solver_iterative._solve_material_set instead of being reported as an empty
+    result. The API validates the file at import so that it never has to travel
+    that far.
+    """
+
+
+def _validate_oxide_classification(classification, source):
+    """
+    Check that a parsed classification file can actually be used
+
+    This is corrupt reference data, not a recoverable condition, so a problem
+    raises instead of degrading quietly. The bar is not "the file parses" but
+    "flux_oxides() returns a non-empty list of oxide names": anything short of
+    that silently sends weights_to_umf into its "no fluxes, normalize by the
+    smallest oxide" branch and turns every UMF the application computes into a
+    different number, or - for entries that are not even strings - throws a
+    TypeError that the solvers report as "no solutions found".
+
+    So the checks are: the four display groups exist; "unity" is a non-empty
+    list of names of real, non-meta groups; every group that feeds the unity
+    basis is a non-empty list; and every entry of every checked group is a
+    string.
+
+    Args:
+        classification: the parsed contents of the classification file
+        source: path of the file, for the error message
+
+    Raises:
+        ClassificationError: the file is not usable as a classification
+    """
+    if not isinstance(classification, dict):
+        raise ClassificationError(
+            f"{source}: expected a JSON object, got {type(classification).__name__}")
+
+    missing_groups = [group for group in OXIDE_GROUP_NAMES if group not in classification]
+    if missing_groups:
+        raise ClassificationError(f"{source}: missing oxide groups: {', '.join(missing_groups)}")
+
+    unity = classification.get('unity')
+    if not isinstance(unity, list) or not unity:
+        raise ClassificationError(f"{source}: \"unity\" must be a non-empty list of group names, "
+                                  f"otherwise the UMF normalization basis is undefined")
+
+    # Checked before the lookups below: an unhashable entry would blow up the
+    # "in classification" test with a TypeError instead of a readable message
+    non_string_unity = [repr(group) for group in unity if not isinstance(group, str)]
+    if non_string_unity:
+        raise ClassificationError(f"{source}: \"unity\" must hold group names as strings, got: "
+                                  f"{', '.join(non_string_unity)}")
+
+    reserved_unity = [group for group in unity if group in CLASSIFICATION_META_KEYS]
+    if reserved_unity:
+        raise ClassificationError(f"{source}: \"unity\" names reserved keys instead of oxide "
+                                  f"groups: {', '.join(reserved_unity)}")
+
+    unknown_unity = [group for group in unity if group not in classification]
+    if unknown_unity:
+        raise ClassificationError(f"{source}: \"unity\" names groups that the file does not define: "
+                                  f"{', '.join(unknown_unity)}")
+
+    # The groups that have to be well formed: the four the API exposes, plus any
+    # further group the unity basis happens to be built from
+    checked_groups = list(dict.fromkeys(list(OXIDE_GROUP_NAMES) + unity))
+
+    malformed_groups = [group for group in checked_groups
+                        if not isinstance(classification[group], list)]
+    if malformed_groups:
+        raise ClassificationError(f"{source}: these oxide groups are not lists of oxide names: "
+                                  f"{', '.join(malformed_groups)}")
+
+    for group in checked_groups:
+        non_string_oxides = [repr(oxide) for oxide in classification[group]
+                             if not isinstance(oxide, str)]
+        if non_string_oxides:
+            raise ClassificationError(f"{source}: oxide group \"{group}\" must hold oxide names as "
+                                      f"strings, got: {', '.join(non_string_oxides)}")
+
+    empty_unity_groups = [group for group in unity if not classification[group]]
+    if empty_unity_groups:
+        raise ClassificationError(f"{source}: \"unity\" names empty oxide groups, which would leave "
+                                  f"the UMF normalization basis empty: "
+                                  f"{', '.join(empty_unity_groups)}")
+
+
+def _oxide_classification():
+    """
+    Return the cached oxide classification table
+
+    The returned dictionary is the cache itself and must never be mutated;
+    external callers should use oxides_classification() or flux_oxides().
+    """
+    global _OXIDE_CLASSIFICATION_CACHE
+
+    if _OXIDE_CLASSIFICATION_CACHE is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        classification_file = os.path.join(script_dir, 'database', 'oxide_classification.json')
+
+        with open(classification_file, 'r', encoding='utf-8') as f:
+            classification = json.load(f)
+
+        _validate_oxide_classification(classification, classification_file)
+        _OXIDE_CLASSIFICATION_CACHE = classification
+
+    return _OXIDE_CLASSIFICATION_CACHE
+
+
 def oxides_classification():
-    oxides = {}
-    oxides['r2o'] = ['Na2O', 'K2O', 'Li2O']
-    oxides['ro'] = ['MgO', 'CaO', 'SrO', 'BaO', 'ZnO', 'MnO', 'FeO', 'CoO', 'NiO', 'CuO']
-    oxides['r2o3'] = ['Al2O3', 'B2O3', 'Fe2O3', 'Cr2O3', 'Mn2O3']
-    oxides['ro2'] = ['SiO2', 'TiO2', 'ZrO2', 'SnO2']
-    return oxides
-    
-    
+    """
+    Load the oxide classification by structural group
+
+    Returns:
+        dictionary {'r2o': [...], 'ro': [...], 'r2o3': [...], 'ro2': [...]};
+        fresh lists on every call, so callers are free to modify them
+    """
+    classification = _oxide_classification()
+    return {group: list(classification[group]) for group in OXIDE_GROUP_NAMES}
+
+
+def load_oxide_classification():
+    """
+    Load the whole validated classification file, "unity" key included
+
+    oxides_classification() answers "which group is this oxide in" and hides the
+    meta keys; this one hands out the file as it is, for the callers that have
+    to serve or inspect it. Going through here rather than opening the file
+    again is what keeps them on the validated, cached copy.
+
+    Returns:
+        dictionary as stored in database/oxide_classification.json; a fresh copy
+        on every call, so callers are free to modify it
+
+    Raises:
+        FileNotFoundError: the classification file is missing and nothing has
+            been cached yet; the API turns this one into a 404
+        ClassificationError: the file is there but is not usable as a
+            classification
+    """
+    classification = _oxide_classification()
+    return {key: list(value) if isinstance(value, list) else value
+            for key, value in classification.items()}
+
+
+def flux_oxides():
+    """
+    Load the list of oxides that form the UMF unity basis (the fluxes)
+
+    This function is the single place the unity convention lives: the groups
+    taking part in the normalization are named by the "unity" key of
+    database/oxide_classification.json, and every consumer of the flux list
+    calls this function instead of keeping a copy of its own.
+
+    An oxide is listed once even if it belongs to several unity groups: the
+    callers sum over the returned list, and a duplicate would count that oxide
+    twice in the unity denominator.
+
+    Returns:
+        flat list of oxide names in the order of the unity groups, without
+        duplicates; a fresh list on every call
+    """
+    classification = _oxide_classification()
+
+    fluxes = []
+    for group in classification['unity']:
+        fluxes.extend(classification[group])
+    return list(dict.fromkeys(fluxes))
 
 
 def format_umf(umf):
@@ -152,6 +340,25 @@ def calc_error(umf, target_umf):
     
     return data, stats
 
+def _warn_about_unknown_oxides(unknown_oxides, where):
+    """
+    Report the oxides that were silently dropped by a conversion
+
+    An oxide with no entry in molar_masses.json cannot be converted and is left
+    out of the math. That used to happen without a trace; one warning per call
+    makes the loss visible without flooding the log from inside a solver loop.
+
+    Args:
+        unknown_oxides: collection of oxide names that were dropped
+        where: name of the conversion, for the log message
+    """
+    if not unknown_oxides:
+        return
+
+    names = ', '.join(sorted(unknown_oxides))
+    logger.warning(f"{where}: no molar mass for {names} - dropped from the conversion")
+
+
 def weights_to_umf(weight_composition):
     """
     Converts weight fractions to UMF (Unity Molecular Formula)
@@ -166,17 +373,18 @@ def weights_to_umf(weight_composition):
 
     # Convert to molar amounts
     molar_amounts = {}
+    unknown_oxides = []
     for oxide, weight in weight_composition.items():
         if oxide in molar_masses:
             molar_amounts[oxide] = weight / molar_masses[oxide]
-    
-    classes = oxides_classification()
-    
-    # Calculate sum of R2O and RO (fluxes)
-    sum_r2o = sum(molar_amounts.get(oxide, 0) for oxide in classes['r2o'])
-    sum_ro = sum(molar_amounts.get(oxide, 0) for oxide in classes['ro'])
-    sum_fluxes = sum_r2o + sum_ro
-    
+        elif oxide not in NON_OXIDE_KEYS:
+            unknown_oxides.append(oxide)
+
+    _warn_about_unknown_oxides(unknown_oxides, 'weights_to_umf')
+
+    # Calculate the sum of the fluxes (the unity basis)
+    sum_fluxes = sum(molar_amounts.get(oxide, 0) for oxide in flux_oxides())
+
     # Normalize relative to the sum of fluxes
     if sum_fluxes == 0:
         # If no fluxes, use the minimum value as unity
@@ -206,10 +414,15 @@ def umf_to_weights(umf):
     molar_masses = _molar_masses()
 
     molar_weights = {}
+    unknown_oxides = []
     for oxide, umf_value in umf.items():
         if oxide in molar_masses:
             molar_weights[oxide] = umf_value * molar_masses[oxide]
-    
+        elif oxide not in NON_OXIDE_KEYS:
+            unknown_oxides.append(oxide)
+
+    _warn_about_unknown_oxides(unknown_oxides, 'umf_to_weights')
+
     # Calculate total weight
     total_weight = sum(molar_weights.values())
     
@@ -285,6 +498,38 @@ def filter_materials_by_inventory(materials, inventory):
         if material.get('name') in inventory:
             available_materials.append(material)
     return available_materials
+
+
+def filter_materials_with_formula(materials):
+    """
+    Keep only materials whose formula actually carries oxides
+
+    Water, CMC, silicon carbide, pigments and the like are legal entries of the
+    database, but their oxide formula sums to zero, so for a solver they are
+    dead columns that can never move the UMF. Loss on ignition is not an oxide
+    and does not count towards the sum.
+
+    Args:
+        materials: list of material dictionaries
+
+    Returns:
+        list of material dictionaries whose formula sums to more than zero
+    """
+    with_formula = []
+    dropped = []
+
+    for material in materials:
+        formula = material.get('formula') or {}
+        total = sum(value for oxide, value in formula.items() if oxide not in NON_OXIDE_KEYS)
+        if total > 0:
+            with_formula.append(material)
+        else:
+            dropped.append(str(material.get('name')))
+
+    if dropped:
+        logger.debug(f"dropped {len(dropped)} materials with an empty formula: {', '.join(dropped)}")
+
+    return with_formula
 
 
 def make_json_safe(obj):
@@ -372,10 +617,11 @@ def calc_ratios_umf(umf):
     # Calculate ratios
     analysis['SiO2:Al2O3'] = round(silica / alumina, 2) if alumina > 0 else "∞"
     
-    # Calculate flux ratios
-    r2o_sum = sum(umf.get(oxide, 0) for oxide in ['Na2O', 'K2O', 'Li2O'])
-    ro_sum = sum(umf.get(oxide, 0) for oxide in ['MgO', 'CaO', 'SrO', 'BaO', 'ZnO'])
-    
+    # Calculate flux ratios over the same groups the UMF normalization uses
+    classes = oxides_classification()
+    r2o_sum = sum(umf.get(oxide, 0) for oxide in classes['r2o'])
+    ro_sum = sum(umf.get(oxide, 0) for oxide in classes['ro'])
+
     # Avoid division by zero
     analysis['R2O:RO'] = round(r2o_sum / ro_sum, 2) if ro_sum > 0 else "∞"
     analysis['RO:R2O'] = round(ro_sum / r2o_sum, 2) if r2o_sum > 0 else "∞"
@@ -405,15 +651,9 @@ def calculate_umf_from_recipe(weight_composition):
         if oxide in molar_masses:
             molar_amounts[oxide] = weight / molar_masses[oxide]
     
-    # Classification of oxides
-    r2o = ['Na2O', 'K2O', 'Li2O']
-    ro = ['MgO', 'CaO', 'SrO', 'BaO', 'ZnO', 'MnO', 'FeO', 'CoO', 'NiO', 'CuO']
-    
-    # Calculate sum of R2O and RO (fluxes)
-    sum_r2o = sum(molar_amounts.get(oxide, 0) for oxide in r2o)
-    sum_ro = sum(molar_amounts.get(oxide, 0) for oxide in ro)
-    sum_fluxes = sum_r2o + sum_ro
-    
+    # Calculate the sum of the fluxes (the unity basis)
+    sum_fluxes = sum(molar_amounts.get(oxide, 0) for oxide in flux_oxides())
+
     # Normalize relative to the sum of fluxes
     if sum_fluxes == 0:
         # If no fluxes, use the minimum value as unity

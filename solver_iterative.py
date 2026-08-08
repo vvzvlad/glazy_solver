@@ -71,9 +71,10 @@ import numpy as np
 from common import (
     DEFAULT_PRIORITY,
     filter_materials_by_inventory,
+    filter_materials_with_formula,
+    flux_oxides,
     load_materials,
     load_molar_masses,
-    oxides_classification,
     resolve_inventory,
     umf_to_weights,
     weights_to_umf,
@@ -135,10 +136,11 @@ SOLUTION_ERROR_TIE_ABS = 0.01
 #   a target that carries no basis of its own is fitted.
 # * HOW. By least squares over the listed oxides: k = sum(target*result) /
 #   sum(result^2) is the scalar that minimizes ||target - k*result||, and it
-#   weights every oxide by its own magnitude. The classic solver scales by the
-#   SMALLEST oxide of the target instead (solver_classic.solve_recipe), which
-#   puts the whole scale on the noisiest component - missing Fe2O3 = 0.002 by a
-#   factor of two rescales the entire formula by two. That is not copied here.
+#   weights every oxide by its own magnitude. The alternative of pinning one
+#   chosen oxide of the target puts the whole scale on that single component,
+#   which is why it is not used: pinning a trace oxide such as Fe2O3 = 0.002
+#   that the recipe misses by a factor of two would rescale the entire formula
+#   by two. The classic solver used to do exactly that and no longer does.
 UNITY_BASIS_TOLERANCE = 0.01
 
 # --- candidate scoring ------------------------------------------------------
@@ -231,8 +233,7 @@ def _usable_target(target_umf: Dict[str, Any]) -> Dict[str, float]:
 
 def _flux_sum(umf: Dict[str, float]) -> float:
     """Sum of the fluxes (R2O + RO) of a formula - the UMF unity denominator"""
-    classes = oxides_classification()
-    fluxes = set(classes['r2o']) | set(classes['ro'])
+    fluxes = set(flux_oxides())
     return sum(float(value) for oxide, value in umf.items() if oxide in fluxes)
 
 
@@ -252,8 +253,8 @@ def _unity_scale(target_umf: Dict[str, float], result_umf: Dict[str, float]) -> 
     target vector is meaningful, and the length is fitted by least squares:
     k = sum(target*result) / sum(result^2) minimizes ||target - k*result|| over
     the listed oxides. See the UNITY_BASIS_TOLERANCE block above for why the
-    gate exists and why the least squares fit is preferred to the base oxide
-    rescaling of the classic solver.
+    gate exists and why the least squares fit is preferred to pinning a single
+    chosen oxide of the target.
 
     Falls back to 1.0 when the fit is degenerate (an empty or all zero result,
     or a result that shares nothing with the target): a non positive scale is
@@ -935,7 +936,10 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
         return []
 
     all_materials = load_materials(only_inventory=False, priority=True)
-    available_materials = filter_materials_by_inventory(all_materials, resolve_inventory(inventory))
+    # A material with an empty formula can never move the UMF. _rank_candidates
+    # already skips it, but _priority_start_set does not, so it is dropped here
+    available_materials = filter_materials_with_formula(
+        filter_materials_by_inventory(all_materials, resolve_inventory(inventory)))
 
     if not available_materials:
         if verbose:

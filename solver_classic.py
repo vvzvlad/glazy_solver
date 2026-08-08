@@ -11,16 +11,24 @@
 
 import json
 import argparse
+import logging
 import numpy as np
 from scipy.optimize import nnls
 
 from common import (
+    ClassificationError,
     umf_to_weights,
     weights_to_umf,
     resolve_inventory,
     filter_materials_by_inventory,
+    filter_materials_with_formula,
     load_materials,
 )
+
+# find_multiple_solutions() takes a parameter called "logging", which shadows
+# the module inside it; every log call in this file therefore goes through this
+# object and never through the module name.
+logger = logging.getLogger(__name__)
 
 
 # Build the oxide matrix for all available materials
@@ -76,12 +84,39 @@ def calculate_recipe_composition(materials, recipe):
     return composition
 
 # Non-negative least squares solution
-def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=None):
+def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=None, target_weights=None):
+    """
+    Solve one NNLS problem for a target UMF over the given oxide matrix
+
+    Args:
+        oxide_matrix: oxides x materials matrix of the material formulas
+        target_umf: target UMF formula
+        material_names: names of the matrix columns
+        available_materials: material dictionaries behind the columns; without
+            them the resulting composition is only estimated from the matrix
+        target_weights: umf_to_weights(target_umf), when the caller has already
+            computed it. The target does not change while a search runs over
+            hundreds of material subsets, so converting it once and passing it
+            in saves the repeated conversion - and, when the target names an
+            oxide with no molar mass, the repeated warning that comes with it.
+            Left out, the conversion is done here, so a standalone call behaves
+            exactly as before
+
+    Returns:
+        dictionary describing the solution, or {'error': ..., 'recipe': {}} when
+        this particular material set cannot be solved
+
+    Raises:
+        ClassificationError: the oxide classification is unusable. Unlike every
+            other failure here this one is not reported as a result: a corrupt
+            database is not a material set that happens to have no solution
+    """
     # Oxide list taken from the target_umf keys
     target_oxides = list(target_umf.keys())
 
     # Convert the UMF into weight percent
-    target_weights = umf_to_weights(target_umf)
+    if target_weights is None:
+        target_weights = umf_to_weights(target_umf)
     weights_array = np.array([target_weights.get(oxide, 0.0) for oxide in target_oxides])
 
     try:
@@ -114,29 +149,12 @@ def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=N
             # Actual composition computed from the recipe
             composition = calculate_recipe_composition(available_materials, recipe)
 
-        # Convert weight percent back into UMF
+        # Convert weight percent back into UMF. The result is already normalized
+        # on the unity basis, so it is compared with the target as it is: any
+        # extra rescaling would make the reported error something other than the
+        # distance between the two formulas.
         actual_umf = weights_to_umf(composition)
 
-        # Normalize the UMF against one of the oxides (usually the smallest one)
-        base_oxide = None
-        min_value = float('inf')
-
-        for oxide, value in target_umf.items():
-            if value < min_value and value > 0:
-                min_value = value
-                base_oxide = oxide
-
-        if base_oxide and base_oxide in actual_umf and actual_umf[base_oxide] > 0:
-            scale_factor = target_umf[base_oxide] / actual_umf[base_oxide]
-            actual_umf = {oxide: value * scale_factor for oxide, value in actual_umf.items()}
-        elif base_oxide:
-            # If the base oxide is missing or zero, pick another oxide to normalize against
-            for oxide in target_umf:
-                if oxide in actual_umf and actual_umf[oxide] > 0 and target_umf[oxide] > 0:
-                    scale_factor = target_umf[oxide] / actual_umf[oxide]
-                    actual_umf = {oxide: value * scale_factor for oxide, value in actual_umf.items()}
-                    break
-        
         # Error between the target and the actual UMF
         error = calculate_umf_error(target_umf, actual_umf)
         
@@ -149,6 +167,15 @@ def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=N
             'materials_count': len(recipe)  # Number of materials in the solution
         }
 
+    except ClassificationError:
+        # Corrupt reference data, not a degenerate material set. The broad
+        # handler below would turn it into "this subset has no solution", and
+        # since solver_iterative._solve_material_set calls this function too,
+        # both engines would report an empty answer for a broken database
+        # instead of failing. The clause below is untouched; this one only
+        # takes the one exception that must never be reported as a result.
+        raise
+
     except Exception as e:
         return {
             'error': 'Ошибка решения: ' + str(e),
@@ -156,15 +183,41 @@ def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=N
         }
 
 
+def _warn_no_usable_materials(inventory, materials_in_inventory):
+    """
+    Log why there is nothing to build a recipe from
+
+    Three different situations end in the same error, and the log line has to
+    say which one it was: an empty inventory is the caller's own doing, names
+    that match nothing point at the inventory, and materials filtered out for
+    an empty formula point at the database.
+
+    Args:
+        inventory: collection of material names the caller asked for
+        materials_in_inventory: materials matched by those names, before the
+            empty formula filter
+    """
+    if not inventory:
+        logger.warning("the inventory is empty, there is nothing to build a recipe from")
+    elif not materials_in_inventory:
+        logger.warning(f"none of the {len(inventory)} inventory names matches a material of the database")
+    else:
+        logger.warning(f"all {len(materials_in_inventory)} materials of the inventory have an empty "
+                       f"formula and cannot carry any oxide")
+
+
 # Solve for a given target UMF using the whole inventory at once
 def solve_glaze_recipe(target_umf, inventory_data=None):
     materials = load_materials(only_inventory=False, priority=True)
     inventory = resolve_inventory(inventory_data)
 
-    # Keep only the materials available in the inventory
-    available_materials = filter_materials_by_inventory(materials, inventory)
+    # Keep only the materials available in the inventory that can carry oxides:
+    # a material with an empty formula is a zero column of the NNLS matrix
+    materials_in_inventory = filter_materials_by_inventory(materials, inventory)
+    available_materials = filter_materials_with_formula(materials_in_inventory)
 
     if not available_materials:
+        _warn_no_usable_materials(inventory, materials_in_inventory)
         return {'error': 'нет_доступных_материалов_в_инвентаре'}
 
     # All oxides of the target formula
@@ -179,14 +232,18 @@ def solve_glaze_recipe(target_umf, inventory_data=None):
     if rank < len(target_oxides):
         print(f"предупреждение: ранг матрицы ({rank}) меньше количества оксидов ({len(target_oxides)}). точное решение невозможно.")
 
+    # The target does not change, so it is converted into weights once here
+    target_weights = umf_to_weights(target_umf)
+
     # Solve
-    solution = solve_recipe(oxide_matrix, target_umf, material_names, available_materials)
+    solution = solve_recipe(oxide_matrix, target_umf, material_names, available_materials,
+                            target_weights)
 
     return solution
 
 
 # Search for several solutions built from different material subsets
-def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, error_tolerance=1, logging=True, inventory_data=None):
+def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, error_tolerance=1, logging=True, inventory_data=None, seed: int | None = 0):
     """
     Find several solutions for a given target UMF formula
 
@@ -197,27 +254,43 @@ def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, err
         error_tolerance: acceptable error increase for solutions with fewer materials
         logging: enable logging of the search process
         inventory_data: optional inventory data instead of the default inventory
+        seed: seed of the random generator drawing the material subsets; the
+            default makes the search reproducible, seed=None makes it
+            non-deterministic
 
     Returns:
         List of solutions sorted by preference
     """
+    # A private generator, not the global numpy one: pinning np.random from the
+    # outside must not be able to change what this search does
+    rng = np.random.default_rng(seed)
+
     materials = load_materials(only_inventory=False, priority=True)
     inventory = resolve_inventory(inventory_data)
 
-    # Keep only the materials available in the inventory
-    available_materials = filter_materials_by_inventory(materials, inventory)
+    # Keep only the materials available in the inventory that can carry oxides:
+    # a material with an empty formula is a zero column of the NNLS matrix
+    materials_in_inventory = filter_materials_by_inventory(materials, inventory)
+    available_materials = filter_materials_with_formula(materials_in_inventory)
 
     if not available_materials:
+        _warn_no_usable_materials(inventory, materials_in_inventory)
         return {'error': 'нет_доступных_материалов_в_инвентаре'}
 
     # All oxides of the target formula
     target_oxides = list(target_umf.keys())
 
+    # The target is the same for every subset below, so it is converted into
+    # weights once: hundreds of identical conversions per search otherwise, each
+    # of them re-reporting the same unknown oxide
+    target_weights = umf_to_weights(target_umf)
+
     # Build the full oxide matrix
     full_oxide_matrix, material_names = create_oxide_matrix(available_materials, target_oxides)
 
     # Base solution
-    base_solution = solve_recipe(full_oxide_matrix, target_umf, material_names, available_materials)
+    base_solution = solve_recipe(full_oxide_matrix, target_umf, material_names, available_materials,
+                                 target_weights)
     solutions = [base_solution]
 
     # Look for alternative solutions by varying the set of materials used
@@ -240,7 +313,7 @@ def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, err
                 print(f"Ищем решения с {subset_size} материалами...")
             
             for _attempt in range(attempts):
-                subset_indices = np.random.choice(n_materials, subset_size, replace=False)
+                subset_indices = rng.choice(n_materials, subset_size, replace=False)
                 subset_key = tuple(sorted(subset_indices))
                 
                 if subset_key in used_combinations:
@@ -258,7 +331,8 @@ def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, err
                 if rank < min_required - 1:  # Allow a small slack on the rank
                     continue
 
-                solution = solve_recipe(subset_matrix, target_umf, subset_names, subset_materials)
+                solution = solve_recipe(subset_matrix, target_umf, subset_names, subset_materials,
+                                        target_weights)
 
                 # Allow a larger error for solutions built from fewer materials:
                 # the fewer the materials, the wider the tolerance
@@ -276,7 +350,7 @@ def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, err
         for subset_size in range(min_required, min(n_materials, 12)):
             # Plain search over random material subsets
             for _attempt in range(min(30, n_materials)):
-                subset_indices = np.random.choice(n_materials, subset_size, replace=False)
+                subset_indices = rng.choice(n_materials, subset_size, replace=False)
                 subset_key = tuple(sorted(subset_indices))
                 
                 if subset_key in used_combinations:
@@ -289,7 +363,8 @@ def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, err
                 subset_names = [material_names[i] for i in subset_indices]
                 subset_materials = [available_materials[i] for i in subset_indices]
                 
-                solution = solve_recipe(subset_matrix, target_umf, subset_names, subset_materials)
+                solution = solve_recipe(subset_matrix, target_umf, subset_names, subset_materials,
+                                        target_weights)
                 
                 # Store the solution if it is acceptable
                 if solution['recipe'] and solution['error'] < base_solution['error'] * 3:

@@ -14,7 +14,8 @@
 Compare the two glaze solvers on the reference recipes.
 
     classic   -> solver_classic.find_multiple_solutions (NNLS over random
-                 subsets of the inventory, non deterministic)
+                 subsets of the inventory, drawn from a seeded generator, so
+                 the run is reproducible for a given --seed)
     iterative -> solver_iterative.find_best_recipe (priority driven, adds one
                  material at a time, deterministic)
 
@@ -24,18 +25,18 @@ tests/fixtures/reference_recipes.json.
 
 Why the UMF is recomputed here instead of being read from the engines:
 
-    solver_classic.solve_recipe rescales the resulting UMF by the SMALLEST
-    oxide of the target (a legacy normalization: if the target holds
-    Fe2O3 = 0.002 and the recipe delivers half of it, the whole UMF is scaled
-    by two).  solver_iterative does not do that, it reports the honest UMF of
-    the recipe.  So 'actual_composition' (classic) and 'result_umf'
-    (iterative) are simply not the same quantity.
+    Both engines now report the plain UMF of their recipe, so the two formulas
+    are the same quantity.  What is still not shared is the TARGET each engine
+    measures itself against: classic scores over the oxides the target names,
+    while iterative scores over its cleaned target extended with zeros for the
+    oxides nobody asked for, and it reports that cleaned target rather than the
+    dictionary of the request.
 
     Every metric in this report is therefore computed on a UMF recomputed from
-    the recipe itself with calculate_recipe_composition + weights_to_umf, the
-    exact same way for both engines.  The errors the engines report themselves
-    are still shown, in the 'native' column, but they are NOT comparable with
-    each other.
+    the recipe itself with calculate_recipe_composition + weights_to_umf and
+    scored the exact same way for both engines.  The errors the engines report
+    themselves are still shown, in the 'native' column, where classic agrees
+    with 'umfErr' and iterative answers its own question.
 """
 
 import argparse
@@ -46,8 +47,6 @@ import os
 import statistics
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
-
-import numpy as np
 
 from common import (
     filter_materials_by_inventory,
@@ -68,7 +67,7 @@ FIXTURES_PATH = os.path.join(SCRIPT_DIR, 'tests', 'fixtures', 'reference_recipes
 DEFAULT_OUTPUT = os.path.join(SCRIPT_DIR, 'comparison_results.md')
 
 # The classic solver draws random material subsets, so the seed has to be
-# pinned to make the whole comparison reproducible
+# passed to it to make the whole comparison reproducible
 DEFAULT_SEED = 42
 
 # Both engines are asked for the same number of solutions; only the best one
@@ -203,11 +202,12 @@ def run_classic(target_umf: Dict[str, float], inventory: Sequence[str],
     """
     Run the classic solver and return (best solution, seconds, status).
 
-    The seed is pinned right before the call so that a single recipe run and a
-    full run produce the same classic result.  Its stdout is captured on top of
-    logging=False, just in case the engine prints anything else.
+    The seed is handed to the solver itself - it draws its material subsets from
+    its own generator, so pinning the global numpy one would do nothing - which
+    is what makes a single recipe run and a full run produce the same classic
+    result.  Its stdout is captured on top of logging=False, just in case the
+    engine prints anything else.
     """
-    np.random.seed(seed)
     sink = io.StringIO()
     start = time.perf_counter()
 
@@ -219,6 +219,7 @@ def run_classic(target_umf: Dict[str, float], inventory: Sequence[str],
                 min_materials=True,
                 logging=False,
                 inventory_data=list(inventory),
+                seed=seed,
             )
     except Exception as exc:
         return None, time.perf_counter() - start, f'failed: {exc}'
@@ -553,8 +554,8 @@ def build_conclusions(summaries: Sequence[Dict[str, Any]],
                      f'classic {item["classic"]:.4f} vs iterative {item["iterative"]:.4f}, '
                      f'delta {item["delta"]:.4f} in favour of {item["better"]}')
 
-    lines.append('- classic is not deterministic (it draws random material subsets), '
-                 'so its numbers only hold for the seed printed above; iterative is deterministic')
+    lines.append('- classic draws random material subsets from a seeded generator, so it is reproducible '
+                 'but its numbers only hold for the seed printed above; iterative does not depend on a seed')
 
     return lines
 
@@ -567,9 +568,11 @@ COLUMN_LEGEND = [
     '`sumErr` - sum of absolute per oxide errors over the union of the target and the resulting UMF oxides',
     '`maxErr` / `worst` - the largest per oxide error and the oxide it belongs to',
     '`umfErr` - solver_classic.calculate_umf_error on the uniformly recomputed UMF (same formula for both engines)',
-    '`native*` - the error the engine reports itself. NOT COMPARABLE between the engines: classic rescales its '
-    'UMF by the smallest target oxide before measuring, iterative measures the honest UMF against a target '
-    'extended with zeros for the unwanted oxides',
+    '`native*` - the error the engine reports itself. For classic it is now the same quantity as `umfErr` by '
+    'construction: it measures the plain UMF of its recipe against the target, exactly as this report does. '
+    'Iterative scores the same UMF against its cleaned target extended with zeros for the oxides nobody asked '
+    'for, so it is measuring something else and only coincides with `umfErr` while the target already names '
+    'every oxide the recipe brings - which is the case on all the reference recipes',
     '`mats` - materials in the recipe, `same` / `extra` / `lost` - materials shared with, added to and missing '
     'from the original recipe',
     '`dShare` - sum of absolute differences of the material shares over the shared materials, original recipe '

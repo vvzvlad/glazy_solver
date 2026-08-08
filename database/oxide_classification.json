@@ -1,0 +1,7 @@
+{
+  "r2o": ["K2O", "Na2O", "Li2O"],
+  "ro": ["MgO", "CaO", "SrO", "BaO", "ZnO", "PbO", "MnO", "FeO", "CoO", "NiO", "CuO"],
+  "r2o3": ["Al2O3", "B2O3", "Fe2O3", "Cr2O3", "Mn2O3"],
+  "ro2": ["SiO2", "TiO2", "ZrO2", "SnO2", "GeO2", "MnO2"],
+  "unity": ["r2o", "ro"]
+}

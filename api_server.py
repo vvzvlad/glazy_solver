@@ -17,7 +17,8 @@ from flask_cors import CORS
 from solver_classic import find_multiple_solutions, calculate_recipe_composition
 from solver_iterative import find_best_recipe
 from common import (weights_to_umf, umf_to_weights, load_materials, make_json_safe,
-                    resolve_inventory, filter_materials_by_inventory)
+                    resolve_inventory, filter_materials_by_inventory,
+                    load_oxide_classification)
 
 # Logging setup
 logging.basicConfig(
@@ -34,6 +35,19 @@ CORS(app)  # Allow CORS for every route
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'UI')
 # Path to the data directory
 DATABASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database')
+
+# The oxide classification decides what counts as a flux, and therefore every
+# UMF number the server produces. It is read and validated here, at import, so
+# that a corrupt file stops the process at startup: reaching it lazily from
+# inside a request means the solvers swallow the failure and answer "no
+# solutions found", which looks like an ordinary result and is not one.
+try:
+    load_oxide_classification()
+except Exception as e:
+    # Both the ClassificationError and the FileNotFoundError already name the
+    # file, so the prefix only adds the code
+    logger.critical(f"invalid_oxide_classification: {str(e)}")
+    raise
 
 # Available solver engines; the classic one stays the default so that the
 # behaviour without the "solver" parameter is unchanged
@@ -55,12 +69,14 @@ AVAILABLE_SOLVERS = (SOLVER_CLASSIC, SOLVER_ITERATIVE)
 # weight of 0.0 the returned formula carries whatever the materials happen to
 # bring, which some callers want. Pass it explicitly for that.
 #
-# A note on the classic engine, since the comparison invites itself: it does NOT
-# ignore the unlisted oxides in the sense used here. It renormalizes the whole
-# resulting UMF by the smallest oxide of the target (solver_classic.solve_recipe)
-# before measuring the error, which is a different question altogether and is
-# why its reported error is nearly zero. The two engines are not answering the
-# same question and their reported errors are not comparable.
+# A note on the classic engine, since the comparison invites itself: it has no
+# equivalent of this weight. Its error is summed over the oxides of the target
+# only (solver_classic.calculate_umf_error), so an oxide nobody asked for costs
+# it exactly nothing - the unlisted oxides are neither penalized nor measured,
+# which is the behaviour a weight of 0.0 approximates here. The two engines are
+# therefore still not answering the same question, and their reported errors are
+# not comparable even though both are now measured on the plain UMF of the
+# recipe.
 DEFAULT_PENALIZE_UNLISTED = 1.0
 
 
@@ -252,6 +268,40 @@ def get_molar_masses():
     
     except Exception as e:
         logger.exception(f"molar_masses_error: {str(e)}")
+        return jsonify({"error": "server_error", "message": str(e)}), 500
+
+@app.route('/api/oxide_groups', methods=['GET'])
+def get_oxide_groups():
+    """
+    API endpoint that returns the oxide classification by structural group
+
+    The data comes from common.load_oxide_classification(), not from a second
+    read of the file, so what the UI groups oxides by is the very table the
+    solvers normalize with - and a file that failed validation cannot be served
+    as if it were fine.
+
+    Returns:
+    {
+        "r2o": ["K2O", "Na2O", "Li2O"],
+        "ro": ["MgO", "CaO", ...],
+        "r2o3": ["Al2O3", ...],
+        "ro2": ["SiO2", ...],
+        "unity": ["r2o", "ro"]
+    }
+    """
+    try:
+        classification = load_oxide_classification()
+
+        logger.info(f"returning {len(classification)} oxide groups")
+        return jsonify(classification)
+
+    except FileNotFoundError:
+        classification_path = os.path.join(DATABASE_DIR, 'oxide_classification.json')
+        logger.error(f"oxide_classification_file_not_found: {classification_path}")
+        return jsonify({"error": "file_not_found", "message": "Oxide classification file not found"}), 404
+
+    except Exception as e:
+        logger.exception(f"oxide_groups_error: {str(e)}")
         return jsonify({"error": "server_error", "message": str(e)}), 500
 
 @app.route('/api/umf_to_weights', methods=['POST'])
