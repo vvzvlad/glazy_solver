@@ -41,6 +41,15 @@ SOLVER_CLASSIC = 'classic'
 SOLVER_ITERATIVE = 'iterative'
 AVAILABLE_SOLVERS = (SOLVER_CLASSIC, SOLVER_ITERATIVE)
 
+# How hard the iterative solver pushes an oxide the request did not mention
+# towards zero. The API default is 0.0 ("not listed = do not care") on purpose:
+# a UMF typed in the UI lists only the oxides the user actually wants, and the
+# classic engine behind the same endpoint has always ignored the rest, so both
+# engines answer the same question. Callers that feed a complete UMF derived
+# from a real recipe should pass 1.0, which is the library default of
+# find_best_recipe.
+DEFAULT_PENALIZE_UNLISTED = 0.0
+
 
 def iterative_solutions_to_classic_format(solutions, target_umf, inventory_data):
     """
@@ -85,7 +94,14 @@ def solve_recipe():
         "min_materials": true,  // optional, true by default, classic solver only
         "error_tolerance": 0.01,  // optional, 0.01 by default, classic solver only
         "inventory": ["Material1", "Material2", ...],  // optional, list of available materials
-        "solver": "classic"  // optional, "classic" (default) or "iterative"
+        "solver": "classic",  // optional, "classic" (default) or "iterative"
+        "penalize_unlisted": 0.0  // optional, 0.0 by default, iterative solver only:
+                                  // how hard an oxide missing from "umf" is pushed to
+                                  // zero. 0.0/false = not listed means "do not care"
+                                  // (what the classic solver does), 1.0/true = not
+                                  // listed means "must be zero", in between is a soft
+                                  // weight. Use 1.0 when "umf" already lists every
+                                  // oxide the recipe is supposed to contain.
     }
 
     Returns:
@@ -115,6 +131,7 @@ def solve_recipe():
         error_tolerance = data.get('error_tolerance', 0.01)
         inventory_data = data.get('inventory', None)
         solver_name = data.get('solver', SOLVER_CLASSIC)
+        penalize_unlisted = data.get('penalize_unlisted', DEFAULT_PENALIZE_UNLISTED)
 
         if solver_name not in AVAILABLE_SOLVERS:
             logger.warning(f"unknown_solver requested: {solver_name}")
@@ -123,14 +140,15 @@ def solve_recipe():
                 "message": f"unknown solver '{solver_name}', expected one of: {', '.join(AVAILABLE_SOLVERS)}"
             }), 400
 
-        logger.info(f"solving recipe for umf: {umf}, max_solutions: {max_solutions}, min_materials: {min_materials}, solver: {solver_name}")
+        logger.info(f"solving recipe for umf: {umf}, max_solutions: {max_solutions}, min_materials: {min_materials}, solver: {solver_name}, penalize_unlisted: {penalize_unlisted}")
 
         if solver_name == SOLVER_ITERATIVE:
             iterative_solutions = find_best_recipe(
                 inventory_data,
                 umf,
                 max_solutions=max_solutions,
-                verbose=False
+                verbose=False,
+                penalize_unlisted=penalize_unlisted
             )
             solutions = iterative_solutions_to_classic_format(iterative_solutions, umf, inventory_data)
         else:

@@ -20,13 +20,32 @@ The algorithm mimics the way a human ceramist works:
    uses: target UMF -> weights, NNLS over the material formulas, result back
    to UMF), drop materials weighing less than 0.1% and re-solve.
 3. Look at the per-oxide residual, find the oxide that is the furthest away
-   from the target.
-4. Rank the materials that are not in the set yet by how well they cover that
-   gap without contaminating the already matched oxides, then try them out:
-   the candidate that brings the error down the most wins, and when several
-   candidates end up equally good the higher priority (lower priority number)
-   decides.
-5. Add it to the set and go back to step 2.
+   from the target - the focus oxide of this step.
+4. Rank the materials that are not in the set yet by a score that is built from
+   three separate terms: the gain on the focus oxide, a smaller gain on the
+   remaining deficits and a penalty for contaminating the oxides that already
+   match or are already in excess. Material priority is blended into that score,
+   so a high priority material wins unless a low priority one is clearly better.
+5. Actually solve the top candidates (see candidate_search) and keep the ones
+   that really improve the recipe, then go back to step 2.
+
+How much of step 4 survives depends on candidate_search, and the difference is
+worth stating plainly:
+
+* 'heuristic' solves only the TOP_CANDIDATES best ranked materials, so the focus
+   oxide and the priority genuinely decide what is tried. This is the human
+   procedure, and it costs a constant number of NNLS runs per step.
+* 'exhaustive' (the default) solves every remaining material of the inventory,
+   which makes the ranking a tie break rather than a filter: it decides between
+   material sets whose error agrees to four decimals, and nothing more. The
+   focus oxide and the priority therefore do not steer this mode.
+
+The default is 'exhaustive' because on the reference set it is measurably more
+accurate - the heuristic only matches it once K grows to about two thirds of the
+inventory, at which point it has stopped being a heuristic and costs more than
+the exhaustive pass anyway. The honest summary is that greedy forward selection
+beats the human shortcut here; the shortcut is kept, and named, for the cases
+where the inventory is large enough that O(inventory) NNLS runs per step hurt.
 
 A branch stops when its error drops below the threshold and the pool already
 holds as many acceptable recipes as the caller asked for, when the material
@@ -35,19 +54,24 @@ improving (less than 1% per iteration). Nothing is ever lost: every solved set
 goes into a pool and the best states are picked from it at the end, which is
 the rollback to the best state found.
 
-When more than one solution is requested the candidate step keeps the top-K
-materials and the search turns into a beam search over several branches.
+When more than one solution is requested the candidate step feeds several
+children into the beam and the search turns into a beam search over several
+branches.
 """
 
 import argparse
 import json
 import logging
+import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
 
 from common import (
     DEFAULT_PRIORITY,
     filter_materials_by_inventory,
     load_materials,
+    load_molar_masses,
     resolve_inventory,
     umf_to_weights,
     weights_to_umf,
@@ -58,6 +82,8 @@ from solver_classic import (
     create_oxide_matrix,
     solve_recipe,
 )
+
+logger = logging.getLogger(__name__)
 
 # Recipe entries below this weight percent are considered noise and dropped
 MIN_MATERIAL_WEIGHT = 0.1
@@ -73,21 +99,91 @@ DEFAULT_MAX_ITERATIONS = 8
 # than this relative amount
 STALL_IMPROVEMENT = 0.01
 
-# How many candidate materials are explored per iteration when several
-# solutions are requested (beam search)
+# How many candidate materials are really solved per iteration in the
+# 'heuristic' candidate search: the heuristic proposes, NNLS disposes
 TOP_CANDIDATES = 3
 
 # Maximum number of branches kept alive by the beam search
 MAX_BEAM_WIDTH = 4
 
-# Candidates whose score is within this relative distance from the best one are
-# treated as equal, so that priority decides between them
-CANDIDATE_SCORE_TIE = 0.05
-
 # Solutions whose error is within this distance from the best one are treated as
 # equally good, so that the material count decides between them
 SOLUTION_ERROR_TIE_REL = 0.2
 SOLUTION_ERROR_TIE_ABS = 0.01
+
+# --- candidate scoring ------------------------------------------------------
+#
+# The heuristic lives entirely in WEIGHT space, and so does the residual it
+# works on. That is not an arbitrary choice:
+#   * the NNLS problem itself is posed on weight percentages (the target UMF is
+#     converted with umf_to_weights and the material formulas are weight
+#     percent), so the residual of that very problem is a weight-space vector;
+#   * a material formula answers "how many grams of oxide X does one gram of
+#     this material carry", which is a weight-space quantity, while UMF is
+#     renormalized by the flux sum and is therefore non-linear with respect to
+#     mixing - "UMF gain per gram" is not even well defined;
+#   * mixing the two spaces (focus picked in UMF, residual measured in weights)
+#     was exactly the inconsistency the review found in the previous version.
+# The reported error stays in UMF space, because that is the metric the callers
+# and the acceptance tests speak; the heuristic only proposes candidates, the
+# real NNLS solve decides.
+
+# Deficits on oxides other than the focus one are worth less than the focus
+# deficit: this step is about the focus oxide, the others get their own step
+SECONDARY_GAIN_WEIGHT = 0.35
+
+# Overshooting is asymmetrically bad: a deficit can be filled by adding another
+# material later, an excess can never be subtracted, so contaminating an oxide
+# that is already over the target costs more than filling a deficit gains
+CONTAMINATION_WEIGHT = 1.5
+
+# An oxide whose weight-percent residual is inside this band counts as matched
+MATCHED_OXIDE_TOLERANCE = 0.5
+
+# Bringing anything into an already matched oxide is a disturbance. Its residual
+# is ~0 by definition, so without an explicit term the score would ignore it
+# completely; MATCHED_OXIDE_TOLERANCE is used as the residual scale to keep the
+# term dimensionally comparable with the gain terms
+MATCHED_DISTURBANCE_WEIGHT = 0.5
+
+# How strongly the material priority bends the chemical ranking. The chemical
+# score is divided by the size of the focus gap, which is the score a material
+# made purely of the focus oxide would get, so 0.25 means "a higher priority
+# material wins unless the other candidate closes more than a quarter of the
+# focus gap on top of what this one closes". That scale is absolute: it does not
+# drift with the number of candidates the way a min-max normalization does.
+PRIORITY_WEIGHT = 0.25
+
+# Candidate search modes
+SEARCH_HEURISTIC = 'heuristic'
+SEARCH_EXHAUSTIVE = 'exhaustive'
+CANDIDATE_SEARCH_MODES = (SEARCH_HEURISTIC, SEARCH_EXHAUSTIVE)
+
+
+def _usable_target(target_umf: Dict[str, Any]) -> Dict[str, float]:
+    """
+    Keep only the target entries the math can actually work with: a known oxide
+    (present in molar_masses.json) carrying a positive number.
+
+    umf_to_weights divides by the total molar weight, so a target made only of
+    unknown oxides or of zeros would blow up with ZeroDivisionError deep inside
+    the conversion. Filtering here keeps that defect out of the public API.
+    """
+    if not target_umf:
+        return {}
+
+    molar_masses = load_molar_masses()
+    usable: Dict[str, float] = {}
+
+    for oxide, value in target_umf.items():
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if oxide in molar_masses and number > 0 and math.isfinite(number):
+            usable[oxide] = number
+
+    return usable
 
 
 def _expand_target(target_umf: Dict[str, float], materials: Sequence[Dict]) -> Dict[str, float]:
@@ -95,9 +191,9 @@ def _expand_target(target_umf: Dict[str, float], materials: Sequence[Dict]) -> D
     Extend the target UMF with explicit zeros for every oxide the available
     materials can bring in.
 
-    An oxide missing from the target means "not wanted", so listing it with a
-    zero makes both the NNLS and the error metric penalize contamination
-    (P2O5 from bone ash, for example) instead of ignoring it.
+    Whether those zeros are actually enforced is decided by the caller through
+    penalize_unlisted: the expansion only builds the list of oxides, the weight
+    attached to them says how much an unlisted oxide is allowed to appear.
     """
     full_target = dict(target_umf)
 
@@ -109,12 +205,112 @@ def _expand_target(target_umf: Dict[str, float], materials: Sequence[Dict]) -> D
     return full_target
 
 
+def _normalize_unlisted_weight(penalize_unlisted: Any) -> float:
+    """
+    Turn the penalize_unlisted argument into a weight in [0, 1].
+
+    True/False are accepted as the hard 1.0 / 0.0 ends of the same scale, so
+    that a boolean flag and a soft weight can be used interchangeably.
+    """
+    if penalize_unlisted is True:
+        return 1.0
+    if penalize_unlisted is False:
+        return 0.0
+
+    try:
+        weight = float(penalize_unlisted)
+    except (TypeError, ValueError):
+        return 1.0
+
+    if not math.isfinite(weight):
+        return 1.0
+
+    return min(max(weight, 0.0), 1.0)
+
+
+def _build_problem(target_umf: Dict[str, float], materials: Sequence[Dict],
+                   unlisted_weight: float) -> Dict[str, Any]:
+    """
+    Pack everything the search needs to know about the target into one context.
+
+    The unlisted oxides get their NNLS rows scaled by unlisted_weight. Their
+    right hand side is zero by construction, so scaling the row alone is an
+    exact weighted least squares: ||w*(A_i x) - w*0|| == w*||A_i x - 0||. That
+    is how a soft "do not bring what I did not ask for" is expressed without
+    touching the shared NNLS core.
+    """
+    full_target = _expand_target(target_umf, materials)
+    oxides = list(full_target.keys())
+    unlisted = tuple(oxide for oxide in oxides if oxide not in target_umf)
+
+    row_weights = None
+    if unlisted and unlisted_weight != 1.0:
+        row_weights = np.array([1.0 if oxide in target_umf else unlisted_weight
+                                for oxide in oxides])
+
+    return {
+        'target_umf': dict(target_umf),
+        'full_target': full_target,
+        'oxides': oxides,
+        'unlisted': unlisted,
+        'unlisted_weight': unlisted_weight,
+        'row_weights': row_weights,
+        'target_weights': umf_to_weights(full_target),
+    }
+
+
+def _objective_error(problem: Dict[str, Any], result_umf: Dict[str, float]) -> float:
+    """
+    The quantity the search minimizes: the plain UMF error on the requested
+    oxides plus the contamination of the unlisted ones, damped by the weight.
+
+    With unlisted_weight == 1.0 this is exactly calculate_umf_error against the
+    fully expanded target; with 0.0 it is exactly calculate_umf_error against
+    the requested target.
+    """
+    squared = 0.0
+
+    for oxide, expected in problem['target_umf'].items():
+        squared += (expected - result_umf.get(oxide, 0.0)) ** 2
+
+    weight = problem['unlisted_weight']
+    if weight > 0.0:
+        for oxide in problem['unlisted']:
+            squared += (weight * result_umf.get(oxide, 0.0)) ** 2
+
+    return math.sqrt(squared)
+
+
 def _normalize_to_100(composition: Dict[str, float]) -> Dict[str, float]:
     """Scale an oxide composition so that its parts sum up to 100"""
     total = sum(composition.values())
     if total <= 0:
         return {oxide: 0.0 for oxide in composition}
     return {oxide: value * 100.0 / total for oxide, value in composition.items()}
+
+
+def _recipe_to_exactly_100(recipe: Dict[str, float]) -> Optional[Dict[str, float]]:
+    """
+    Scale a recipe to 100% and round it to two decimals so that the parts add up
+    to exactly 100.
+
+    Rounding every part on its own leaves a drift of up to half a hundredth per
+    material (99.99 / 100.01 in practice); the drift is poured into the heaviest
+    component, where it is relatively the least significant.
+    """
+    total = float(sum(recipe.values()))
+    if total <= 0:
+        return None
+
+    scaled = {name: round(float(weight) * 100.0 / total, 2) for name, weight in recipe.items()}
+
+    drift = round(100.0 - sum(scaled.values()), 2)
+    if drift:
+        # sorted() first, so that equal weights always pick the same material
+        heaviest = max(sorted(scaled), key=lambda name: scaled[name])
+        scaled[heaviest] = round(scaled[heaviest] + drift, 2)
+
+    return scaled
 
 
 def _priority_start_set(materials: Sequence[Dict], min_count: int) -> List[Dict]:
@@ -143,8 +339,7 @@ def _priority_start_set(materials: Sequence[Dict], min_count: int) -> List[Dict]
     return start_set
 
 
-def _solve_material_set(material_set: Sequence[Dict], full_target: Dict[str, float],
-                        target_umf: Dict[str, float]) -> Optional[Dict[str, Any]]:
+def _solve_material_set(material_set: Sequence[Dict], problem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Solve one material set with NNLS, dropping the materials weighing less than
     MIN_MATERIAL_WEIGHT and re-solving until the recipe is stable.
@@ -153,67 +348,77 @@ def _solve_material_set(material_set: Sequence[Dict], full_target: Dict[str, flo
     use all of it: a material that is useless now may become useful once
     another one joins the set on a later iteration.
 
-    Returns a state dictionary with the recipe, the resulting UMF and the error,
-    or None when no recipe could be built.
+    Returns a state dictionary with the recipe, the resulting UMF and both error
+    numbers, or None when no recipe could be built.
     """
-    oxides = list(full_target.keys())
+    full_target = problem['full_target']
+    oxides = problem['oxides']
+    row_weights = problem['row_weights']
+
     active = list(material_set)
     recipe: Dict[str, float] = {}
 
-    # Dropping a material changes the optimum, so re-solve until the set settles
-    for _ in range(len(material_set)):
-        oxide_matrix, material_names = create_oxide_matrix(active, oxides)
-        solution = solve_recipe(oxide_matrix, full_target, material_names, active)
+    try:
+        # Dropping a material changes the optimum, so re-solve until the set settles
+        for _ in range(len(material_set)):
+            oxide_matrix, material_names = create_oxide_matrix(active, oxides)
+            if row_weights is not None:
+                oxide_matrix = oxide_matrix * row_weights[:, None]
 
-        recipe = solution.get('recipe') or {}
-        recipe = {name: weight for name, weight in recipe.items() if weight >= MIN_MATERIAL_WEIGHT}
+            solution = solve_recipe(oxide_matrix, full_target, material_names, active)
+
+            recipe = solution.get('recipe') or {}
+            recipe = {name: weight for name, weight in recipe.items() if weight >= MIN_MATERIAL_WEIGHT}
+            if not recipe:
+                return None
+
+            used = [material for material in active if material['name'] in recipe]
+            if len(used) == len(active):
+                break
+            active = used
+
+        recipe = _recipe_to_exactly_100(recipe)
         if not recipe:
             return None
 
-        used = [material for material in active if material['name'] in recipe]
-        if len(used) == len(active):
-            break
-        active = used
-
-    # Normalize the recipe so that it sums up to exactly 100%
-    total = float(sum(recipe.values()))
-    if total <= 0:
+        composition = calculate_recipe_composition(active, recipe)
+        result_umf = {oxide: float(value) for oxide, value in weights_to_umf(composition).items()}
+    except (ValueError, ZeroDivisionError, ArithmeticError) as exc:
+        # A degenerate material set (nothing convertible, zero total weight) is
+        # not a server error, it simply produces no recipe
+        logger.debug(f"material set produced no recipe: {exc}")
         return None
-    recipe = {name: round(float(weight) * 100.0 / total, 2) for name, weight in recipe.items()}
-
-    composition = calculate_recipe_composition(active, recipe)
-    result_umf = {oxide: float(value) for oxide, value in weights_to_umf(composition).items()}
-
-    # full_target carries zeros for the unwanted oxides, so contamination counts
-    error = float(calculate_umf_error(full_target, result_umf))
 
     return {
         'materials': list(material_set),
         'recipe': recipe,
         'result_umf': result_umf,
-        'target_umf': dict(target_umf),
-        'error': error,
+        # Reported error: reproducible by the caller from target_umf/result_umf
+        'error': float(calculate_umf_error(problem['target_umf'], result_umf)),
+        # Search objective: the reported error plus the damped contamination
+        'objective_error': float(_objective_error(problem, result_umf)),
         'weight_composition': composition,
         'materials_count': len(recipe),
     }
 
 
-def _shrink_to_limit(state: Dict[str, Any], full_target: Dict[str, float],
-                     target_umf: Dict[str, float], max_materials: int) -> Dict[str, Any]:
+def _shrink_to_limit(state: Dict[str, Any], problem: Dict[str, Any],
+                     max_materials: int) -> Dict[str, Any]:
     """
     Bring a state down to the material limit by dropping the lightest material
     of the recipe and solving again.
 
     Needed when whole priority groups make the starting set larger than the
-    caller allows.
+    caller allows, and when max_materials is smaller than the starting set the
+    priority rule produces (a two component recipe is a legitimate request).
     """
     while state['materials_count'] > max_materials:
-        lightest = min(state['recipe'], key=lambda name: state['recipe'][name])
+        lightest = min(sorted(state['recipe']), key=lambda name: state['recipe'][name])
         reduced = [material for material in state['materials'] if material['name'] != lightest]
         if not reduced:
             break
 
-        smaller = _solve_material_set(reduced, full_target, target_umf)
+        smaller = _solve_material_set(reduced, problem)
         if smaller is None:
             break
         smaller['iterations'] = state['iterations']
@@ -222,13 +427,38 @@ def _shrink_to_limit(state: Dict[str, Any], full_target: Dict[str, float],
     return state
 
 
-def _focus_oxide(full_target: Dict[str, float], result_umf: Dict[str, float]) -> Optional[str]:
-    """Return the oxide with the largest absolute deviation in UMF space"""
+def _weight_residual(problem: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, float]:
+    """
+    Residual of the current recipe in weight percent: target minus actual.
+
+    A positive value is a deficit (the recipe delivers too little of that oxide)
+    and a negative one an excess. Both sides are normalized to 100, so the two
+    vectors are directly comparable.
+    """
+    target_weights = problem['target_weights']
+    actual_weights = _normalize_to_100(state['weight_composition'])
+
+    residual: Dict[str, float] = {}
+    for oxide in sorted(set(target_weights) | set(actual_weights)):
+        residual[oxide] = target_weights.get(oxide, 0.0) - actual_weights.get(oxide, 0.0)
+
+    return residual
+
+
+def _focus_oxide(residual: Dict[str, float]) -> Optional[str]:
+    """
+    Return the oxide the current recipe is the furthest away from, measured in
+    weight percent - the oxide this iteration is about.
+
+    The oxides are walked in sorted order so that an exact tie between two
+    oxides always resolves the same way; iterating a set here used to make the
+    choice depend on the hash seed.
+    """
     worst_oxide = None
     worst_gap = 0.0
 
-    for oxide in set(full_target) | set(result_umf):
-        gap = abs(full_target.get(oxide, 0.0) - result_umf.get(oxide, 0.0))
+    for oxide in sorted(residual):
+        gap = abs(residual[oxide])
         if gap > worst_gap:
             worst_gap = gap
             worst_oxide = oxide
@@ -236,69 +466,132 @@ def _focus_oxide(full_target: Dict[str, float], result_umf: Dict[str, float]) ->
     return worst_oxide
 
 
+def _score_candidate(material: Dict, residual: Dict[str, float], focus: Optional[str]) -> Optional[float]:
+    """
+    Score one candidate material against the current residual.
+
+    The score is built from four disjoint terms, every oxide of the material
+    falling into exactly one of them:
+
+      + focus gain          residual on the focus oxide times the share of that
+                            oxide in the material (signed: a material rich in an
+                            oxide that is already in excess scores negative)
+      + secondary gain      the same product on the other oxides that are still
+                            short, damped by SECONDARY_GAIN_WEIGHT
+      - contamination       what the material adds to the oxides that are
+                            already over the target, scaled up by
+                            CONTAMINATION_WEIGHT because an excess cannot be
+                            subtracted later
+      - disturbance         what the material adds to the oxides that already
+                            match; their residual is ~0, so this term needs its
+                            own scale (MATCHED_OXIDE_TOLERANCE) to exist at all
+
+    Returns None for a material with an empty formula.
+    """
+    formula = material.get('formula', {})
+    total = sum(formula.values())
+    if total <= 0:
+        return None
+
+    # Composition as fractions of the material weight
+    fractions = {oxide: value / total for oxide, value in formula.items()}
+
+    focus_gain = 0.0
+    secondary_gain = 0.0
+    contamination = 0.0
+    disturbance = 0.0
+
+    for oxide in sorted(fractions):
+        fraction = fractions[oxide]
+        gap = residual.get(oxide, 0.0)
+
+        if oxide == focus:
+            focus_gain = gap * fraction
+        elif abs(gap) <= MATCHED_OXIDE_TOLERANCE:
+            disturbance += MATCHED_OXIDE_TOLERANCE * fraction
+        elif gap > 0.0:
+            secondary_gain += gap * fraction
+        else:
+            contamination += -gap * fraction
+
+    return (focus_gain
+            + SECONDARY_GAIN_WEIGHT * secondary_gain
+            - CONTAMINATION_WEIGHT * contamination
+            - MATCHED_DISTURBANCE_WEIGHT * disturbance)
+
+
 def _rank_candidates(candidates: Sequence[Dict], residual: Dict[str, float],
                      focus: Optional[str]) -> List[Tuple[float, Dict]]:
     """
-    Rank the materials that are not in the set yet by how well they close the
-    residual.
+    Rank the materials that are not in the set yet, best first.
 
-    The residual is expressed in weight percent (target weights minus the
-    weights the current recipe produces), so a positive value means a deficit
-    and a negative one an excess. The score of a material is the gain on the
-    focus oxide minus the contamination it brings to the oxides that already
-    match; ties are decided by priority.
+    Two things decide the order and both of them really move it:
+
+    * the chemical score of _score_candidate, divided by the size of the focus
+      gap so that 1.0 means "closes the whole gap this step is about";
+    * the material priority, folded in as a penalty of PRIORITY_WEIGHT times the
+      normalized position of its priority group. This is not a tie break: a top
+      priority material overtakes a chemically better one whenever the other one
+      is ahead by less than PRIORITY_WEIGHT of the focus gap.
+
+    Returns (chemical score, material) pairs in the blended order.
     """
     scored: List[Tuple[float, Dict]] = []
 
     for material in candidates:
-        formula = material.get('formula', {})
-        total = sum(formula.values())
-        if total <= 0:
+        score = _score_candidate(material, residual, focus)
+        if score is None:
             continue
-
-        # Composition as fractions of the material weight
-        fractions = {oxide: value / total for oxide, value in formula.items()}
-
-        focus_gain = 0.0
-        if focus is not None:
-            focus_gain = residual.get(focus, 0.0) * fractions.get(focus, 0.0)
-
-        # Every other oxide either helps (deficit) or pollutes (excess)
-        cross_term = 0.0
-        for oxide, fraction in fractions.items():
-            if oxide == focus:
-                continue
-            cross_term += residual.get(oxide, 0.0) * fraction
-
-        scored.append((focus_gain + cross_term, material))
+        scored.append((score, material))
 
     if not scored:
         return []
 
-    scored.sort(key=lambda item: -item[0])
+    # A material made purely of the focus oxide would score exactly the focus
+    # gap, which makes that gap the natural unit of this step. The fallbacks
+    # only matter for an already converged recipe, where the order is moot
+    reference = abs(residual.get(focus, 0.0)) if focus is not None else 0.0
+    if reference <= 0.0:
+        reference = max((abs(score) for score, _ in scored), default=0.0)
+    if reference <= 0.0:
+        reference = 1.0
 
-    # Candidates that score about the same are re-ordered by priority
-    best_score = scored[0][0]
-    tie_limit = best_score - abs(best_score) * CANDIDATE_SCORE_TIE
-    near_best = [item for item in scored if item[0] >= tie_limit]
-    rest = [item for item in scored if item[0] < tie_limit]
-    near_best.sort(key=lambda item: (item[1].get('priority', DEFAULT_PRIORITY), -item[0]))
+    # Priority groups present in this step, mapped onto [0, 1]
+    priorities = sorted({material.get('priority', DEFAULT_PRIORITY) for _, material in scored})
+    priority_rank = {value: (index / (len(priorities) - 1) if len(priorities) > 1 else 0.0)
+                     for index, value in enumerate(priorities)}
 
-    return near_best + rest
+    def blended(item: Tuple[float, Dict]) -> Tuple[float, float, float, str]:
+        score, material = item
+        normalized = score / reference
+        penalty = PRIORITY_WEIGHT * priority_rank[material.get('priority', DEFAULT_PRIORITY)]
+        # Sorted ascending, hence the negated values; the name closes the last
+        # possible tie so that the order never depends on the input order
+        return (-(normalized - penalty),
+                material.get('priority', DEFAULT_PRIORITY),
+                -score,
+                material.get('name', ''))
+
+    scored.sort(key=blended)
+
+    return scored
 
 
 def _expand_state(state: Dict[str, Any], available_materials: Sequence[Dict],
-                  full_target: Dict[str, float], target_umf: Dict[str, float],
-                  target_weights: Dict[str, float], seen_sets: set,
+                  problem: Dict[str, Any], seen_sets: set, candidate_limit: Optional[int],
                   verbose: bool) -> List[Dict[str, Any]]:
     """
     Try to add one material to the set of a state.
 
-    The candidates are ranked by the residual heuristic first and then actually
-    tried out: a material is worth adding only if the recipe it produces is
-    really better, which the heuristic alone cannot tell (wollastonite, for
-    instance, can be replaced by chalk plus quartz without any visible change
-    in the weight space residual).
+    The candidates are ranked by the residual heuristic first and only the best
+    candidate_limit of them are really solved (None means "all of them", the
+    exhaustive mode). Solving is what decides in the end: the heuristic cannot
+    tell that wollastonite can be replaced by chalk plus quartz without any
+    visible change in the weight space residual.
+
+    Material sets that some other branch already solved are skipped without
+    spending one of the candidate_limit slots on them, so a step always costs at
+    most candidate_limit NNLS runs of new work.
 
     Returns the resulting states ordered from best to worst.
     """
@@ -307,38 +600,38 @@ def _expand_state(state: Dict[str, Any], available_materials: Sequence[Dict],
     if not candidates:
         return []
 
-    # Residual in weight space: what the current recipe fails to deliver
-    actual_weights = _normalize_to_100(state['weight_composition'])
-    residual = {}
-    for oxide in set(target_weights) | set(actual_weights):
-        residual[oxide] = target_weights.get(oxide, 0.0) - actual_weights.get(oxide, 0.0)
-
-    focus = _focus_oxide(full_target, state['result_umf'])
+    residual = _weight_residual(problem, state)
+    focus = _focus_oxide(residual)
     ranked = _rank_candidates(candidates, residual, focus)
 
     if verbose:
-        logging.info(f"worst oxide {focus}, best candidates by heuristic: "
-                     f"{[material['name'] for _, material in ranked[:TOP_CANDIDATES]]}")
+        logger.info(f"worst oxide {focus}, best candidates by heuristic: "
+                    f"{[material['name'] for _, material in ranked[:TOP_CANDIDATES]]}")
 
     trials: List[Tuple[float, int, Dict[str, Any]]] = []
+    solved = 0
 
     for rank, (_score, candidate) in enumerate(ranked):
+        if candidate_limit is not None and solved >= candidate_limit:
+            break
+
         new_set = list(state['materials']) + [candidate]
         set_names = frozenset(material['name'] for material in new_set)
         if set_names in seen_sets:
             continue
         seen_sets.add(set_names)
 
-        new_state = _solve_material_set(new_set, full_target, target_umf)
+        solved += 1
+        new_state = _solve_material_set(new_set, problem)
         if new_state is None:
             continue
 
         new_state['set_names'] = set_names
         new_state['added'] = candidate['name']
 
-        # Rounding the error keeps equally good candidates together, so that the
-        # heuristic order (and through it the priority) decides between them
-        trials.append((round(new_state['error'], 4), rank, new_state))
+        # Rounding the objective keeps equally good candidates together, so that
+        # the heuristic order (and through it the priority) decides between them
+        trials.append((round(new_state['objective_error'], 4), rank, new_state))
 
     trials.sort(key=lambda item: (item[0], item[1]))
 
@@ -352,36 +645,100 @@ def _recipe_key(recipe: Dict[str, float]) -> Tuple:
 
 def _solution_sort_key(solution: Dict[str, Any], best_error: float):
     """
-    Sort solutions by error, but prefer fewer materials when the errors are
-    practically the same.
+    Sort solutions by the search objective, but prefer fewer materials when the
+    objectives are practically the same.
     """
     tie_limit = best_error + max(best_error * SOLUTION_ERROR_TIE_REL, SOLUTION_ERROR_TIE_ABS)
 
-    if solution['error'] <= tie_limit:
-        return (0, solution['materials_count'], solution['error'])
-    return (1, solution['error'], solution['materials_count'])
+    if solution['objective_error'] <= tie_limit:
+        return (0, solution['materials_count'], solution['objective_error'])
+    return (1, solution['objective_error'], solution['materials_count'])
 
 
 def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
-                     max_solutions=5, verbose=False, error_threshold=0.1) -> List[Dict[str, Any]]:
+                     max_solutions=5, verbose=False, error_threshold=0.1,
+                     penalize_unlisted=1.0,
+                     candidate_search=SEARCH_EXHAUSTIVE) -> List[Dict[str, Any]]:
     """
     Find glaze recipes for a target UMF by adding materials one at a time.
 
     Args:
         inventory: list of available material names
         target_umf: target UMF formula as {oxide: value}
-        min_materials: minimum number of materials in a returned recipe
-        max_materials: maximum number of materials in a recipe
-        max_solutions: how many solutions to return
+        min_materials: minimum number of materials in a returned recipe; when no
+            recipe reaches it the result is an empty list, the constraint is
+            never silently broken
+        max_materials: maximum number of materials in a recipe; the starting set
+            built from whole priority groups is shrunk down to this limit, so
+            values below DEFAULT_MIN_START_MATERIALS are honoured too
+        max_solutions: how many solutions to return; 0 or less returns []
         verbose: log the search process
-        error_threshold: error below which a recipe is considered acceptable
-            and its branch is not refined any further
+        error_threshold: objective error below which a recipe counts as
+            acceptable. A branch that reached it is dropped only once the pool
+            already holds max_solutions different acceptable recipes; until then
+            the branch keeps being refined, because the extra recipes have to
+            come from somewhere.
+        penalize_unlisted: how hard an oxide that the target does not mention is
+            pushed towards zero. 1.0 / True means "not listed = must be zero",
+            0.0 / False means "not listed = do not care", anything in between is
+            a soft weight applied both to the NNLS rows of those oxides and to
+            their share of the search objective. Targets derived from a real
+            recipe list every oxide it brings, so 1.0 is right for them; a
+            target typed by hand in the UI lists only what the user cares about,
+            and a hard 1.0 there makes the solver sacrifice the requested oxides
+            to zero out the unmentioned ones.
+        candidate_search: 'exhaustive' (default) solves every candidate material
+            of every step. It costs O(len(inventory)) NNLS runs per step, it is
+            the more accurate of the two, and it reduces the candidate ranking
+            to a tie break between sets whose error agrees to four decimals -
+            the focus oxide and the priority do not steer it.
+            'heuristic' solves only the TOP_CANDIDATES best ranked candidates,
+            which is what a human does: there the ranking, the focus oxide and
+            the priority really pick what gets tried, and a step costs a
+            constant number of NNLS runs. Measured on the 11 reference recipes
+            with a 19 material inventory: exhaustive 859 NNLS runs and 11/11
+            recovered, heuristic 263 runs and 6/11.
 
     Returns:
-        list of solutions, best first; every solution holds recipe, error,
-        result_umf, target_umf, materials_count and iterations
+        list of solutions ordered by the search objective, best first. Every
+        solution holds:
+            recipe          {material: weight percent}, adds up to exactly 100
+            error           calculate_umf_error(target_umf, result_umf); it can
+                            be recomputed from the two dictionaries below
+            objective_error what the search minimized: error plus the damped
+                            contamination of the unlisted oxides
+            result_umf      UMF of the recipe
+            target_umf      the requested target, cleaned of unusable entries
+            effective_target_umf  target_umf plus a zero for every oxide the
+                            inventory can bring, the oxides penalize_unlisted
+                            talks about
+            unlisted_weight the penalize_unlisted value actually applied
+            materials_count number of materials in the recipe
+            iterations      how many steps the recipe took
     """
-    if not target_umf:
+    if max_solutions <= 0:
+        return []
+
+    if candidate_search not in CANDIDATE_SEARCH_MODES:
+        raise ValueError(f"unknown candidate_search '{candidate_search}', "
+                         f"expected one of: {', '.join(CANDIDATE_SEARCH_MODES)}")
+
+    # A target of unknown oxides or of zeros cannot be converted into weights at
+    # all; catching it here keeps ZeroDivisionError out of the callers
+    clean_target = _usable_target(target_umf)
+    if not clean_target:
+        if verbose:
+            logger.info("the target holds no usable oxide")
+        return []
+
+    material_limit = int(max_materials)
+    if material_limit < 1:
+        logger.warning(f"max_materials={max_materials} leaves no room for a recipe")
+        return []
+
+    if min_materials > material_limit:
+        logger.warning(f"min_materials={min_materials} is above max_materials={material_limit}, "
+                       f"no recipe can satisfy both")
         return []
 
     all_materials = load_materials(only_inventory=False, priority=True)
@@ -389,33 +746,33 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
 
     if not available_materials:
         if verbose:
-            logging.info("no materials available in the inventory")
+            logger.info("no materials available in the inventory")
         return []
 
-    full_target = _expand_target(target_umf, available_materials)
-    target_weights = umf_to_weights(full_target)
+    unlisted_weight = _normalize_unlisted_weight(penalize_unlisted)
+    problem = _build_problem(clean_target, available_materials, unlisted_weight)
+
+    candidate_limit = None if candidate_search == SEARCH_EXHAUSTIVE else TOP_CANDIDATES
+    beam_width = 1 if max_solutions <= 1 else min(MAX_BEAM_WIDTH, max_solutions)
+    # How many children of one state are allowed to stay in the beam
+    beam_children = 1 if max_solutions <= 1 else TOP_CANDIDATES
 
     min_start_materials = max(min_materials, DEFAULT_MIN_START_MATERIALS)
-    max_materials = max(max_materials, min_start_materials)
-
-    top_k = 1 if max_solutions <= 1 else TOP_CANDIDATES
-    beam_width = 1 if max_solutions <= 1 else min(MAX_BEAM_WIDTH, max_solutions)
-
     start_set = _priority_start_set(available_materials, min_start_materials)
     if not start_set:
         return []
 
     if verbose:
-        logging.info(f"starting set ({len(start_set)} materials): {[m['name'] for m in start_set]}")
+        logger.info(f"starting set ({len(start_set)} materials): {[m['name'] for m in start_set]}")
 
-    start_state = _solve_material_set(start_set, full_target, target_umf)
+    start_state = _solve_material_set(start_set, problem)
     if start_state is None:
         if verbose:
-            logging.info("the starting set produced no recipe")
+            logger.info("the starting set produced no recipe")
         return []
 
     start_state['iterations'] = 1
-    start_state = _shrink_to_limit(start_state, full_target, target_umf, max_materials)
+    start_state = _shrink_to_limit(start_state, problem, material_limit)
     start_state['set_names'] = frozenset(m['name'] for m in start_state['materials'])
 
     pool: List[Dict[str, Any]] = [start_state]
@@ -423,7 +780,7 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
     seen_sets = {start_state['set_names']}
     # Different recipes that already meet the requested quality
     found_recipes = set()
-    if start_state['error'] <= error_threshold:
+    if start_state['objective_error'] <= error_threshold:
         found_recipes.add(_recipe_key(start_state['recipe']))
 
     for iteration in range(2, DEFAULT_MAX_ITERATIONS + 1):
@@ -432,51 +789,55 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
         for state in beam:
             # A branch that is good enough is dropped, but only once the pool
             # holds as many different recipes as the caller asked for
-            if state['error'] <= error_threshold and len(found_recipes) >= max_solutions:
+            if state['objective_error'] <= error_threshold and len(found_recipes) >= max_solutions:
                 if verbose:
-                    logging.info(f"branch converged with error {state['error']:.4f}")
+                    logger.info(f"branch converged with error {state['objective_error']:.4f}")
                 continue
 
-            if state['materials_count'] >= max_materials:
+            if state['materials_count'] >= material_limit:
                 continue
 
-            children = _expand_state(state, available_materials, full_target, target_umf,
-                                     target_weights, seen_sets, verbose)
+            children = _expand_state(state, available_materials, problem, seen_sets,
+                                     candidate_limit, verbose)
 
             for child in children:
                 child['iterations'] = iteration
                 pool.append(child)
-                if child['error'] <= error_threshold:
+                if child['objective_error'] <= error_threshold:
                     found_recipes.add(_recipe_key(child['recipe']))
 
             # Only the best branches are kept alive; a branch that stops
             # improving is abandoned and the pool keeps whatever it already found
-            for child in children[:top_k]:
-                improvement = state['error'] - child['error']
-                if improvement <= state['error'] * STALL_IMPROVEMENT:
+            for child in children[:beam_children]:
+                improvement = state['objective_error'] - child['objective_error']
+                if improvement <= state['objective_error'] * STALL_IMPROVEMENT:
                     if verbose:
-                        logging.info(f"branch stalled on {child['added']}: "
-                                     f"{state['error']:.4f} -> {child['error']:.4f}")
+                        logger.info(f"branch stalled on {child['added']}: "
+                                    f"{state['objective_error']:.4f} -> {child['objective_error']:.4f}")
                     continue
 
                 if verbose:
-                    logging.info(f"iteration {iteration}: added {child['added']}, "
-                                 f"error {state['error']:.4f} -> {child['error']:.4f}")
+                    logger.info(f"iteration {iteration}: added {child['added']}, "
+                                f"error {state['objective_error']:.4f} -> {child['objective_error']:.4f}")
 
                 next_beam.append(child)
 
         if not next_beam:
             break
 
-        next_beam.sort(key=lambda s: (s['error'], s['materials_count']))
+        next_beam.sort(key=lambda s: (s['objective_error'], s['materials_count']))
         beam = next_beam[:beam_width]
 
-    # Keep only recipes that respect the material limits
-    solutions = [s for s in pool if min_materials <= s['materials_count'] <= max_materials]
+    # Keep only recipes that respect the material limits. An empty result here
+    # means the limits are unreachable with this inventory - the caller is told
+    # so instead of being handed a recipe that breaks them
+    solutions = [s for s in pool if min_materials <= s['materials_count'] <= material_limit]
     if not solutions:
-        solutions = list(pool)
+        logger.warning(f"no recipe with {min_materials}..{material_limit} materials was reachable, "
+                       f"the pool holds {len(pool)} states")
+        return []
 
-    best_error = min(s['error'] for s in solutions)
+    best_error = min(s['objective_error'] for s in solutions)
     solutions.sort(key=lambda s: _solution_sort_key(s, best_error))
 
     # Drop duplicates by recipe composition
@@ -484,6 +845,9 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
     seen_recipes = set()
 
     for solution in solutions:
+        if len(unique) >= max_solutions:
+            break
+
         key = _recipe_key(solution['recipe'])
         if key in seen_recipes:
             continue
@@ -492,17 +856,17 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
         unique.append({
             'recipe': solution['recipe'],
             'error': solution['error'],
+            'objective_error': solution['objective_error'],
             'result_umf': solution['result_umf'],
-            'target_umf': solution['target_umf'],
+            'target_umf': dict(problem['target_umf']),
+            'effective_target_umf': dict(problem['full_target']),
+            'unlisted_weight': unlisted_weight,
             'materials_count': solution['materials_count'],
             'iterations': solution['iterations'],
         })
 
-        if len(unique) >= max_solutions:
-            break
-
     if verbose and unique:
-        logging.info(f"returning {len(unique)} solutions, best error {unique[0]['error']:.4f}")
+        logger.info(f"returning {len(unique)} solutions, best error {unique[0]['error']:.4f}")
 
     return unique
 
@@ -515,6 +879,10 @@ def main():
     parser.add_argument('--solutions', type=int, default=5, help='Number of solutions to find (default: 5)')
     parser.add_argument('--max-materials', type=int, default=10, help='Maximum number of materials (default: 10)')
     parser.add_argument('--error-threshold', type=float, default=0.1, help='Error at which the search stops (default: 0.1)')
+    parser.add_argument('--penalize-unlisted', type=float, default=1.0,
+                        help='How hard an oxide missing from the target is pushed to zero, 0.0..1.0 (default: 1.0)')
+    parser.add_argument('--candidate-search', choices=CANDIDATE_SEARCH_MODES, default=SEARCH_EXHAUSTIVE,
+                        help=f'Candidate search mode (default: {SEARCH_EXHAUSTIVE})')
     parser.add_argument('--quiet', action='store_true', help='Do not log the search process')
     args = parser.parse_args()
 
@@ -563,6 +931,8 @@ def main():
         max_solutions=args.solutions,
         verbose=not args.quiet,
         error_threshold=args.error_threshold,
+        penalize_unlisted=args.penalize_unlisted,
+        candidate_search=args.candidate_search,
     )
 
     if not solutions:
@@ -572,7 +942,8 @@ def main():
     print(f"\nFound {len(solutions)} solutions!")
     for index, solution in enumerate(solutions):
         print(f"\nSolution {index + 1}")
-        print(f"Error: {solution['error']:.4f} | materials: {solution['materials_count']} | iterations: {solution['iterations']}")
+        print(f"Error: {solution['error']:.4f} | objective: {solution['objective_error']:.4f} "
+              f"| materials: {solution['materials_count']} | iterations: {solution['iterations']}")
         print("Recipe:")
         for material, weight in sorted(solution['recipe'].items(), key=lambda item: -item[1]):
             print(f"  {material}: {weight:.2f}%")
