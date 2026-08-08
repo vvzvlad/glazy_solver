@@ -19,8 +19,45 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from umf_to_recipe import find_best_recipe
 
 class TestIndividualRecipes(unittest.TestCase):
-    
-    
+
+    # Class-level caches so the JSON files are read only once per test run
+    _reference_recipes = None
+    _inventory = None
+
+    @classmethod
+    def load_reference_recipes(cls):
+        """Loads reference recipe fixtures, keyed by fixture id (cached)"""
+        if cls._reference_recipes is None:
+            fixtures_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "fixtures",
+                "reference_recipes.json"
+            )
+            with open(fixtures_path, "r", encoding="utf-8") as f:
+                cls._reference_recipes = {item["id"]: item for item in json.load(f)}
+        return cls._reference_recipes
+
+    def get_reference(self, recipe_id):
+        """Returns a single reference recipe (umf / recipe / name) by its fixture id"""
+        recipes = self.load_reference_recipes()
+        self.assertIn(recipe_id, recipes, f"Эталонный рецепт '{recipe_id}' не найден в фикстурах")
+        return recipes[recipe_id]
+
+    @classmethod
+    def create_inventory_from_materials(cls):
+        """Returns names of materials flagged as inInventory in database/materials.json (cached)"""
+        if cls._inventory is None:
+            materials_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "database",
+                "materials.json"
+            )
+            with open(materials_path, "r", encoding="utf-8") as f:
+                materials = json.load(f)
+            cls._inventory = [m["name"] for m in materials if m.get("inInventory")]
+        # Return a copy so callers cannot mutate the cached list
+        return list(cls._inventory)
+
     def solve(self, umf, inventory, min_materials=1, error_tolerance=0.1):
         """Решает рецепт по UMF и возвращает полное решение"""
         try:
@@ -187,242 +224,114 @@ class TestIndividualRecipes(unittest.TestCase):
     
     def test_recipe_01_transparent_glaze(self):
         """Тест для рецепта 'Прозрачная глазурь △6'"""
-        
-        umf = {
-            "Al2O3": 0.379, "B2O3": 0.266, "CaO": 0.718, "Fe2O3": 0.002,
-            "K2O": 0.086, "MgO": 0.048, "Na2O": 0.143, "SiO2": 3.151, 
-            "SrO": 0.005, "TiO2": 0.003
-        }
-
-        original_recipe = {
-            "Волластонит МИВОЛЛ": 20,
-            "Каолин КЖФ-1": 15,
-            "Кварцевая мука Кварцверке W12": 20,
-            "Нефелин-сиенит VR13": 30,
-            "Улексит (Химпэк)": 15
-        }
+        reference = self.get_reference("recipe_01_transparent_glaze")
+        umf, original_recipe, name = reference["umf"], reference["recipe"], reference["name"]
 
         inventory = self.create_inventory_from_materials()
         result_recipe, error = self.solve(umf, inventory)
-        result = self.check_recipe(result_recipe, error, original_recipe, "Прозрачная глазурь △6", umf, inventory)
-        self.assertTrue(result, "Тест для 'Прозрачная глазурь △6' не пройден")
-    
+        result = self.check_recipe(result_recipe, error, original_recipe, name, umf, inventory)
+        self.assertTrue(result, f"Тест для '{name}' не пройден")
+
     def test_recipe_02_matte_calcium_glaze(self):
         """Тест для рецепта 'Матовая кальциевая глазурь △6'"""
-        
-        umf = {
-            "Al2O3": 0.497, "B2O3": 0.157, "CaO": 0.706, "Fe2O3": 0.003,
-            "K2O": 0.103, "MgO": 0.037, "Na2O": 0.152, "SiO2": 2.455,
-            "SrO": 0.003, "TiO2": 0.004
-        }
-
-        original_recipe = {
-            "Волластонит МИВОЛЛ": 25,
-            "Каолин КЖФ-1": 25,
-            "Нефелин-сиенит VR13": 40,
-            "Улексит (Химпэк)": 10
-        }
+        reference = self.get_reference("recipe_02_matte_calcium_glaze")
+        umf, original_recipe, name = reference["umf"], reference["recipe"], reference["name"]
 
         inventory = self.create_inventory_from_materials()
         result_recipe, error = self.solve(umf, inventory)
-        result = self.check_recipe(result_recipe, error, original_recipe, "Матовая кальциевая глазурь △6", umf, inventory)
-        self.assertTrue(result, "Тест для 'Матовая кальциевая глазурь △6' не пройден")
+        result = self.check_recipe(result_recipe, error, original_recipe, name, umf, inventory)
+        self.assertTrue(result, f"Тест для '{name}' не пройден")
 
     def test_recipe_03_magnesium_matte_glaze(self):
         """Тест для рецепта 'Магниевая матовая глазурь △6'"""
-        
-        umf = {
-            "Al2O3": 0.194, "B2O3": 0.057, "CaO": 0.304, "Fe2O3": 0.004,
-            "K2O": 0.053, "MgO": 0.429, "Na2O": 0.08, "SiO2": 2.12,
-            "SrO": 0.001, "TiO2": 0.001, "ZnO": 0.132
-        }
-
-        original_recipe = {
-            "Волластонит МИВОЛЛ": 15,
-            "Каолин КЖФ-1": 5,
-            "Кварцевая мука Кварцверке W12": 15,
-            "Нефелин-сиенит VR13": 30,
-            "Оксид цинка, ZnO": 5,
-            "Тальк Онотский": 25,
-            "Улексит (Химпэк)": 5
-        }
+        reference = self.get_reference("recipe_03_magnesium_matte_glaze")
+        umf, original_recipe, name = reference["umf"], reference["recipe"], reference["name"]
 
         inventory = self.create_inventory_from_materials()
         result_recipe, error = self.solve(umf, inventory)
-        result = self.check_recipe(result_recipe, error, original_recipe, "Магниевая матовая глазурь △6", umf, inventory)
-        self.assertTrue(result, "Тест для 'Магниевая матовая глазурь △6' не пройден")
-    
+        result = self.check_recipe(result_recipe, error, original_recipe, name, umf, inventory)
+        self.assertTrue(result, f"Тест для '{name}' не пройден")
+
     def test_recipe_04_underfired_matte_glaze(self):
         """Тест для рецепта 'Матовая недожога △6'"""
-        
-        umf = {
-            "Al2O3": 0.207, "CaO": 0.87, "Fe2O3": 0.001,
-            "K2O": 0.055, "Na2O": 0.075, "SiO2": 1.577, "TiO2": 0.001
-        }
-
-        original_recipe = {
-            "Каолин КЖФ-1": 10,
-            "Кварцевая мука Кварцверке W12": 20,
-            "Мел, CaCO3": 40,
-            "Нефелин-сиенит VR13": 30
-        }
+        reference = self.get_reference("recipe_04_underfired_matte_glaze")
+        umf, original_recipe, name = reference["umf"], reference["recipe"], reference["name"]
 
         inventory = self.create_inventory_from_materials()
         result_recipe, error = self.solve(umf, inventory)
-        result = self.check_recipe(result_recipe, error, original_recipe, "Матовая недожога △6", umf, inventory)
-        self.assertTrue(result, "Тест для 'Матовая недожога △6' не пройден")
-    
+        result = self.check_recipe(result_recipe, error, original_recipe, name, umf, inventory)
+        self.assertTrue(result, f"Тест для '{name}' не пройден")
+
     def test_recipe_05_floating_glaze(self):
         """Тест для рецепта 'Флотинг △6'"""
-        
-        umf = {
-            "Al2O3": 0.355, "B2O3": 0.385, "CaO": 0.544, "Fe2O3": 0.003,
-            "K2O": 0.091, "MgO": 0.193, "Na2O": 0.165, "SiO2": 3.461,
-            "SrO": 0.007, "TiO2": 0.002
-        }
-
-        original_recipe = {
-            "Волластонит МИВОЛЛ": 10,
-            "Каолин КЖФ-1": 10,
-            "Кварцевая мука Кварцверке W12": 25,
-            "Нефелин-сиенит VR13": 30,
-            "Тальк Онотский": 5,
-            "Улексит (Химпэк)": 20
-        }
+        reference = self.get_reference("recipe_05_floating_glaze")
+        umf, original_recipe, name = reference["umf"], reference["recipe"], reference["name"]
 
         inventory = self.create_inventory_from_materials()
         result_recipe, error = self.solve(umf, inventory)
-        result = self.check_recipe(result_recipe, error, original_recipe, "Флотинг △6", umf, inventory)
-        self.assertTrue(result, "Тест для 'Флотинг △6' не пройден")
-    
+        result = self.check_recipe(result_recipe, error, original_recipe, name, umf, inventory)
+        self.assertTrue(result, f"Тест для '{name}' не пройден")
+
     def test_recipe_06_assembly_glaze(self):
         """Тест для рецепта 'Сборка △6'"""
-        
-        umf = {
-            "Al2O3": 0.542, "CaO": 0.002, "Fe2O3": 0.003,
-            "K2O": 0.124, "Na2O": 0.166, "SiO2": 2.314,
-            "TiO2": 0.004, "ZnO": 0.709
-        }
-
-        original_recipe = {
-            "Каолин КЖФ-1": 25,
-            "Кварцевая мука Кварцверке W12": 5,
-            "Нефелин-сиенит VR13": 50,
-            "Оксид цинка, ZnO": 20
-        }
+        reference = self.get_reference("recipe_06_assembly_glaze")
+        umf, original_recipe, name = reference["umf"], reference["recipe"], reference["name"]
 
         inventory = self.create_inventory_from_materials()
         result_recipe, error = self.solve(umf, inventory)
-        result = self.check_recipe(result_recipe, error, original_recipe, "Сборка △6", umf, inventory)
-        self.assertTrue(result, "Тест для 'Сборка △6' не пройден")
-    
+        result = self.check_recipe(result_recipe, error, original_recipe, name, umf, inventory)
+        self.assertTrue(result, f"Тест для '{name}' не пройден")
+
     def test_recipe_07_zinc_crystal_glaze(self):
         """Тест для рецепта 'Цинковая кристаллическая глазурь △6'"""
-        
-        umf = {
-            "Al2O3": 0.169, "CaO": 0.242, "K2O": 0.068,
-            "Na2O": 0.097, "SiO2": 2.092, "TiO2": 0.151, "ZnO": 0.594
-        }
-
-        original_recipe = {
-            "Кварцевая мука Кварцверке W12": 30,
-            "Мел, CaCO3": 10,
-            "Нефелин-сиенит VR13": 35,
-            "Оксид титана, TiO2": 5,
-            "Оксид цинка, ZnO": 20
-        }
+        reference = self.get_reference("recipe_07_zinc_crystal_glaze")
+        umf, original_recipe, name = reference["umf"], reference["recipe"], reference["name"]
 
         inventory = self.create_inventory_from_materials()
         result_recipe, error = self.solve(umf, inventory)
-        result = self.check_recipe(result_recipe, error, original_recipe, "Цинковая кристаллическая глазурь △6", umf, inventory)
-        self.assertTrue(result, "Тест для 'Цинковая кристаллическая глазурь △6' не пройден")
-    
+        result = self.check_recipe(result_recipe, error, original_recipe, name, umf, inventory)
+        self.assertTrue(result, f"Тест для '{name}' не пройден")
+
     def test_recipe_08_foam_glaze(self):
         """Тест для рецепта 'Пенная глазурь △6'"""
-        
-        umf = {
-            "Al2O3": 0.437, "CaO": 0.78, "Fe2O3": 0.002,
-            "K2O": 0.094, "Na2O": 0.125, "SiO2": 2.665, "TiO2": 0.003
-        }
-
-        original_recipe = {
-            "Каолин КЖФ-1": 20,
-            "Кварцевая мука Кварцверке W12": 20,
-            "Мел, CaCO3": 25,
-            "Нефелин-сиенит VR13": 35
-        }
+        reference = self.get_reference("recipe_08_foam_glaze")
+        umf, original_recipe, name = reference["umf"], reference["recipe"], reference["name"]
 
         inventory = self.create_inventory_from_materials()
         result_recipe, error = self.solve(umf, inventory)
-        result = self.check_recipe(result_recipe, error, original_recipe, "Пенная глазурь △6", umf, inventory)
-        self.assertTrue(result, "Тест для 'Пенная глазурь △6' не пройден")
-    
+        result = self.check_recipe(result_recipe, error, original_recipe, name, umf, inventory)
+        self.assertTrue(result, f"Тест для '{name}' не пройден")
+
     def test_recipe_09_white_glossy_glaze(self):
         """Тест для рецепта 'Белая глянцевая глазурь △6'"""
-        
-        umf = {
-            "Al2O3": 0.398, "B2O3": 0.159, "CaO": 0.471, "Fe2O3": 0.003,
-            "K2O": 0.078, "MgO": 0.144, "Na2O": 0.12, "SiO2": 2.7,
-            "SrO": 0.003, "TiO2": 0.003, "ZnO": 0.183
-        }
-
-        original_recipe = {
-            "Волластонит МИВОЛЛ": 15,
-            "Каолин КЖФ-1": 20,
-            "Кварцевая мука Кварцверке W12": 15,
-            "Нефелин-сиенит VR13": 30,
-            "Оксид цинка, ZnO": 5,
-            "Тальк Онотский": 5,
-            "Улексит (Химпэк)": 10
-        }
+        reference = self.get_reference("recipe_09_white_glossy_glaze")
+        umf, original_recipe, name = reference["umf"], reference["recipe"], reference["name"]
 
         inventory = self.create_inventory_from_materials()
         result_recipe, error = self.solve(umf, inventory)
-        result = self.check_recipe(result_recipe, error, original_recipe, "Белая глянцевая глазурь △6", umf, inventory)
-        self.assertTrue(result, "Тест для 'Белая глянцевая глазурь △6' не пройден")
-    
+        result = self.check_recipe(result_recipe, error, original_recipe, name, umf, inventory)
+        self.assertTrue(result, f"Тест для '{name}' не пройден")
+
     def test_recipe_10_manganese_metallic_glaze(self):
         """Тест для рецепта 'Марганцевый металлик △6'"""
-        
-        umf = {
-            "Al2O3": 24.484, "CaO": 0.185, "Fe2O3": 0.261,
-            "K2O": 0.736, "MnO2": 115.529, "Na2O": 0.078,
-            "SiO2": 131.188, "TiO2": 0.347
-        }
+        reference = self.get_reference("recipe_10_manganese_metallic_glaze")
+        name = reference["name"]
 
-        original_recipe = {
-            "Каолин КЖФ-1": 30,
-            "Кварцевая мука Кварцверке W12": 20,
-            "Оксид марганца": 50
-        }
-
-        # Этот тест пропускаем из-за экстремальных значений MnO2
-        print("\n\n\n\n\n=== тестирование рецепта: Марганцевый металлик △6 ===")
+        # This recipe is skipped because of the extreme MnO2 values: no solution is expected,
+        # so check_recipe is not called at all
+        print(f"\n\n\n\n\n=== тестирование рецепта: {name} ===")
         print("тест пропущен: марганцевый металлик имеет экстремальные значения MnO2, решение не ожидается")
-        # Возвращаем True вместо вызова check_recipe
         self.assertTrue(True)
-    
+
     def test_recipe_11_glupe_glaze(self):
         """Тест для рецепта 'Глуп △6'"""
-        
-        umf = {
-            "Al2O3": 0.712, "B2O3": 0.143, "CaO": 0.74, "Fe2O3": 0.006,
-            "K2O": 0.101, "MgO": 0.017, "Na2O": 0.14, "SiO2": 5.532,
-            "SrO": 0.003, "TiO2": 0.007
-        }
-
-        original_recipe = {
-            "Каолин КЖФ-1": 26,
-            "Кварцевая мука Кварцверке W12": 37,
-            "Мел, CaCO3": 12,
-            "Нефелин-сиенит VR13": 20,
-            "Улексит (Химпэк)": 5
-        }
+        reference = self.get_reference("recipe_11_glupe_glaze")
+        umf, original_recipe, name = reference["umf"], reference["recipe"], reference["name"]
 
         inventory = self.create_inventory_from_materials()
         result_recipe, error = self.solve(umf, inventory)
-        result = self.check_recipe(result_recipe, error, original_recipe, "Глуп △6", umf, inventory)
-        self.assertTrue(result, "Тест для 'Глуп △6' не пройден")
+        result = self.check_recipe(result_recipe, error, original_recipe, name, umf, inventory)
+        self.assertTrue(result, f"Тест для '{name}' не пройден")
 
 if __name__ == "__main__":
     unittest.main() 
