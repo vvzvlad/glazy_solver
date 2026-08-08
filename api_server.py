@@ -14,7 +14,8 @@ import logging
 import os
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from umf_to_recipe import find_multiple_solutions, weights_to_umf, umf_to_weights, load_materials, make_json_safe
+from solver_classic import find_multiple_solutions
+from common import weights_to_umf, umf_to_weights, load_materials, make_json_safe
 
 # Настройка логирования
 logging.basicConfig(
@@ -230,7 +231,7 @@ def get_materials():
         inventory_only = request.args.get('inventory_only', 'false').lower() == 'true'
         
         # Загружаем все материалы
-        materials = load_materials()
+        materials = load_materials(only_inventory=False, priority=True)
         
         if inventory_only:
             # Фильтруем материалы по флагу inInventory
