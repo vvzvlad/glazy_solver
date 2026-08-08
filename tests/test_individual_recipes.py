@@ -16,7 +16,7 @@ import json
 
 # Fix imports by adding parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from umf_to_recipe import find_best_recipe
+from solver_iterative import find_best_recipe
 
 class TestIndividualRecipes(unittest.TestCase):
 
