@@ -19,7 +19,7 @@ from solver_iterative import find_best_recipe
 from common import (weights_to_umf, umf_to_weights, load_materials, make_json_safe,
                     resolve_inventory, filter_materials_by_inventory)
 
-# Настройка логирования
+# Logging setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -28,11 +28,11 @@ logging.basicConfig(
 logger = logging.getLogger('glaze_recipe_api')
 
 app = Flask(__name__, static_folder=None)
-CORS(app)  # Разрешаем CORS для всех маршрутов
+CORS(app)  # Allow CORS for every route
 
-# Путь к директории UI
+# Path to the UI directory
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'UI')
-# Путь к директории с данными
+# Path to the data directory
 DATABASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database')
 
 # Available solver engines; the classic one stays the default so that the
@@ -76,19 +76,19 @@ def iterative_solutions_to_classic_format(solutions, target_umf, inventory_data)
 @app.route('/api/solve', methods=['POST'])
 def solve_recipe():
     """
-    API endpoint для расчета рецепта глазури на основе UMF формулы
-    
-    POST JSON параметры:
+    API endpoint that calculates a glaze recipe from a UMF formula
+
+    POST JSON parameters:
     {
         "umf": {"SiO2": 4, "Al2O3": 1, "Na2O": 0.5, "K2O": 0.5},
-        "max_solutions": 3,  // опционально, по умолчанию 3
-        "min_materials": true,  // опционально, по умолчанию true
-        "error_tolerance": 0.01,  // опционально, по умолчанию 0.01
-        "inventory": ["Material1", "Material2", ...],  // опционально, список доступных материалов
-        "solver": "classic"  // опционально, "classic" (по умолчанию) или "iterative"
+        "max_solutions": 3,  // optional, 3 by default
+        "min_materials": true,  // optional, true by default, classic solver only
+        "error_tolerance": 0.01,  // optional, 0.01 by default, classic solver only
+        "inventory": ["Material1", "Material2", ...],  // optional, list of available materials
+        "solver": "classic"  // optional, "classic" (default) or "iterative"
     }
 
-    Возвращает:
+    Returns:
     [
         {
             "recipe": {"Material1": 45.2, "Material2": 54.8},
@@ -97,7 +97,7 @@ def solve_recipe():
             "actual_composition": {"SiO2": 3.98, "Al2O3": 1.02, ...},
             "weight_composition": {"SiO2": 65.2, "Al2O3": 18.1, ...},
             "materials_count": 2,
-            "recipe_umf": {"SiO2": 3.98, "Al2O3": 1.02, ...}  // UMF для конкретного рецепта
+            "recipe_umf": {"SiO2": 3.98, "Al2O3": 1.02, ...}  // UMF of this particular recipe
         },
         ...
     ]
@@ -146,13 +146,13 @@ def solve_recipe():
             logger.error(f"calculation_error: {solutions['error']}")
             return jsonify({"error": "calculation_error", "message": solutions['error']}), 500
         
-        # Добавляем информацию о UMF для каждого рецепта
+        # Add the UMF information to every recipe
         for solution in solutions:
-            # UMF для конкретного рецепта уже содержится в actual_composition, но также добавим его как отдельное поле
-            # для удобства использования на фронтенде
+            # The UMF of a particular recipe is already stored in actual_composition,
+            # but it is also exposed as a separate field for convenience on the frontend
             solution['recipe_umf'] = solution['actual_composition']
         
-        # Обрабатываем результаты для безопасной сериализации в JSON
+        # Prepare the results for safe JSON serialization
         safe_solutions = make_json_safe(solutions)
         
         logger.info(f"found {len(solutions)} solutions")
@@ -165,9 +165,9 @@ def solve_recipe():
 @app.route('/api/molar_masses', methods=['GET'])
 def get_molar_masses():
     """
-    API endpoint для получения списка оксидов и их молярных масс
-    
-    Возвращает:
+    API endpoint that returns the list of oxides with their molar masses
+
+    Returns:
     {
         "SiO2": 60.084,
         "Al2O3": 101.961,
@@ -194,14 +194,14 @@ def get_molar_masses():
 @app.route('/api/umf_to_weights', methods=['POST'])
 def convert_umf_to_weights():
     """
-    API endpoint для конвертации UMF формулы в весовые проценты
-    
-    POST JSON параметры:
+    API endpoint that converts a UMF formula into weight percent
+
+    POST JSON parameters:
     {
         "umf": {"SiO2": 4, "Al2O3": 1, "Na2O": 0.5, "K2O": 0.5}
     }
-    
-    Возвращает:
+
+    Returns:
     {
         "weights": {"SiO2": 65.2, "Al2O3": 18.1, "Na2O": 8.4, "K2O": 8.3}
     }
@@ -227,14 +227,14 @@ def convert_umf_to_weights():
 @app.route('/api/weights_to_umf', methods=['POST'])
 def convert_weights_to_umf():
     """
-    API endpoint для конвертации весовых процентов в UMF формулу
-    
-    POST JSON параметры:
+    API endpoint that converts weight percent into a UMF formula
+
+    POST JSON parameters:
     {
         "weights": {"SiO2": 65.2, "Al2O3": 18.1, "Na2O": 8.4, "K2O": 8.3}
     }
-    
-    Возвращает:
+
+    Returns:
     {
         "umf": {"SiO2": 4, "Al2O3": 1, "Na2O": 0.5, "K2O": 0.5}
     }
@@ -260,7 +260,7 @@ def convert_weights_to_umf():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """
-    API endpoint для проверки работоспособности сервера
+    API endpoint that reports whether the server is alive
     """
     logger.debug("health check requested")
     return jsonify({"status": "ok"})
@@ -268,18 +268,20 @@ def health_check():
 @app.route('/api/materials', methods=['GET'])
 def get_materials():
     """
-    API endpoint для получения списка всех доступных материалов
-    
-    GET параметры:
-        inventory_only (bool, optional): Если True, возвращает только материалы из инвентаря
-    
-    Возвращает:
+    API endpoint that returns the list of all available materials
+
+    GET parameters:
+        inventory_only (bool, optional): if true, only the materials of the inventory are returned
+
+    Returns:
     [
         {
-            "name": "Материал 1",
+            "name": "Material 1",
             "formula": {"SiO2": 65.2, "Al2O3": 18.1, ...},
-            "description": "Описание материала",
+            "description": "material description",
             "id": 123,
+            "inInventory": true,
+            "priority": 2,
             ...
         },
         ...
@@ -288,11 +290,11 @@ def get_materials():
     try:
         inventory_only = request.args.get('inventory_only', 'false').lower() == 'true'
         
-        # Загружаем все материалы
+        # Load every known material
         materials = load_materials(only_inventory=False, priority=True)
         
         if inventory_only:
-            # Фильтруем материалы по флагу inInventory
+            # Keep only the materials flagged as inInventory
             materials = [material for material in materials if material.get('inInventory', False)]
         
         logger.info(f"returning {len(materials)} materials, inventory_only={inventory_only}")
@@ -302,12 +304,12 @@ def get_materials():
         logger.exception(f"materials_error: {str(e)}")
         return jsonify({"error": "server_error", "message": str(e)}), 500
 
-# Отдача UI статических файлов
+# Serving of the static UI files
 @app.route('/', defaults={'path': 'index.html'})
 @app.route('/<path:path>')
 def serve_ui(path):
     """
-    Отдача статических файлов UI
+    Serve the static UI files
     """
     if path.startswith('api/'):
         return jsonify({"error": "not_found", "message": "API endpoint not found"}), 404
