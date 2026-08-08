@@ -41,11 +41,12 @@ worth stating plainly:
    focus oxide and the priority therefore do not steer this mode.
 
 The default is 'exhaustive' because on the reference set it is measurably more
-accurate - the heuristic only matches it once K grows to about two thirds of the
-inventory, at which point it has stopped being a heuristic and costs more than
-the exhaustive pass anyway. The honest summary is that greedy forward selection
-beats the human shortcut here; the shortcut is kept, and named, for the cases
-where the inventory is large enough that O(inventory) NNLS runs per step hurt.
+accurate - the heuristic only matches it once K grows to about HALF the
+inventory (see find_best_recipe for the measured numbers), at which point it has
+stopped being a shortcut and costs about the same as the exhaustive pass anyway.
+The honest summary is that greedy forward selection beats the human shortcut
+here; the shortcut is kept, and named, for the cases where the inventory is
+large enough that O(inventory) NNLS runs per step hurt.
 
 A branch stops when its error drops below the threshold and the pool already
 holds as many acceptable recipes as the caller asked for, when the material
@@ -72,6 +73,7 @@ from common import (
     filter_materials_by_inventory,
     load_materials,
     load_molar_masses,
+    oxides_classification,
     resolve_inventory,
     umf_to_weights,
     weights_to_umf,
@@ -110,6 +112,34 @@ MAX_BEAM_WIDTH = 4
 # equally good, so that the material count decides between them
 SOLUTION_ERROR_TIE_REL = 0.2
 SOLUTION_ERROR_TIE_ABS = 0.01
+
+# --- unity basis ------------------------------------------------------------
+#
+# A UMF is a formula normalized so that the fluxes (R2O + RO) sum to 1, and
+# weights_to_umf always produces such a vector for a recipe. A target does not
+# have to be one: a target typed by hand can list no flux at all (SiO2 + Al2O3
+# only), or list fluxes that add up to something other than 1. In that case the
+# target and the recipe are normalized by two different quantities and comparing
+# them oxide by oxide measures the difference of the two conventions, not the
+# chemistry - the recipe for {SiO2: 3.0, Al2O3: 0.35} used to report SiO2 = 8.57
+# and an error of 5.6 while having exactly the requested SiO2:Al2O3 ratio.
+#
+# The fix is to bring the recipe onto the basis of the target with a single
+# scalar before comparing, and the two decisions behind it are:
+#
+# * WHEN. Only when the target is not a unity formula itself. If its fluxes do
+#   sum to 1 the length of the target vector is meaningful and must not be
+#   fitted away: a glaze carrying 1.5x the silica per unit of flux is a
+#   different glaze, and scaling that difference out would hide it instead of
+#   reporting it. So a proper UMF target is compared as is (scale 1.0), and only
+#   a target that carries no basis of its own is fitted.
+# * HOW. By least squares over the listed oxides: k = sum(target*result) /
+#   sum(result^2) is the scalar that minimizes ||target - k*result||, and it
+#   weights every oxide by its own magnitude. The classic solver scales by the
+#   SMALLEST oxide of the target instead (solver_classic.solve_recipe), which
+#   puts the whole scale on the noisiest component - missing Fe2O3 = 0.002 by a
+#   factor of two rescales the entire formula by two. That is not copied here.
+UNITY_BASIS_TOLERANCE = 0.01
 
 # --- candidate scoring ------------------------------------------------------
 #
@@ -163,11 +193,22 @@ CANDIDATE_SEARCH_MODES = (SEARCH_HEURISTIC, SEARCH_EXHAUSTIVE)
 def _usable_target(target_umf: Dict[str, Any]) -> Dict[str, float]:
     """
     Keep only the target entries the math can actually work with: a known oxide
-    (present in molar_masses.json) carrying a positive number.
+    (present in molar_masses.json) carrying a finite, non negative number.
 
-    umf_to_weights divides by the total molar weight, so a target made only of
-    unknown oxides or of zeros would blow up with ZeroDivisionError deep inside
-    the conversion. Filtering here keeps that defect out of the public API.
+    An oxide asked for as an explicit ZERO is kept, and that is deliberate. The
+    UI sends the whole oxide table on every request, zeros included ('SrO': 0.0,
+    'Fe2O3': 0.0, 'TiO2': 0.0), and "give me no iron" is a constraint, not the
+    absence of an opinion. Dropping those entries used to move them into the
+    unlisted group, where penalize_unlisted decides their fate - so with a soft
+    weight "no iron please" silently turned into "iron is fine". A zero stays in
+    the target, gets its NNLS row with a zero right hand side and is penalized
+    like any other requested value, which is what the classic solver does too.
+
+    Anything else is dropped: an unknown oxide, a non numeric value, a negative
+    value, NaN and infinity.
+
+    Note that a target of nothing but zeros is still unusable - umf_to_weights
+    divides by the total molar weight - and find_best_recipe rejects it.
     """
     if not target_umf:
         return {}
@@ -176,14 +217,67 @@ def _usable_target(target_umf: Dict[str, Any]) -> Dict[str, float]:
     usable: Dict[str, float] = {}
 
     for oxide, value in target_umf.items():
+        if oxide not in molar_masses:
+            continue
         try:
             number = float(value)
         except (TypeError, ValueError):
             continue
-        if oxide in molar_masses and number > 0 and math.isfinite(number):
+        if math.isfinite(number) and number >= 0.0:
             usable[oxide] = number
 
     return usable
+
+
+def _flux_sum(umf: Dict[str, float]) -> float:
+    """Sum of the fluxes (R2O + RO) of a formula - the UMF unity denominator"""
+    classes = oxides_classification()
+    fluxes = set(classes['r2o']) | set(classes['ro'])
+    return sum(float(value) for oxide, value in umf.items() if oxide in fluxes)
+
+
+def _unity_scale(target_umf: Dict[str, float], result_umf: Dict[str, float]) -> float:
+    """
+    Scalar that brings the UMF of a recipe onto the normalization basis of the
+    target, so that the two vectors can be compared oxide by oxide.
+
+    Returns exactly 1.0 when both formulas are already unity formulas (their
+    fluxes sum to 1 within UNITY_BASIS_TOLERANCE), which is the normal case: the
+    target of a real recipe and every recipe the solver builds are both proper
+    UMFs, so nothing is scaled and nothing is hidden.
+
+    Otherwise - a target with no flux at all, a target whose fluxes do not add
+    up to 1, or the rare recipe that carries no flux and is therefore normalized
+    by weights_to_umf against its smallest oxide - only the direction of the
+    target vector is meaningful, and the length is fitted by least squares:
+    k = sum(target*result) / sum(result^2) minimizes ||target - k*result|| over
+    the listed oxides. See the UNITY_BASIS_TOLERANCE block above for why the
+    gate exists and why the least squares fit is preferred to the base oxide
+    rescaling of the classic solver.
+
+    Falls back to 1.0 when the fit is degenerate (an empty or all zero result,
+    or a result that shares nothing with the target): a non positive scale is
+    not a formula.
+    """
+    target_fluxes = _flux_sum(target_umf)
+    result_fluxes = _flux_sum(result_umf)
+
+    if (abs(target_fluxes - 1.0) <= UNITY_BASIS_TOLERANCE
+            and abs(result_fluxes - 1.0) <= UNITY_BASIS_TOLERANCE):
+        return 1.0
+
+    numerator = 0.0
+    denominator = 0.0
+
+    for oxide, expected in target_umf.items():
+        actual = result_umf.get(oxide, 0.0)
+        numerator += expected * actual
+        denominator += actual * actual
+
+    if denominator <= 0.0 or numerator <= 0.0:
+        return 1.0
+
+    return numerator / denominator
 
 
 def _expand_target(target_umf: Dict[str, float], materials: Sequence[Dict]) -> Dict[str, float]:
@@ -211,6 +305,13 @@ def _normalize_unlisted_weight(penalize_unlisted: Any) -> float:
 
     True/False are accepted as the hard 1.0 / 0.0 ends of the same scale, so
     that a boolean flag and a soft weight can be used interchangeably.
+
+    Raises ValueError for anything that is not a finite number: a JSON null or a
+    typo used to be silently turned into 1.0, which meant the caller got a
+    completely different search than the one it asked for and never learned it.
+    A finite number outside [0, 1] is clamped and logged - the ends of the scale
+    are hard bounds ("must be zero" / "do not care"), there is nothing to
+    extrapolate beyond them.
     """
     if penalize_unlisted is True:
         return 1.0
@@ -220,12 +321,33 @@ def _normalize_unlisted_weight(penalize_unlisted: Any) -> float:
     try:
         weight = float(penalize_unlisted)
     except (TypeError, ValueError):
-        return 1.0
+        raise ValueError(f"penalize_unlisted must be a number in [0, 1] or a boolean, "
+                         f"got {penalize_unlisted!r}")
 
     if not math.isfinite(weight):
-        return 1.0
+        raise ValueError(f"penalize_unlisted must be a finite number in [0, 1], "
+                         f"got {penalize_unlisted!r}")
 
-    return min(max(weight, 0.0), 1.0)
+    if weight < 0.0 or weight > 1.0:
+        logger.warning(f"penalize_unlisted={weight} is outside [0, 1], clamped to the nearest bound")
+        return min(max(weight, 0.0), 1.0)
+
+    return weight
+
+
+def _int_argument(value: Any, name: str) -> int:
+    """
+    Coerce one of the integer arguments, refusing what cannot be one.
+
+    min_materials=None (a JSON null that made it through a caller) used to raise
+    a bare TypeError from a comparison in the middle of the search; the caller
+    now gets a ValueError that names the argument. A float is truncated, which
+    is what int() has always done to max_materials here.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be an integer, got {value!r}")
 
 
 def _build_problem(target_umf: Dict[str, float], materials: Sequence[Dict],
@@ -382,7 +504,16 @@ def _solve_material_set(material_set: Sequence[Dict], problem: Dict[str, Any]) -
             return None
 
         composition = calculate_recipe_composition(active, recipe)
-        result_umf = {oxide: float(value) for oxide, value in weights_to_umf(composition).items()}
+        recipe_umf = {oxide: float(value) for oxide, value in weights_to_umf(composition).items()}
+
+        # Both errors below compare the target with the recipe oxide by oxide,
+        # so the recipe first has to be put on the normalization basis of the
+        # target. Normally the two already agree and the scale is exactly 1.0
+        unity_scale = _unity_scale(problem['target_umf'], recipe_umf)
+        if unity_scale == 1.0:
+            result_umf = recipe_umf
+        else:
+            result_umf = {oxide: value * unity_scale for oxide, value in recipe_umf.items()}
     except (ValueError, ZeroDivisionError, ArithmeticError) as exc:
         # A degenerate material set (nothing convertible, zero total weight) is
         # not a server error, it simply produces no recipe
@@ -393,6 +524,9 @@ def _solve_material_set(material_set: Sequence[Dict], problem: Dict[str, Any]) -
         'materials': list(material_set),
         'recipe': recipe,
         'result_umf': result_umf,
+        # Scale that was applied to the UMF of the recipe to make it comparable
+        # with the target; 1.0 means the two were already on the same basis
+        'unity_scale': float(unity_scale),
         # Reported error: reproducible by the caller from target_umf/result_umf
         'error': float(calculate_umf_error(problem['target_umf'], result_umf)),
         # Search objective: the reported error plus the damped contamination
@@ -643,12 +777,41 @@ def _recipe_key(recipe: Dict[str, float]) -> Tuple:
     return tuple(sorted((name, round(weight, 1)) for name, weight in recipe.items()))
 
 
+def _is_stalled(previous_error: float, next_error: float) -> bool:
+    """
+    Whether one step improved the objective by less than STALL_IMPROVEMENT of
+    what there was to improve - the branch is then abandoned.
+
+    The threshold is relative on purpose: an absolute one would keep polishing a
+    recipe that is already at 0.001 and would give up on one that is at 10.
+    """
+    improvement = previous_error - next_error
+    return improvement <= previous_error * STALL_IMPROVEMENT
+
+
+def _solution_tie_limit(best_error: float) -> float:
+    """
+    Objective up to which a solution counts as "as good as the best one", so
+    that the material count decides between them instead of the fourth decimal.
+    """
+    return best_error + max(best_error * SOLUTION_ERROR_TIE_REL, SOLUTION_ERROR_TIE_ABS)
+
+
 def _solution_sort_key(solution: Dict[str, Any], best_error: float):
     """
-    Sort solutions by the search objective, but prefer fewer materials when the
-    objectives are practically the same.
+    Order the solutions the way the caller is promised they are ordered:
+
+      1. everything within the tie band of the best objective comes first, and
+         inside that band FEWER MATERIALS WINS (the objective only breaks a tie
+         between two recipes of the same size);
+      2. everything outside the band follows, ordered by the objective.
+
+    So the first solution is not necessarily the one with the smallest
+    objective - by design. Two recipes whose errors agree to the third decimal
+    are indistinguishable in the glaze bucket, and the shorter one is the better
+    answer; find_best_recipe documents this and the tests pin it.
     """
-    tie_limit = best_error + max(best_error * SOLUTION_ERROR_TIE_REL, SOLUTION_ERROR_TIE_ABS)
+    tie_limit = _solution_tie_limit(best_error)
 
     if solution['objective_error'] <= tie_limit:
         return (0, solution['materials_count'], solution['objective_error'])
@@ -664,7 +827,10 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
 
     Args:
         inventory: list of available material names
-        target_umf: target UMF formula as {oxide: value}
+        target_umf: target UMF formula as {oxide: value}. An oxide listed as an
+            explicit zero is a constraint ("none of this"), not an omission:
+            unknown oxides, negative and non numeric values are dropped, zeros
+            are kept and penalized like any other requested value
         min_materials: minimum number of materials in a returned recipe; when no
             recipe reaches it the result is an empty list, the constraint is
             never silently broken
@@ -695,19 +861,40 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
             'heuristic' solves only the TOP_CANDIDATES best ranked candidates,
             which is what a human does: there the ranking, the focus oxide and
             the priority really pick what gets tried, and a step costs a
-            constant number of NNLS runs. Measured on the 11 reference recipes
-            with a 19 material inventory: exhaustive 859 NNLS runs and 11/11
-            recovered, heuristic 263 runs and 6/11.
+            constant number of NNLS runs.
+            Measured by calling find_best_recipe once per reference recipe (11
+            of them, 19 material inventory, otherwise default arguments) and
+            counting the calls to scipy nnls: exhaustive 885 runs, recovering
+            the original material set exactly on 10 of the 11 recipes;
+            heuristic 271 runs and 5 of 11. The heuristic reaches the same 10 of
+            11 at TOP_CANDIDATES = 9, and there it costs 855 runs - about half
+            the inventory is tried per step, so it is no longer a shortcut and
+            no longer cheaper. The 11th recipe is out of reach for both: it
+            needs MnO2 and no material of the inventory carries any.
+
+    Raises:
+        ValueError: candidate_search is not one of CANDIDATE_SEARCH_MODES,
+            penalize_unlisted is not a number or a boolean, or one of
+            min_materials / max_materials / max_solutions is not an integer.
 
     Returns:
-        list of solutions ordered by the search objective, best first. Every
-        solution holds:
+        list of solutions, best first, where "best" is the order documented in
+        _solution_sort_key: the recipes whose objective is within the tie band
+        of the best one come first and among those the SHORTEST one leads, the
+        rest follow by increasing objective. The first solution therefore has an
+        objective inside the tie band, not necessarily the smallest one in the
+        list. Every solution holds:
             recipe          {material: weight percent}, adds up to exactly 100
             error           calculate_umf_error(target_umf, result_umf); it can
                             be recomputed from the two dictionaries below
             objective_error what the search minimized: error plus the damped
                             contamination of the unlisted oxides
-            result_umf      UMF of the recipe
+            result_umf      UMF of the recipe, brought onto the normalization
+                            basis of the target (see unity_scale)
+            unity_scale     the scale that was applied to get there; 1.0 in the
+                            normal case, where the target is a unity formula and
+                            nothing needs scaling. The untouched UMF of the
+                            recipe is result_umf divided by this
             target_umf      the requested target, cleaned of unusable entries
             effective_target_umf  target_umf plus a zero for every oxide the
                             inventory can bring, the oxides penalize_unlisted
@@ -716,28 +903,34 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
             materials_count number of materials in the recipe
             iterations      how many steps the recipe took
     """
-    if max_solutions <= 0:
+    solution_limit = _int_argument(max_solutions, 'max_solutions')
+    material_limit = _int_argument(max_materials, 'max_materials')
+    material_floor = _int_argument(min_materials, 'min_materials')
+
+    if solution_limit <= 0:
         return []
 
     if candidate_search not in CANDIDATE_SEARCH_MODES:
         raise ValueError(f"unknown candidate_search '{candidate_search}', "
                          f"expected one of: {', '.join(CANDIDATE_SEARCH_MODES)}")
 
-    # A target of unknown oxides or of zeros cannot be converted into weights at
-    # all; catching it here keeps ZeroDivisionError out of the callers
+    unlisted_weight = _normalize_unlisted_weight(penalize_unlisted)
+
+    # A target of unknown oxides or of nothing but zeros cannot be converted
+    # into weights at all (umf_to_weights would divide by a zero total weight);
+    # catching it here keeps ZeroDivisionError out of the callers
     clean_target = _usable_target(target_umf)
-    if not clean_target:
+    if not any(value > 0.0 for value in clean_target.values()):
         if verbose:
             logger.info("the target holds no usable oxide")
         return []
 
-    material_limit = int(max_materials)
     if material_limit < 1:
         logger.warning(f"max_materials={max_materials} leaves no room for a recipe")
         return []
 
-    if min_materials > material_limit:
-        logger.warning(f"min_materials={min_materials} is above max_materials={material_limit}, "
+    if material_floor > material_limit:
+        logger.warning(f"min_materials={material_floor} is above max_materials={material_limit}, "
                        f"no recipe can satisfy both")
         return []
 
@@ -749,15 +942,14 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
             logger.info("no materials available in the inventory")
         return []
 
-    unlisted_weight = _normalize_unlisted_weight(penalize_unlisted)
     problem = _build_problem(clean_target, available_materials, unlisted_weight)
 
     candidate_limit = None if candidate_search == SEARCH_EXHAUSTIVE else TOP_CANDIDATES
-    beam_width = 1 if max_solutions <= 1 else min(MAX_BEAM_WIDTH, max_solutions)
+    beam_width = 1 if solution_limit <= 1 else min(MAX_BEAM_WIDTH, solution_limit)
     # How many children of one state are allowed to stay in the beam
-    beam_children = 1 if max_solutions <= 1 else TOP_CANDIDATES
+    beam_children = 1 if solution_limit <= 1 else TOP_CANDIDATES
 
-    min_start_materials = max(min_materials, DEFAULT_MIN_START_MATERIALS)
+    min_start_materials = max(material_floor, DEFAULT_MIN_START_MATERIALS)
     start_set = _priority_start_set(available_materials, min_start_materials)
     if not start_set:
         return []
@@ -789,7 +981,7 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
         for state in beam:
             # A branch that is good enough is dropped, but only once the pool
             # holds as many different recipes as the caller asked for
-            if state['objective_error'] <= error_threshold and len(found_recipes) >= max_solutions:
+            if state['objective_error'] <= error_threshold and len(found_recipes) >= solution_limit:
                 if verbose:
                     logger.info(f"branch converged with error {state['objective_error']:.4f}")
                 continue
@@ -809,8 +1001,7 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
             # Only the best branches are kept alive; a branch that stops
             # improving is abandoned and the pool keeps whatever it already found
             for child in children[:beam_children]:
-                improvement = state['objective_error'] - child['objective_error']
-                if improvement <= state['objective_error'] * STALL_IMPROVEMENT:
+                if _is_stalled(state['objective_error'], child['objective_error']):
                     if verbose:
                         logger.info(f"branch stalled on {child['added']}: "
                                     f"{state['objective_error']:.4f} -> {child['objective_error']:.4f}")
@@ -831,9 +1022,9 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
     # Keep only recipes that respect the material limits. An empty result here
     # means the limits are unreachable with this inventory - the caller is told
     # so instead of being handed a recipe that breaks them
-    solutions = [s for s in pool if min_materials <= s['materials_count'] <= material_limit]
+    solutions = [s for s in pool if material_floor <= s['materials_count'] <= material_limit]
     if not solutions:
-        logger.warning(f"no recipe with {min_materials}..{material_limit} materials was reachable, "
+        logger.warning(f"no recipe with {material_floor}..{material_limit} materials was reachable, "
                        f"the pool holds {len(pool)} states")
         return []
 
@@ -845,7 +1036,7 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
     seen_recipes = set()
 
     for solution in solutions:
-        if len(unique) >= max_solutions:
+        if len(unique) >= solution_limit:
             break
 
         key = _recipe_key(solution['recipe'])
@@ -858,6 +1049,7 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
             'error': solution['error'],
             'objective_error': solution['objective_error'],
             'result_umf': solution['result_umf'],
+            'unity_scale': solution['unity_scale'],
             'target_umf': dict(problem['target_umf']),
             'effective_target_umf': dict(problem['full_target']),
             'unlisted_weight': unlisted_weight,

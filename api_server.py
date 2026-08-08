@@ -42,23 +42,53 @@ SOLVER_ITERATIVE = 'iterative'
 AVAILABLE_SOLVERS = (SOLVER_CLASSIC, SOLVER_ITERATIVE)
 
 # How hard the iterative solver pushes an oxide the request did not mention
-# towards zero. The API default is 0.0 ("not listed = do not care") on purpose:
-# a UMF typed in the UI lists only the oxides the user actually wants, and the
-# classic engine behind the same endpoint has always ignored the rest, so both
-# engines answer the same question. Callers that feed a complete UMF derived
-# from a real recipe should pass 1.0, which is the library default of
-# find_best_recipe.
-DEFAULT_PENALIZE_UNLISTED = 0.0
+# towards zero. 1.0 ("not listed = must be zero") is both the library default of
+# find_best_recipe and the behaviour this endpoint had before the parameter
+# existed, and it is what actually answers the request best: on the example of
+# API.md, {"SiO2": 4, "Al2O3": 1, "Na2O": 0.5, "K2O": 0.5}, weight 1.0 lands at
+# an error of 0.14 on the requested oxides while 0.0 lands at 1.41 - ten times
+# worse on the very metric a weight of 0.0 is the one minimizing. Letting the
+# unlisted oxides float free lets the solver spend the flux budget on oxides
+# nobody asked for, and the requested ones pay for it.
+#
+# It is a parameter and not a constant because the trade-off does exist: with a
+# weight of 0.0 the returned formula carries whatever the materials happen to
+# bring, which some callers want. Pass it explicitly for that.
+#
+# A note on the classic engine, since the comparison invites itself: it does NOT
+# ignore the unlisted oxides in the sense used here. It renormalizes the whole
+# resulting UMF by the smallest oxide of the target (solver_classic.solve_recipe)
+# before measuring the error, which is a different question altogether and is
+# why its reported error is nearly zero. The two engines are not answering the
+# same question and their reported errors are not comparable.
+DEFAULT_PENALIZE_UNLISTED = 1.0
 
 
-def iterative_solutions_to_classic_format(solutions, target_umf, inventory_data):
+def iterative_solutions_to_classic_format(solutions, inventory_data):
     """
     Convert the solutions of the iterative solver into the response format of
     the classic one, so that the UI does not see any difference
 
+    The response has to be self consistent: 'error' is the distance between
+    'target_composition' and 'actual_composition' and nothing else, so the
+    target reported here is the CLEANED target the solver actually worked on
+    (solution['target_umf']), not the raw dictionary of the request. They differ
+    whenever the request carries an oxide the solver cannot use - an unknown
+    name, a negative or non numeric value - and a consumer recomputing the error
+    from the raw request would get a different number for no visible reason.
+    Both dictionaries are rounded to four decimals, so a recomputation agrees to
+    about 1e-4.
+
+    Three fields of the iterative solver are passed through as well, because
+    without them the answer cannot be interpreted: 'objective_error' (what the
+    search actually minimized, error plus the damped contamination),
+    'unlisted_weight' (the penalize_unlisted that was applied, whether it came
+    from the request or from the default) and 'unity_scale' (whether the UMF of
+    the recipe had to be rescaled onto the basis of the target, and by how
+    much). They are additions - every key the classic format has is still there.
+
     Args:
         solutions: list of solutions returned by find_best_recipe
-        target_umf: target UMF formula as it came in the request
         inventory_data: optional list of available material names
 
     Returns:
@@ -73,10 +103,13 @@ def iterative_solutions_to_classic_format(solutions, target_umf, inventory_data)
         converted.append({
             'recipe': solution['recipe'],
             'error': round(float(solution['error']), 4),
-            'target_composition': target_umf,
+            'target_composition': {oxide: round(float(value), 4) for oxide, value in solution['target_umf'].items()},
             'actual_composition': {oxide: round(float(value), 4) for oxide, value in solution['result_umf'].items()},
             'weight_composition': {oxide: round(float(value), 2) for oxide, value in composition.items()},
             'materials_count': solution['materials_count'],
+            'objective_error': round(float(solution['objective_error']), 4),
+            'unlisted_weight': float(solution['unlisted_weight']),
+            'unity_scale': round(float(solution['unity_scale']), 6),
         })
 
     return converted
@@ -95,13 +128,14 @@ def solve_recipe():
         "error_tolerance": 0.01,  // optional, 0.01 by default, classic solver only
         "inventory": ["Material1", "Material2", ...],  // optional, list of available materials
         "solver": "classic",  // optional, "classic" (default) or "iterative"
-        "penalize_unlisted": 0.0  // optional, 0.0 by default, iterative solver only:
+        "penalize_unlisted": 1.0  // optional, 1.0 by default, iterative solver only:
                                   // how hard an oxide missing from "umf" is pushed to
-                                  // zero. 0.0/false = not listed means "do not care"
-                                  // (what the classic solver does), 1.0/true = not
-                                  // listed means "must be zero", in between is a soft
-                                  // weight. Use 1.0 when "umf" already lists every
-                                  // oxide the recipe is supposed to contain.
+                                  // zero. 1.0/true = not listed means "must be zero"
+                                  // (the default, and the most accurate answer on the
+                                  // oxides that WERE listed), 0.0/false = not listed
+                                  // means "do not care", in between is a soft weight.
+                                  // An oxide listed in "umf" as an explicit 0 is a
+                                  // constraint and is never treated as unlisted.
     }
 
     Returns:
@@ -113,7 +147,11 @@ def solve_recipe():
             "actual_composition": {"SiO2": 3.98, "Al2O3": 1.02, ...},
             "weight_composition": {"SiO2": 65.2, "Al2O3": 18.1, ...},
             "materials_count": 2,
-            "recipe_umf": {"SiO2": 3.98, "Al2O3": 1.02, ...}  // UMF of this particular recipe
+            "recipe_umf": {"SiO2": 3.98, "Al2O3": 1.02, ...},  // UMF of this particular recipe
+            // iterative solver only, see iterative_solutions_to_classic_format:
+            "objective_error": 0.0123,
+            "unlisted_weight": 1.0,
+            "unity_scale": 1.0
         },
         ...
     ]
@@ -143,14 +181,21 @@ def solve_recipe():
         logger.info(f"solving recipe for umf: {umf}, max_solutions: {max_solutions}, min_materials: {min_materials}, solver: {solver_name}, penalize_unlisted: {penalize_unlisted}")
 
         if solver_name == SOLVER_ITERATIVE:
-            iterative_solutions = find_best_recipe(
-                inventory_data,
-                umf,
-                max_solutions=max_solutions,
-                verbose=False,
-                penalize_unlisted=penalize_unlisted
-            )
-            solutions = iterative_solutions_to_classic_format(iterative_solutions, umf, inventory_data)
+            try:
+                iterative_solutions = find_best_recipe(
+                    inventory_data,
+                    umf,
+                    max_solutions=max_solutions,
+                    verbose=False,
+                    penalize_unlisted=penalize_unlisted
+                )
+            except ValueError as exc:
+                # The solver validates its own arguments and says what is wrong
+                # with them; that is a bad request, not a server failure
+                logger.warning(f"invalid_parameter: {exc}")
+                return jsonify({"error": "invalid_parameter", "message": str(exc)}), 400
+
+            solutions = iterative_solutions_to_classic_format(iterative_solutions, inventory_data)
         else:
             solutions = find_multiple_solutions(
                 umf,
