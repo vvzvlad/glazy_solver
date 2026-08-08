@@ -84,8 +84,17 @@ const elements = {
     ro2_table: document.getElementById('ro2_table'),
     add_oxide_buttons: document.querySelectorAll('.add-oxide-btn'),
     calculation_status: document.getElementById('calculation_status'),
-    min_materials_toggle: document.getElementById('min_materials_toggle')
+    min_materials_toggle: document.getElementById('min_materials_toggle'),
+    glazy_import_input: document.getElementById('glazy_import_input'),
+    glazy_import_btn: document.getElementById('glazy_import_btn'),
+    glazy_import_status: document.getElementById('glazy_import_status'),
+    glazy_source: document.getElementById('glazy_source')
 };
+
+// Above this difference between our target and the UMF of Glazy the source card
+// explains where the discrepancy comes from. 0.01 is the step at which the UI
+// already stops calling a difference negligible (see diff-low in create_umf_element).
+const GLAZY_UMF_DIFF_THRESHOLD = 0.01;
 
 // Загрузить UMF из URL
 function load_umf_from_storage() {
@@ -904,6 +913,225 @@ function display_solutions() {
     });
 }
 
+// Show the state of the Glazy import next to the import button
+function set_glazy_import_status(message, is_error) {
+    const status = elements.glazy_import_status;
+    if (!status) return;
+
+    status.textContent = message;
+    status.classList.toggle('error', Boolean(is_error));
+}
+
+// Import a recipe from glazy.org: load the formula into the target fields,
+// show the original recipe and recalculate
+async function import_from_glazy() {
+    const input = elements.glazy_import_input;
+    const button = elements.glazy_import_btn;
+    if (!input || !button) return;
+
+    const recipe_reference = input.value.trim();
+    if (!recipe_reference) {
+        set_glazy_import_status('Введите ссылку или ID рецепта', true);
+        return;
+    }
+
+    button.disabled = true;
+    set_glazy_import_status('Загрузка…', false);
+
+    try {
+        const response = await fetch(`${API_URL}/glazy_import`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ recipe: recipe_reference })
+        });
+
+        const data = await response.json().catch(() => null);
+
+        // The current formula is left alone on an error: an unreachable Glazy
+        // must not cost the user the recipe already in the fields
+        if (!response.ok || !data || data.error) {
+            console.error('glazy_import_error:', data || response.status);
+            set_glazy_import_status((data && data.message) || 'Не удалось загрузить рецепт с Glazy', true);
+            return;
+        }
+
+        apply_glazy_import(data);
+        set_glazy_import_status('', false);
+    } catch (error) {
+        console.error('glazy_import_error:', error);
+        set_glazy_import_status('Не удалось загрузить рецепт с Glazy', true);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+// Apply an imported recipe: refill the oxide tables, show the source card and solve
+function apply_glazy_import(data) {
+    current_umf = data.umf || {};
+
+    // Same refill as the hashchange handler of index.html: the tables are
+    // rebuilt from current_umf, they are not patched in place
+    elements.r2o_ro_table.innerHTML = '';
+    elements.r2o3_table.innerHTML = '';
+    elements.ro2_table.innerHTML = '';
+    add_initial_oxides();
+
+    // Keeps the imported formula in the URL, so it survives a reload and can be shared
+    save_umf_to_storage(current_umf);
+
+    if (elements.recipe_name) {
+        elements.recipe_name.textContent = data.name || `Рецепт #${data.id}`;
+    }
+
+    render_glazy_source(data);
+
+    // Looked up on the global object on purpose: index.html replaces
+    // window.solve_recipe with a version that also sends the selected materials
+    solve_recipe();
+}
+
+// Largest difference between our target and the UMF of Glazy, over the union of their oxides
+function glazy_umf_max_diff(umf, umf_glazy) {
+    const oxides = new Set([...Object.keys(umf || {}), ...Object.keys(umf_glazy || {})]);
+
+    let max_diff = 0;
+    oxides.forEach(oxide => {
+        const our_value = Number((umf || {})[oxide]) || 0;
+        const glazy_value = Number((umf_glazy || {})[oxide]) || 0;
+        max_diff = Math.max(max_diff, Math.abs(our_value - glazy_value));
+    });
+
+    return max_diff;
+}
+
+// Build one row of the original recipe table
+function create_glazy_component_row(component, is_first_additional) {
+    const row = document.createElement('tr');
+    if (component.is_additional) {
+        row.classList.add('glazy-source-additional');
+    }
+    if (is_first_additional) {
+        row.classList.add('glazy-source-divider');
+    }
+
+    const name_cell = document.createElement('td');
+    name_cell.className = 'glazy-source-name';
+    // Everything coming from Glazy is third-party text and is inserted as text only
+    name_cell.textContent = component.name || '';
+    if (component.is_additional) {
+        name_cell.title = 'Добавка сверх 100% основы';
+    }
+
+    const amount_cell = document.createElement('td');
+    amount_cell.className = 'glazy-source-amount';
+    const percentage = Number(component.percentage) || 0;
+    amount_cell.textContent = `${component.is_additional ? '+' : ''}${percentage.toFixed(1)}%`;
+
+    row.appendChild(name_cell);
+    row.appendChild(amount_cell);
+
+    return row;
+}
+
+// Show the original Glazy recipe as a reference card
+function render_glazy_source(data) {
+    const container = elements.glazy_source;
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    const header = document.createElement('div');
+    header.className = 'glazy-source-header';
+
+    const link = document.createElement('a');
+    link.href = data.url || `https://glazy.org/recipes/${data.id}`;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = data.name || `Рецепт #${data.id}`;
+    header.appendChild(link);
+
+    if (data.id !== undefined && data.id !== null) {
+        const id_label = document.createElement('span');
+        id_label.className = 'glazy-source-id';
+        id_label.textContent = `#${data.id}`;
+        header.appendChild(id_label);
+    }
+
+    container.appendChild(header);
+
+    // Cone names arrive unescaped from the server, so they are plain text here
+    const cones = [data.cone_from, data.cone_to].filter(cone => cone);
+    if (cones.length > 0) {
+        const cones_line = document.createElement('div');
+        cones_line.className = 'glazy-source-cones';
+        cones_line.textContent = (cones.length === 2 && cones[0] !== cones[1])
+            ? `Конус ${cones[0]}–${cones[1]}`
+            : `Конус ${cones[0]}`;
+        container.appendChild(cones_line);
+    }
+
+    const components = Array.isArray(data.components) ? data.components : [];
+    if (components.length > 0) {
+        const table = document.createElement('table');
+        table.className = 'glazy-source-table';
+
+        // Base first, then the additionals: in Glazy an additional sits on top
+        // of a 100% base and its percentage is not part of that 100%
+        components.filter(component => !component.is_additional)
+            .forEach(component => table.appendChild(create_glazy_component_row(component, false)));
+
+        components.filter(component => component.is_additional)
+            .forEach((component, index) => table.appendChild(create_glazy_component_row(component, index === 0)));
+
+        container.appendChild(table);
+    }
+
+    const umf_glazy = data.umf_glazy || {};
+    const glazy_oxides = Object.keys(umf_glazy);
+    if (glazy_oxides.length > 0) {
+        const umf_block = document.createElement('div');
+        umf_block.className = 'glazy-source-umf';
+
+        const umf_title = document.createElement('div');
+        umf_title.className = 'glazy-source-subtitle';
+        umf_title.textContent = 'UMF по данным Glazy';
+        umf_block.appendChild(umf_title);
+
+        const umf_list = document.createElement('div');
+        umf_list.className = 'glazy-source-umf-list';
+
+        glazy_oxides.forEach(oxide => {
+            const umf_item = document.createElement('span');
+            umf_item.className = 'glazy-source-umf-item';
+
+            const oxide_name = document.createElement('span');
+            // format_oxide_name writes HTML, but the server filtered these keys
+            // against the molar mass table, so they are known oxide names
+            oxide_name.innerHTML = format_oxide_name(oxide);
+
+            const oxide_value = document.createElement('span');
+            oxide_value.className = 'glazy-source-umf-value';
+            oxide_value.textContent = (Number(umf_glazy[oxide]) || 0).toFixed(3);
+
+            umf_item.appendChild(oxide_name);
+            umf_item.appendChild(oxide_value);
+            umf_list.appendChild(umf_item);
+        });
+
+        umf_block.appendChild(umf_list);
+        container.appendChild(umf_block);
+    }
+
+    if (data.umf_source === 'glazy_umf' || glazy_umf_max_diff(data.umf, umf_glazy) > GLAZY_UMF_DIFF_THRESHOLD) {
+        const note = document.createElement('div');
+        note.className = 'glazy-source-note';
+        note.textContent = 'Glazy нормирует UMF по немного другому набору флюсов, поэтому загруженная в поля целевая формула может отличаться от чисел на glazy.org.';
+        container.appendChild(note);
+    }
+
+    container.hidden = false;
+}
+
 // Setup event listeners
 function setup_event_listeners() {
     // Добавляем обработчики для кнопок добавления оксидов
@@ -936,6 +1164,22 @@ function setup_event_listeners() {
             }
         });
     });
+
+    // Glazy import: the button and Enter in the input do the same thing
+    const glazy_import_button = elements.glazy_import_btn;
+    if (glazy_import_button) {
+        glazy_import_button.addEventListener('click', import_from_glazy);
+    }
+
+    const glazy_import_input = elements.glazy_import_input;
+    if (glazy_import_input) {
+        glazy_import_input.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                import_from_glazy();
+            }
+        });
+    }
 
     // Добавляем обработчик для переключателя min_materials
     const min_materials_checkbox = document.getElementById('min_materials_toggle');

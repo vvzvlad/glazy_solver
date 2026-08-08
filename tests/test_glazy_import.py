@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# flake8: noqa
+# pylint: disable=broad-exception-raised, raise-missing-from, too-many-arguments, redefined-outer-name
+# pylint: disable=multiple-statements, logging-fstring-interpolation, trailing-whitespace, line-too-long
+# pylint: disable=broad-exception-caught, missing-function-docstring, missing-class-docstring
+# pylint: disable=f-string-without-interpolation
+# pylance: disable=reportMissingImports, reportMissingModuleSource
+
+import copy
+import unittest
+from unittest import mock
+import sys
+import os
+
+# Fix imports by adding parent directory to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import glazy_import
+import api_server
+from glazy_import import (
+    GlazyImportError,
+    parse_recipe_id,
+    fetch_recipe,
+    build_import_result,
+    extract_components,
+    _numeric_oxides,
+)
+from common import weights_to_umf
+
+# A trimmed copy of the real answer for recipe 72382. Trimmed on purpose: the
+# full payload is 119 KB of data this module does not read, and the tests must
+# never reach glazy.org - CI has no business depending on a third-party site.
+SAMPLE_RECIPE = {
+    "id": 72382,
+    "name": "OVO Perfect Matte (40-25-10)",
+    "fromOrtonConeName": "5&#189;",
+    "toOrtonConeName": "7",
+    "materialComponents": [
+        {"percentageAmount": "40.0000", "isAdditional": False, "material": {"id": 20668, "name": "Полевой шпат FFF"}},
+        {"percentageAmount": "25.0000", "isAdditional": False, "material": {"id": 20485, "name": "Волластонит (МИВОЛЛ)"}},
+        {"percentageAmount": "5.0000", "isAdditional": True, "material": {"id": 15393, "name": "Rutile"}},
+    ],
+    "analysis": {
+        "percentageAnalysis": {
+            "SiO2": "48.5952", "Al2O3": "18.4238", "B2O3": "3.5238", "Na2O": "2.1238",
+            "K2O": "3.1619", "MgO": "0.4876", "CaO": "13.0286", "SrO": "0.0952",
+            "TiO2": "4.2882", "Fe2O3": "0.5770", "loi": "0.4310",
+        },
+        "umfAnalysis": {
+            "SiO2": "2.5824", "Al2O3": "0.5770", "B2O3": "0.1616", "Na2O": "0.1094",
+            "K2O": "0.1072", "MgO": "0.0386", "CaO": "0.7418", "SrO": "0.0029",
+            "TiO2": "0.1714", "Fe2O3": "0.0115",
+            "SiO2Al2O3Ratio": "4.4759", "R2OTotal": "0.2166", "ROTotal": "0.7834",
+        },
+        "thermalExpansion": "7.9340",
+    },
+}
+
+
+class FakeResponse:
+    """Minimal stand-in for a requests response"""
+
+    def __init__(self, payload, status_code=200, valid_json=True):
+        self.payload = payload
+        self.status_code = status_code
+        self.valid_json = valid_json
+
+    def json(self):
+        if not self.valid_json:
+            raise ValueError("no json object could be decoded")
+        return self.payload
+
+
+def fake_get(payload, status_code=200, valid_json=True):
+    """Patch requests.get inside glazy_import with a fixed answer"""
+    return mock.patch.object(
+        glazy_import.requests, 'get',
+        return_value=FakeResponse(payload, status_code, valid_json))
+
+
+class TestParseRecipeId(unittest.TestCase):
+
+    def test_accepts_numbers_and_plain_strings(self):
+        self.assertEqual(parse_recipe_id(72382), 72382)
+        self.assertEqual(parse_recipe_id("72382"), 72382)
+        self.assertEqual(parse_recipe_id("  72382  "), 72382)
+
+    def test_accepts_recipe_urls(self):
+        self.assertEqual(parse_recipe_id("https://glazy.org/recipes/72382"), 72382)
+        self.assertEqual(parse_recipe_id("https://glazy.org/recipes/72382/some-slug"), 72382)
+        self.assertEqual(parse_recipe_id("https://glazy.org/recipes/72382?ref=search"), 72382)
+        self.assertEqual(parse_recipe_id("https://glazy.org/recipes/72382#analysis"), 72382)
+        self.assertEqual(parse_recipe_id("glazy.org/recipes/72382"), 72382)
+
+    def test_url_form_wins_over_other_numbers(self):
+        """A number elsewhere in the URL must not be taken for the recipe id"""
+        self.assertEqual(parse_recipe_id("https://glazy.org/user/123/recipes/72382"), 72382)
+
+    def test_rejects_everything_else(self):
+        self.assertIsNone(parse_recipe_id(""))
+        self.assertIsNone(parse_recipe_id("   "))
+        self.assertIsNone(parse_recipe_id("abc"))
+        self.assertIsNone(parse_recipe_id("https://glazy.org/materials/123"))
+        self.assertIsNone(parse_recipe_id(0))
+        self.assertIsNone(parse_recipe_id(-5))
+        self.assertIsNone(parse_recipe_id("-5"))
+        self.assertIsNone(parse_recipe_id(None))
+        self.assertIsNone(parse_recipe_id(True))
+        self.assertIsNone(parse_recipe_id(["72382"]))
+
+
+class TestNumericOxides(unittest.TestCase):
+
+    def test_derived_keys_are_dropped(self):
+        oxides = _numeric_oxides(SAMPLE_RECIPE["analysis"]["umfAnalysis"])
+
+        for derived in ("SiO2Al2O3Ratio", "R2OTotal", "ROTotal"):
+            self.assertNotIn(derived, oxides)
+        self.assertIn("SiO2", oxides)
+
+    def test_loi_is_dropped(self):
+        oxides = _numeric_oxides(SAMPLE_RECIPE["analysis"]["percentageAnalysis"])
+
+        self.assertNotIn("loi", oxides)
+        self.assertEqual(oxides["SiO2"], 48.5952)
+
+    def test_string_values_become_floats(self):
+        oxides = _numeric_oxides({"SiO2": "48.5952", "CaO": "13.0286"})
+
+        self.assertEqual(oxides, {"SiO2": 48.5952, "CaO": 13.0286})
+
+    def test_unusable_values_are_skipped(self):
+        oxides = _numeric_oxides({
+            "SiO2": "48.5952",
+            "Al2O3": "не число",
+            "CaO": None,
+            "MgO": "0",
+            "K2O": "-1.5",
+            "Na2O": "NaN",
+            "TiO2": "Infinity",
+        })
+
+        self.assertEqual(oxides, {"SiO2": 48.5952})
+
+    def test_missing_analysis_gives_an_empty_dict(self):
+        self.assertEqual(_numeric_oxides(None), {})
+        self.assertEqual(_numeric_oxides("SiO2: 48"), {})
+
+
+class TestExtractComponents(unittest.TestCase):
+
+    def test_components_keep_their_order_and_flags(self):
+        components = extract_components(SAMPLE_RECIPE)
+
+        self.assertEqual(components, [
+            {"name": "Полевой шпат FFF", "percentage": 40.0, "is_additional": False, "glazy_material_id": 20668},
+            {"name": "Волластонит (МИВОЛЛ)", "percentage": 25.0, "is_additional": False, "glazy_material_id": 20485},
+            {"name": "Rutile", "percentage": 5.0, "is_additional": True, "glazy_material_id": 15393},
+        ])
+
+    def test_unparsable_percentages_are_skipped(self):
+        recipe = {"materialComponents": [
+            {"percentageAmount": "нет", "isAdditional": False, "material": {"id": 1, "name": "Bad"}},
+            {"percentageAmount": "10.0000", "isAdditional": False, "material": {"name": "Good"}},
+        ]}
+
+        self.assertEqual(extract_components(recipe), [
+            {"name": "Good", "percentage": 10.0, "is_additional": False, "glazy_material_id": None},
+        ])
+
+    def test_recipe_without_components(self):
+        self.assertEqual(extract_components({}), [])
+
+
+class TestFetchRecipe(unittest.TestCase):
+
+    def test_returns_the_data_dictionary(self):
+        with fake_get({"data": SAMPLE_RECIPE}):
+            self.assertEqual(fetch_recipe(72382), SAMPLE_RECIPE)
+
+    def test_error_body_with_http_200_is_an_error(self):
+        """Glazy answers 200 with the real status inside the body"""
+        body = {"error": {"message": "Recipe does not exist", "status_code": 404}}
+
+        with fake_get(body, status_code=200):
+            with self.assertRaises(GlazyImportError) as caught:
+                fetch_recipe(999999999)
+
+        self.assertEqual(caught.exception.code, "glazy_not_found")
+        self.assertEqual(caught.exception.http_status, 404)
+        self.assertEqual(caught.exception.message, "Recipe does not exist")
+
+    def test_private_recipe_is_forbidden(self):
+        body = {"error": {"message": "Unauthorized", "status_code": 403}}
+
+        with fake_get(body, status_code=200):
+            with self.assertRaises(GlazyImportError) as caught:
+                fetch_recipe(72382)
+
+        self.assertEqual(caught.exception.code, "glazy_forbidden")
+        self.assertEqual(caught.exception.http_status, 403)
+
+    def test_unauthenticated_recipe_is_forbidden_too(self):
+        body = {"error": {"message": "Unauthenticated", "status_code": 401}}
+
+        with fake_get(body, status_code=200):
+            with self.assertRaises(GlazyImportError) as caught:
+                fetch_recipe(72382)
+
+        self.assertEqual(caught.exception.code, "glazy_forbidden")
+        self.assertEqual(caught.exception.http_status, 403)
+
+    def test_bare_string_error_body(self):
+        with fake_get({"error": "something went wrong"}, status_code=200):
+            with self.assertRaises(GlazyImportError) as caught:
+                fetch_recipe(72382)
+
+        self.assertEqual(caught.exception.code, "glazy_unavailable")
+        self.assertEqual(caught.exception.http_status, 502)
+        self.assertEqual(caught.exception.message, "something went wrong")
+
+    def test_http_error_without_error_body(self):
+        with fake_get({}, status_code=500):
+            with self.assertRaises(GlazyImportError) as caught:
+                fetch_recipe(72382)
+
+        self.assertEqual(caught.exception.code, "glazy_unavailable")
+        self.assertEqual(caught.exception.http_status, 502)
+
+    def test_non_json_answer(self):
+        with fake_get(None, valid_json=False):
+            with self.assertRaises(GlazyImportError) as caught:
+                fetch_recipe(72382)
+
+        self.assertEqual(caught.exception.code, "glazy_unavailable")
+        self.assertEqual(caught.exception.http_status, 502)
+
+    def test_answer_without_data(self):
+        with fake_get({"data": {}}):
+            with self.assertRaises(GlazyImportError) as caught:
+                fetch_recipe(72382)
+
+        self.assertEqual(caught.exception.code, "glazy_unavailable")
+        self.assertEqual(caught.exception.http_status, 502)
+
+    def test_timeout(self):
+        with mock.patch.object(glazy_import.requests, 'get',
+                               side_effect=glazy_import.requests.Timeout("timed out")):
+            with self.assertRaises(GlazyImportError) as caught:
+                fetch_recipe(72382)
+
+        self.assertEqual(caught.exception.code, "glazy_timeout")
+        self.assertEqual(caught.exception.http_status, 504)
+
+    def test_connection_failure(self):
+        with mock.patch.object(glazy_import.requests, 'get',
+                               side_effect=glazy_import.requests.ConnectionError("dns failure")):
+            with self.assertRaises(GlazyImportError) as caught:
+                fetch_recipe(72382)
+
+        self.assertEqual(caught.exception.code, "glazy_unavailable")
+        self.assertEqual(caught.exception.http_status, 502)
+
+
+class TestBuildImportResult(unittest.TestCase):
+
+    def test_target_umf_is_computed_from_the_weight_analysis(self):
+        result = build_import_result(SAMPLE_RECIPE)
+
+        expected_weights = _numeric_oxides(SAMPLE_RECIPE["analysis"]["percentageAnalysis"])
+
+        self.assertEqual(result["umf_source"], "weights")
+        self.assertEqual(result["weight_percent"], expected_weights)
+        self.assertEqual(result["umf"], weights_to_umf(expected_weights))
+
+    def test_target_umf_stays_close_to_the_one_of_glazy(self):
+        """Without colorants both flux bases agree, so the check is meaningful"""
+        result = build_import_result(SAMPLE_RECIPE)
+
+        for oxide, glazy_value in result["umf_glazy"].items():
+            self.assertAlmostEqual(result["umf"][oxide], glazy_value, delta=0.01,
+                                   msg=f"{oxide} diverges too much from the UMF of Glazy")
+
+    def test_glazy_umf_is_passed_through_without_derived_keys(self):
+        result = build_import_result(SAMPLE_RECIPE)
+
+        self.assertEqual(result["umf_glazy"]["SiO2"], 2.5824)
+        self.assertNotIn("SiO2Al2O3Ratio", result["umf_glazy"])
+
+    def test_recipe_metadata(self):
+        result = build_import_result(SAMPLE_RECIPE)
+
+        self.assertEqual(result["id"], 72382)
+        self.assertEqual(result["name"], "OVO Perfect Matte (40-25-10)")
+        self.assertEqual(result["url"], "https://glazy.org/recipes/72382")
+        self.assertEqual(result["thermal_expansion"], 7.934)
+        # HTML entities of Glazy are unescaped on the server
+        self.assertEqual(result["cone_from"], "5½")
+        self.assertEqual(result["cone_to"], "7")
+
+    def test_components_are_included(self):
+        result = build_import_result(SAMPLE_RECIPE)
+
+        self.assertEqual(len(result["components"]), 3)
+        self.assertEqual(result["components"][0]["name"], "Полевой шпат FFF")
+        self.assertFalse(result["components"][0]["is_additional"])
+        self.assertTrue(result["components"][2]["is_additional"])
+
+    def test_missing_cones_and_expansion_are_null(self):
+        recipe = copy.deepcopy(SAMPLE_RECIPE)
+        del recipe["fromOrtonConeName"]
+        del recipe["toOrtonConeName"]
+        del recipe["analysis"]["thermalExpansion"]
+
+        result = build_import_result(recipe)
+
+        self.assertIsNone(result["cone_from"])
+        self.assertIsNone(result["cone_to"])
+        self.assertIsNone(result["thermal_expansion"])
+
+    def test_falls_back_to_the_umf_of_glazy(self):
+        """Without a weight analysis the target is taken as is, and says so"""
+        recipe = copy.deepcopy(SAMPLE_RECIPE)
+        recipe["analysis"]["percentageAnalysis"] = {"loi": "0.4310"}
+
+        result = build_import_result(recipe)
+
+        self.assertEqual(result["umf_source"], "glazy_umf")
+        self.assertEqual(result["umf"], result["umf_glazy"])
+        self.assertEqual(result["weight_percent"], {})
+
+    def test_recipe_without_any_analysis(self):
+        recipe = copy.deepcopy(SAMPLE_RECIPE)
+        recipe["analysis"] = {}
+
+        with self.assertRaises(GlazyImportError) as caught:
+            build_import_result(recipe)
+
+        self.assertEqual(caught.exception.code, "no_analysis")
+        self.assertEqual(caught.exception.http_status, 422)
+
+    def test_requested_id_is_used_when_the_payload_has_none(self):
+        recipe = copy.deepcopy(SAMPLE_RECIPE)
+        del recipe["id"]
+
+        result = build_import_result(recipe, 72382)
+
+        self.assertEqual(result["id"], 72382)
+        self.assertEqual(result["url"], "https://glazy.org/recipes/72382")
+
+
+class TestGlazyImportEndpoint(unittest.TestCase):
+
+    def setUp(self):
+        self.client = api_server.app.test_client()
+
+    def post(self, payload):
+        return self.client.post('/api/glazy_import', json=payload)
+
+    def test_successful_import(self):
+        with mock.patch.object(api_server, 'fetch_recipe', return_value=SAMPLE_RECIPE) as fetch:
+            response = self.post({"recipe": "https://glazy.org/recipes/72382"})
+
+        fetch.assert_called_once_with(72382)
+        self.assertEqual(response.status_code, 200)
+
+        data = response.get_json()
+        self.assertEqual(data["id"], 72382)
+        self.assertEqual(data["name"], "OVO Perfect Matte (40-25-10)")
+        self.assertEqual(data["url"], "https://glazy.org/recipes/72382")
+        self.assertEqual(data["umf_source"], "weights")
+        self.assertEqual(data["umf"], weights_to_umf(_numeric_oxides(SAMPLE_RECIPE["analysis"]["percentageAnalysis"])))
+        self.assertEqual(data["umf_glazy"]["SiO2"], 2.5824)
+        self.assertEqual(data["weight_percent"]["SiO2"], 48.5952)
+        self.assertEqual(data["components"][2], {
+            "name": "Rutile", "percentage": 5.0, "is_additional": True, "glazy_material_id": 15393,
+        })
+        self.assertEqual(data["cone_from"], "5½")
+        self.assertEqual(data["cone_to"], "7")
+        self.assertEqual(data["thermal_expansion"], 7.934)
+
+    def test_recipe_id_parameter_is_accepted(self):
+        with mock.patch.object(api_server, 'fetch_recipe', return_value=SAMPLE_RECIPE) as fetch:
+            response = self.post({"recipe_id": 72382})
+
+        fetch.assert_called_once_with(72382)
+        self.assertEqual(response.status_code, 200)
+
+    def test_missing_recipe(self):
+        response = self.post({})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "missing_recipe")
+
+    def test_empty_recipe_is_missing_too(self):
+        response = self.post({"recipe": "   "})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "missing_recipe")
+
+    def test_invalid_recipe_id(self):
+        response = self.post({"recipe": "https://glazy.org/materials/123"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "invalid_recipe_id")
+
+    def test_glazy_error_is_rendered_with_its_status(self):
+        error = GlazyImportError("glazy_not_found", "Recipe does not exist", 404)
+
+        with mock.patch.object(api_server, 'fetch_recipe', side_effect=error):
+            response = self.post({"recipe": "999999999"})
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.get_json(), {
+            "error": "glazy_not_found", "message": "Recipe does not exist"})
+
+    def test_unexpected_failure_is_a_server_error(self):
+        with mock.patch.object(api_server, 'fetch_recipe', side_effect=RuntimeError("boom")):
+            response = self.post({"recipe": "72382"})
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.get_json()["error"], "server_error")
+
+
+if __name__ == "__main__":
+    unittest.main()

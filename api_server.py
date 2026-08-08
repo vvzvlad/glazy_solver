@@ -18,6 +18,7 @@ from solver_classic import find_multiple_solutions, calculate_recipe_composition
 from solver_iterative import find_best_recipe
 from common import (weights_to_umf, umf_to_weights, load_materials, make_json_safe,
                     resolve_inventory, filter_materials_by_inventory)
+from glazy_import import GlazyImportError, parse_recipe_id, fetch_recipe, build_import_result
 
 # Logging setup
 logging.basicConfig(
@@ -365,6 +366,80 @@ def get_materials():
     
     except Exception as e:
         logger.exception(f"materials_error: {str(e)}")
+        return jsonify({"error": "server_error", "message": str(e)}), 500
+
+@app.route('/api/glazy_import', methods=['POST'])
+def glazy_import():
+    """
+    API endpoint that imports a public recipe from glazy.org
+
+    Only the target formula and the original recipe are imported: the materials
+    of Glazy are NOT mapped onto the local database, the solver picks its own.
+
+    POST JSON parameters:
+    {
+        "recipe": "https://glazy.org/recipes/72382"  // recipe URL or id, as typed
+        // "recipe_id": 72382                        // accepted as well
+    }
+
+    Returns:
+    {
+        "id": 72382,
+        "name": "OVO Perfect Matte (40-25-10)",
+        "url": "https://glazy.org/recipes/72382",
+        "umf": {"SiO2": 2.583, "Al2O3": 0.577, ...},  // target for /api/solve
+        "umf_source": "weights",  // "weights" = recomputed from the weight
+                                  // analysis in our flux basis (the normal case),
+                                  // "glazy_umf" = taken from Glazy as is, in its
+                                  // own basis, because there was nothing to
+                                  // recompute from
+        "umf_glazy": {"SiO2": 2.5824, ...},   // the UMF of Glazy, for display
+        "weight_percent": {"SiO2": 48.5952, ...},
+        "components": [
+            {"name": "...", "percentage": 40.0, "is_additional": false, "glazy_material_id": 20668}
+        ],
+        "cone_from": "5½",     // null when absent
+        "cone_to": "7",        // null when absent
+        "thermal_expansion": 7.934  // null when absent
+    }
+    """
+    try:
+        # silent=True: a body that is not JSON at all is a missing parameter for
+        # this endpoint, not the HTML 400 page Flask would raise on its own
+        data = request.get_json(silent=True)
+
+        raw_recipe = None
+        if isinstance(data, dict):
+            raw_recipe = data.get('recipe', data.get('recipe_id'))
+
+        if raw_recipe is None or (isinstance(raw_recipe, str) and not raw_recipe.strip()):
+            logger.warning("glazy_import_missing_recipe parameter in request")
+            return jsonify({
+                "error": "missing_recipe",
+                "message": "recipe or recipe_id parameter is required"
+            }), 400
+
+        recipe_id = parse_recipe_id(raw_recipe)
+        if recipe_id is None:
+            logger.warning(f"glazy_import_invalid_recipe_id: {raw_recipe}")
+            return jsonify({
+                "error": "invalid_recipe_id",
+                "message": "expected a glazy.org recipe url or a numeric recipe id"
+            }), 400
+
+        logger.info(f"glazy_import_requested: recipe_id={recipe_id}")
+
+        result = build_import_result(fetch_recipe(recipe_id), recipe_id)
+
+        logger.info(f"glazy_import_done: recipe_id={recipe_id}, umf_source={result['umf_source']}, oxides={len(result['umf'])}, components={len(result['components'])}")
+        return jsonify(make_json_safe(result))
+
+    except GlazyImportError as e:
+        logger.warning(f"glazy_import_failed: {e.code}: {e.message}")
+        return jsonify({"error": e.code, "message": e.message}), e.http_status
+
+    except Exception as e:
+        logger.exception(f"glazy_import_error: {str(e)}")
         return jsonify({"error": "server_error", "message": str(e)}), 500
 
 # Serving of the static UI files

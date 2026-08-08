@@ -148,6 +148,80 @@ curl -X POST http://localhost:5000/api/solve \
 Конкретные рецепты в ответе движка `classic` от запуска к запуску отличаются —
 поиск идёт по случайным подмножествам материалов.
 
+### Импорт рецепта с glazy.org
+
+**Endpoint:** `POST /api/glazy_import`
+
+**Описание:** Загружает рецепт с glazy.org через публичное API Glazy и
+возвращает его целевую UMF-формулу вместе с исходным составом (материалы и
+проценты) для показа в интерфейсе.
+
+Работает **только с публичными рецептами**: запрос к Glazy идёт анонимно, без
+логина. Приватный рецепт отдаёт `403 glazy_forbidden`.
+
+Материалы Glazy **не сопоставляются** с локальной базой `database/materials.json`
+— они возвращаются как справка. Рецепт под импортированную формулу подбирается
+обычным `POST /api/solve` из своих материалов.
+
+**Input:**
+```json
+{
+  "recipe": "https://glazy.org/recipes/72382"
+}
+```
+
+**Параметры:**
+- `recipe` (обязательный, если нет `recipe_id`): ссылка на рецепт или его ID. Понимает `72382`, `"72382"`, `https://glazy.org/recipes/72382`, ссылку со слагом, query или якорем
+- `recipe_id` (опциональный): числовой ID рецепта, альтернатива `recipe`
+
+**Output:**
+```json
+{
+  "id": 72382,
+  "name": "OVO Perfect Matte (40-25-10)",
+  "url": "https://glazy.org/recipes/72382",
+  "umf": {"SiO2": 2.582, "Al2O3": 0.577, "CaO": 0.742},
+  "umf_source": "weights",
+  "umf_glazy": {"SiO2": 2.5824, "Al2O3": 0.577, "CaO": 0.7418},
+  "weight_percent": {"SiO2": 48.5952, "Al2O3": 18.4238, "CaO": 13.0286},
+  "components": [
+    {"name": "Полевой шпат FFF", "percentage": 40.0, "is_additional": false, "glazy_material_id": 20668},
+    {"name": "Rutile", "percentage": 5.0, "is_additional": true, "glazy_material_id": 15393}
+  ],
+  "cone_from": "5½",
+  "cone_to": "7",
+  "thermal_expansion": 7.934
+}
+```
+
+**Поля ответа:**
+- `umf`: целевая формула для `POST /api/solve`
+- `umf_source`: откуда взята `umf`. `"weights"` — пересчитана из весового анализа Glazy нашей функцией `weights_to_umf` (обычный случай); `"glazy_umf"` — взята из Glazy как есть, потому что весового анализа в рецепте не оказалось
+- `umf_glazy`: UMF по данным самого Glazy, для показа рядом. Производные ключи (`SiO2Al2O3Ratio`, `R2OTotal`, `ROTotal`, `xAl2O3`) и `loi` отфильтрованы — в ответе только оксиды из `database/molar_masses.json`
+- `weight_percent`: оксидный анализ рецепта в весовых процентах. Сумма меньше 100: LOI в него не входит
+- `components`: исходный состав рецепта в порядке Glazy. `is_additional: true` — добавка сверх 100% основы
+- `cone_from` / `cone_to`: диапазон конусов обжига, HTML-сущности Glazy (`5&#189;`) раскрыты на сервере. `null`, если не указаны
+- `thermal_expansion`: КТР по данным Glazy, `null`, если не указан
+
+**Почему `umf` может отличаться от чисел на glazy.org:** UMF нормируется на сумму
+флюсов, а наборы флюсов у проекта и у Glazy разные —
+`common.oxides_classification()` считает флюсами FeO/CoO/NiO/CuO и не знает PbO,
+современный Glazy наоборот. Поэтому таргет пересчитывается из весового анализа в
+нашей конвенции, а не берётся из `umfAnalysis`: иначе на рецептах с колорантами
+целевая формула была бы в чужом базисе и решатель не смог бы её повторить. На
+рецептах без таких колорантов расхождение — порядка 0.0006.
+
+**Коды ошибок эндпоинта:** `missing_recipe` (400), `invalid_recipe_id` (400),
+`glazy_forbidden` (403), `glazy_not_found` (404), `no_analysis` (422),
+`glazy_unavailable` (502), `glazy_timeout` (504), `server_error` (500).
+
+**Пример запроса с cURL:**
+```bash
+curl -X POST http://localhost:5000/api/glazy_import \
+  -H "Content-Type: application/json" \
+  -d '{"recipe": "https://glazy.org/recipes/72382"}'
+```
+
 ### Список материалов
 
 **Endpoint:** `GET /api/materials`
@@ -313,8 +387,12 @@ curl -X GET http://localhost:5000/api/health
 
 - `200 OK` - Запрос выполнен успешно
 - `400 Bad Request` - Отсутствуют обязательные параметры или неправильный формат запроса 
+- `403 Forbidden` - Рецепт на glazy.org не публичный
 - `404 Not Found` - Запрашиваемый ресурс не найден
+- `422 Unprocessable Entity` - У рецепта на glazy.org нет оксидного анализа
 - `500 Internal Server Error` - Ошибка при выполнении запроса на сервере
+- `502 Bad Gateway` - glazy.org недоступен или ответил непонятным образом
+- `504 Gateway Timeout` - glazy.org не ответил за отведённое время
 
 ### Error Response Format
 
@@ -328,11 +406,18 @@ curl -X GET http://localhost:5000/api/health
 Возможные значения `error_code`:
 - `missing_umf` (400) - Отсутствует обязательный параметр umf
 - `missing_weights` (400) - Отсутствует обязательный параметр weights
+- `missing_recipe` (400) - В `POST /api/glazy_import` не передан ни `recipe`, ни `recipe_id`
+- `invalid_recipe_id` (400) - Из `recipe` не удалось вытащить ID рецепта Glazy
 - `unknown_solver` (400) - В параметре `solver` передано значение, отличное от `classic` и `iterative`
+- `glazy_forbidden` (403) - Рецепт Glazy не публичный; импорт работает только с публичными рецептами
 - `file_not_found` (404) - Файл базы данных не найден
 - `not_found` (404) - Запрашиваемый API-эндпоинт не существует
+- `glazy_not_found` (404) - Рецепта с таким ID на glazy.org нет
+- `no_analysis` (422) - У рецепта Glazy нет оксидного анализа, импортировать нечего
 - `calculation_error` (500) - Ошибка при расчете рецепта
 - `server_error` (500) - Внутренняя ошибка сервера
+- `glazy_unavailable` (502) - glazy.org недоступен или вернул неожиданный ответ
+- `glazy_timeout` (504) - glazy.org не ответил за отведённое время
 
 **Пример ошибки:**
 ```bash
