@@ -47,8 +47,11 @@ TOTAL_DELTA = 0.5
 class TestSolveGlazeRecipe(unittest.TestCase):
     """Integration test of the classic solver against the real material database"""
 
-    def setUp(self):
-        self.solution = solve_glaze_recipe(TEST_UMF)
+    @classmethod
+    def setUpClass(cls):
+        # Deterministic for a fixed target UMF and never mutated by the tests
+        # below, so it is computed once for the whole class
+        cls.solution = solve_glaze_recipe(TEST_UMF)
 
     def test_solution_structure(self):
         for key in ('recipe', 'error', 'target_composition', 'actual_composition',
@@ -99,8 +102,16 @@ class TestSolveGlazeRecipe(unittest.TestCase):
         for name, percentage in original_recipe.items():
             self.assertAlmostEqual(solution['recipe'][name], percentage, delta=1.0)
 
-    def test_empty_inventory_reports_error(self):
+    def test_unknown_materials_report_error(self):
+        """An inventory of names absent from the database leaves nothing to solve with"""
         solution = solve_glaze_recipe(TEST_UMF, inventory_data=["материал которого нет в базе"])
+
+        self.assertIn('error', solution)
+        self.assertNotIn('recipe', solution)
+
+    def test_empty_inventory_reports_error(self):
+        """An empty inventory must report an error, not fall back to the database"""
+        solution = solve_glaze_recipe(TEST_UMF, inventory_data=[])
 
         self.assertIn('error', solution)
         self.assertNotIn('recipe', solution)
@@ -123,9 +134,17 @@ class TestFindMultipleSolutions(unittest.TestCase):
             self.assertLess(solution['error'], 0.1)
             self.assertEqual(solution['materials_count'], len(solution['recipe']))
 
-    def test_empty_inventory_reports_error(self):
+    def test_unknown_materials_report_error(self):
+        """An inventory of names absent from the database leaves nothing to solve with"""
         result = find_multiple_solutions(
             TEST_UMF, inventory_data=["материал которого нет в базе"], logging=False)
+
+        self.assertIsInstance(result, dict)
+        self.assertIn('error', result)
+
+    def test_empty_inventory_reports_error(self):
+        """An empty inventory must report an error, not fall back to the database"""
+        result = find_multiple_solutions(TEST_UMF, inventory_data=[], logging=False)
 
         self.assertIsInstance(result, dict)
         self.assertIn('error', result)

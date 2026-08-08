@@ -17,7 +17,6 @@ from scipy.optimize import nnls
 from common import (
     umf_to_weights,
     weights_to_umf,
-    make_json_safe,
     resolve_inventory,
     filter_materials_by_inventory,
     load_materials,
@@ -354,7 +353,7 @@ def main():
     parser.add_argument('--solutions', type=int, default=3, help='Number of solutions to find (default: 3)')
     parser.add_argument('--min-materials', action='store_true', help='Prefer solutions with fewer materials')
     parser.add_argument('--error-tolerance', type=float, default=0.01, help='Acceptable error increase for solutions with fewer materials (default: 0.01)')
-    parser.add_argument('--inventory', type=str, help='Custom inventory as JSON string, instead of using inventory.json')
+    parser.add_argument('--inventory', type=str, help='Custom inventory as a JSON list of material names, instead of the materials flagged inInventory in materials.json')
     
     args = parser.parse_args()
     

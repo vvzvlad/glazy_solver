@@ -155,18 +155,14 @@ def calc_error(umf, target_umf):
 def weights_to_umf(weight_composition):
     """
     Converts weight fractions to UMF (Unity Molecular Formula)
-    
+
     Args:
         weight_composition: dictionary {oxide: weight_fraction}
-    
+
     Returns:
         dictionary {oxide: umf_value}
     """
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    molar_masses_file = os.path.join(script_dir, 'database', 'molar_masses.json')
-
-    with open(molar_masses_file, 'r', encoding='utf-8') as f:
-        molar_masses = json.load(f)
+    molar_masses = _molar_masses()
 
     # Convert to molar amounts
     molar_amounts = {}
@@ -207,12 +203,8 @@ def umf_to_weights(umf):
         dictionary {oxide: weight_fraction}
     """
     # Convert to molar_weights
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    molar_masses_file = os.path.join(script_dir, 'database', 'molar_masses.json')
-    
-    with open(molar_masses_file, 'r', encoding='utf-8') as f:
-        molar_masses = json.load(f)
-    
+    molar_masses = _molar_masses()
+
     molar_weights = {}
     for oxide, umf_value in umf.items():
         if oxide in molar_masses:
@@ -324,13 +316,41 @@ def load_recipes():
         recipes = json.load(f)
     return recipes
 
+# Molar masses are read-only reference data that never changes while the process
+# runs, so the file is parsed once and kept in memory: the conversion helpers are
+# called hundreds of times per solver run and re-reading the file every time cost
+# most of the request latency.
+_MOLAR_MASSES_CACHE = None
+
+
+def _molar_masses():
+    """
+    Return the cached molar mass table
+
+    The returned dictionary is the cache itself and must never be mutated;
+    external callers should use load_molar_masses() instead.
+    """
+    global _MOLAR_MASSES_CACHE
+
+    if _MOLAR_MASSES_CACHE is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        molar_masses_file = os.path.join(script_dir, 'database', 'molar_masses.json')
+
+        with open(molar_masses_file, 'r', encoding='utf-8') as f:
+            _MOLAR_MASSES_CACHE = json.load(f)
+
+    return _MOLAR_MASSES_CACHE
+
+
 def load_molar_masses():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    molar_masses_file = os.path.join(script_dir, 'database', 'molar_masses.json')
-    
-    with open(molar_masses_file, 'r', encoding='utf-8') as f:
-        molar_masses = json.load(f)
-    return molar_masses
+    """
+    Load the molar mass table
+
+    Returns:
+        dictionary {oxide: molar_mass}; a fresh copy on every call, so callers
+        are free to modify it without corrupting the cache
+    """
+    return dict(_molar_masses())
 
 
 def calc_ratios_umf(umf):
@@ -377,8 +397,8 @@ def calculate_umf_from_recipe(weight_composition):
         Dictionary of UMF values
     """
 
-    molar_masses = load_molar_masses()
-    
+    molar_masses = _molar_masses()
+
     # Convert to molar amounts
     molar_amounts = {}
     for oxide, weight in weight_composition.items():

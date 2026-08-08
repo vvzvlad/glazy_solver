@@ -8,7 +8,6 @@
 # pylint: disable=f-string-without-interpolation
 # pylance: disable=reportMissingImports, reportMissingModuleSource
 
-import math
 import unittest
 import sys
 import os
@@ -30,19 +29,29 @@ from common import (
 # are rounded in the database, so an exact round-trip is not expected.
 TOLERANCE_PERCENT = 1.0
 
-# Absolute floor of the tolerance, for oxides present in trace amounts
-TOLERANCE_ABSOLUTE = 0.005
+# Absolute floor of the tolerance, for trace oxides whose 1% band is narrower
+# than the rounding step of the result. UMF values are rounded to 3 decimals, so
+# the floor is exactly one such step: enough to absorb a rounding difference, but
+# small enough that dropping even the smallest expected oxide (0.002) fails the
+# check. Measured deviations of the checked compositions are 0.000-0.017, and
+# every non-zero one of them is already covered by the 1% relative band.
+TOLERANCE_ABSOLUTE = 0.001
+
+
+def assert_umf_close(test_case, expected_umf, actual_umf):
+    """Compare UMF dictionaries oxide by oxide within the shared tolerance"""
+    for oxide, expected_value in expected_umf.items():
+        actual_value = actual_umf.get(oxide, 0)
+        allowed = max(TOLERANCE_ABSOLUTE, abs(expected_value) * TOLERANCE_PERCENT / 100)
+        test_case.assertLessEqual(
+            abs(actual_value - expected_value), allowed,
+            f"{oxide}: expected {expected_value}, got {actual_value}")
 
 
 class TestUmfConversions(unittest.TestCase):
 
     def assert_umf_close(self, expected_umf, actual_umf):
-        for oxide, expected_value in expected_umf.items():
-            actual_value = actual_umf.get(oxide, 0)
-            allowed = max(TOLERANCE_ABSOLUTE, abs(expected_value) * TOLERANCE_PERCENT / 100)
-            self.assertLessEqual(
-                abs(actual_value - expected_value), allowed,
-                f"{oxide}: expected {expected_value}, got {actual_value}")
+        assert_umf_close(self, expected_umf, actual_umf)
 
     def test_round_trip_transparent_glaze(self):
         """UMF -> weights -> UMF keeps the transparent glaze formula"""
@@ -128,12 +137,7 @@ class TestCalculateUmfFromRecipe(unittest.TestCase):
 
         umf, raw_umf = calculate_umf_from_recipe(self.weight_composition_of(recipe))
 
-        for oxide, expected_value in expected_umf.items():
-            actual_value = umf.get(oxide, 0)
-            allowed = max(TOLERANCE_ABSOLUTE, abs(expected_value) * TOLERANCE_PERCENT / 100)
-            self.assertLessEqual(
-                abs(actual_value - expected_value), allowed,
-                f"{oxide}: expected {expected_value}, got {actual_value}")
+        assert_umf_close(self, expected_umf, umf)
 
         # The raw values are the same numbers before rounding
         for oxide, value in umf.items():
@@ -205,6 +209,22 @@ class TestInventoryHelpers(unittest.TestCase):
 
         self.assertGreater(len(inventory), 0)
         self.assertEqual(sorted(inventory), sorted(flagged))
+
+    def test_resolve_inventory_none_falls_back_to_the_database(self):
+        """None means "no explicit inventory": the inInventory materials are used"""
+        flagged = [m['name'] for m in load_materials(only_inventory=False, priority=False)
+                   if m.get('inInventory') is True]
+
+        self.assertEqual(len(resolve_inventory(None)), len(flagged))
+
+    def test_resolve_inventory_keeps_an_empty_list_empty(self):
+        """An explicitly empty inventory must not fall back to the database.
+
+        The distinction is load-bearing: the callers turn an empty inventory into
+        a "no materials available" error, so resolving [] to the full database
+        would silently solve against materials the caller does not have.
+        """
+        self.assertEqual(resolve_inventory([]), [])
 
     def test_filter_materials_by_inventory(self):
         materials = load_materials(only_inventory=False, priority=False)
