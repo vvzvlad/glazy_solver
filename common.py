@@ -230,10 +230,16 @@ def umf_to_weights(umf):
     return weight_percentages
 
 
+# Priority semantics: lower number = higher priority. Materials missing from
+# priorities.json get the lowest possible priority, so that explicitly listed
+# base materials always win over unlisted ones.
+DEFAULT_PRIORITY = 100
+
+
 def load_materials(only_inventory=True, priority=True):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     materials_file = os.path.join(script_dir, 'database', 'materials.json')
-    
+
     with open(materials_file, 'r', encoding='utf-8') as f:
         materials = json.load(f)
 
@@ -242,8 +248,8 @@ def load_materials(only_inventory=True, priority=True):
         with open(priorities_file, 'r', encoding='utf-8') as f:
             priorities = json.load(f)
         for material in materials:
-            material['priority'] = priorities.get(material['name'], 1)
-        
+            material['priority'] = priorities.get(material['name'], DEFAULT_PRIORITY)
+
     if only_inventory is True:
         filtered_materials = []
         for material in materials:
@@ -252,6 +258,63 @@ def load_materials(only_inventory=True, priority=True):
         return filtered_materials
     else:
         return materials
+
+def resolve_inventory(inventory_data=None):
+    """
+    Resolve the list of available material names
+
+    Args:
+        inventory_data: optional explicit list of material names; returned as is
+
+    Returns:
+        list of available material names (materials flagged inInventory in
+        materials.json when no explicit inventory is given)
+    """
+    if inventory_data is not None:
+        return inventory_data
+
+    materials = load_materials(only_inventory=True, priority=False)
+    return [material['name'] for material in materials]
+
+
+def filter_materials_by_inventory(materials, inventory):
+    """
+    Keep only materials whose name is present in the inventory
+
+    Args:
+        materials: list of material dictionaries
+        inventory: collection of available material names
+
+    Returns:
+        list of material dictionaries available in the inventory
+    """
+    available_materials = []
+    for material in materials:
+        if material.get('name') in inventory:
+            available_materials.append(material)
+    return available_materials
+
+
+def make_json_safe(obj):
+    """
+    Convert an object to a JSON-serializable form, replacing infinite and NaN
+    floats with their string representations
+
+    Args:
+        obj: source object (dict, list or scalar)
+
+    Returns:
+        object safe for JSON serialization
+    """
+    if isinstance(obj, dict):
+        return {k: make_json_safe(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_safe(v) for v in obj]
+    elif isinstance(obj, float) and (math.isinf(obj) or math.isnan(obj)):
+        return "Infinity" if obj > 0 else "-Infinity" if obj < 0 else "NaN"
+    else:
+        return obj
+
 
 def load_recipes():
     script_dir = os.path.dirname(os.path.abspath(__file__))
