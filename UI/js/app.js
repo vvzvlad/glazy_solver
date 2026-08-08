@@ -67,6 +67,7 @@ let calculate_timer = null;
 let all_oxides = {}; // Будет содержать все доступные оксиды из molar_masses.json
 let is_calculating = false;
 let use_min_materials = true; // Добавляем переменную для хранения значения min_materials
+let is_importing_from_glazy = false; // A Glazy import is in flight, see import_from_glazy
 
 // Определение групп оксидов
 const oxide_groups = {
@@ -91,10 +92,16 @@ const elements = {
     glazy_source: document.getElementById('glazy_source')
 };
 
-// Above this difference between our target and the UMF of Glazy the source card
-// explains where the discrepancy comes from. 0.01 is the step at which the UI
-// already stops calling a difference negligible (see diff-low in create_umf_element).
-const GLAZY_UMF_DIFF_THRESHOLD = 0.01;
+// How the source card reads umf_basis_diff of the server (the largest per-oxide
+// difference between our target and the UMF of Glazy). Up to NOTE the two flux
+// bases agree for practical purposes and the card says nothing (0.01 is the step
+// at which the UI already stops calling a difference negligible, see diff-low in
+// create_umf_element); between NOTE and WARNING the card explains the small
+// discrepancy; above WARNING the numbers are on a different scale entirely (a
+// lead recipe, where PbO is a flux for Glazy and not for us) and the card warns
+// prominently. Mirrors UMF_BASIS_DIFF_NOTE / UMF_BASIS_DIFF_WARNING of glazy_import.py.
+const GLAZY_UMF_DIFF_NOTE_THRESHOLD = 0.01;
+const GLAZY_UMF_DIFF_WARNING_THRESHOLD = 0.5;
 
 // Загрузить UMF из URL
 function load_umf_from_storage() {
@@ -449,41 +456,50 @@ function setup_oxide_row_events(select, input, delete_button) {
         
         // Обновляем current_umf
         current_umf = get_umf_from_inputs();
-        
+
         // Сохраняем в URL
         save_umf_to_storage(current_umf);
-        
+
+        // The formula is no longer the imported recipe
+        mark_glazy_source_stale();
+
         // Запускаем расчет с debounce
         debounce_solve();
     });
-    
+
     // При изменении значения
     input.addEventListener('input', () => {
         // Обновляем current_umf
         current_umf = get_umf_from_inputs();
-        
+
         // Сохраняем в URL
         save_umf_to_storage(current_umf);
-        
+
+        // The formula is no longer the imported recipe
+        mark_glazy_source_stale();
+
         // Запускаем расчет с debounce
         debounce_solve();
     });
-    
+
     // При нажатии на кнопку удаления
     delete_button.addEventListener('click', () => {
         // Удаляем строку
         const row = delete_button.closest('tr');
         row.remove();
-        
+
         // Обновляем разделитель
         update_r2o_ro_divider();
-        
+
         // Обновляем current_umf
         current_umf = get_umf_from_inputs();
-        
+
         // Сохраняем в URL
         save_umf_to_storage(current_umf);
-        
+
+        // The formula is no longer the imported recipe
+        mark_glazy_source_stale();
+
         // Запускаем расчет с debounce
         debounce_solve();
     });
@@ -929,12 +945,18 @@ async function import_from_glazy() {
     const button = elements.glazy_import_btn;
     if (!input || !button) return;
 
+    // The disabled button is not enough: Enter in the input reaches this
+    // function directly, and a held Enter would fire parallel requests whose
+    // first finally block re-enables the button under the others
+    if (is_importing_from_glazy) return;
+
     const recipe_reference = input.value.trim();
     if (!recipe_reference) {
         set_glazy_import_status('Введите ссылку или ID рецепта', true);
         return;
     }
 
+    is_importing_from_glazy = true;
     button.disabled = true;
     set_glazy_import_status('Загрузка…', false);
 
@@ -961,6 +983,7 @@ async function import_from_glazy() {
         console.error('glazy_import_error:', error);
         set_glazy_import_status('Не удалось загрузить рецепт с Glazy', true);
     } finally {
+        is_importing_from_glazy = false;
         button.disabled = false;
     }
 }
@@ -970,7 +993,10 @@ function apply_glazy_import(data) {
     current_umf = data.umf || {};
 
     // Same refill as the hashchange handler of index.html: the tables are
-    // rebuilt from current_umf, they are not patched in place
+    // rebuilt from current_umf, they are not patched in place. Rebuilding fires
+    // no input/change events, so it never marks the card stale on its own - and
+    // render_glazy_source() below rebuilds the card anyway, clearing any mark
+    // left from an earlier hand edit.
     elements.r2o_ro_table.innerHTML = '';
     elements.r2o3_table.innerHTML = '';
     elements.ro2_table.innerHTML = '';
@@ -990,18 +1016,13 @@ function apply_glazy_import(data) {
     solve_recipe();
 }
 
-// Largest difference between our target and the UMF of Glazy, over the union of their oxides
-function glazy_umf_max_diff(umf, umf_glazy) {
-    const oxides = new Set([...Object.keys(umf || {}), ...Object.keys(umf_glazy || {})]);
-
-    let max_diff = 0;
-    oxides.forEach(oxide => {
-        const our_value = Number((umf || {})[oxide]) || 0;
-        const glazy_value = Number((umf_glazy || {})[oxide]) || 0;
-        max_diff = Math.max(max_diff, Math.abs(our_value - glazy_value));
-    });
-
-    return max_diff;
+// Percentage of a component of the original recipe. Additions in Glazy are
+// routinely 0.05-0.5%, so one decimal is not enough (0.05 would be shown as
+// "+0.1%" and 0.04 as "+0.0%"), while the second decimal is dropped when it is a
+// zero so that the base rows keep reading as "40.0%"
+function format_glazy_percentage(value) {
+    const text = value.toFixed(2);
+    return text.endsWith('0') ? text.slice(0, -1) : text;
 }
 
 // Build one row of the original recipe table
@@ -1025,7 +1046,7 @@ function create_glazy_component_row(component, is_first_additional) {
     const amount_cell = document.createElement('td');
     amount_cell.className = 'glazy-source-amount';
     const percentage = Number(component.percentage) || 0;
-    amount_cell.textContent = `${component.is_additional ? '+' : ''}${percentage.toFixed(1)}%`;
+    amount_cell.textContent = `${component.is_additional ? '+' : ''}${format_glazy_percentage(percentage)}%`;
 
     row.appendChild(name_cell);
     row.appendChild(amount_cell);
@@ -1039,6 +1060,8 @@ function render_glazy_source(data) {
     if (!container) return;
 
     container.innerHTML = '';
+    // A fresh import is by definition in sync with the fields again
+    container.classList.remove('glazy-source-stale');
 
     const header = document.createElement('div');
     header.className = 'glazy-source-header';
@@ -1122,7 +1145,22 @@ function render_glazy_source(data) {
         container.appendChild(umf_block);
     }
 
-    if (data.umf_source === 'glazy_umf' || glazy_umf_max_diff(data.umf, umf_glazy) > GLAZY_UMF_DIFF_THRESHOLD) {
+    // umf_basis_diff is null when Glazy returned no UMF at all: there is then
+    // nothing to compare our target against and nothing to warn about
+    const basis_diff = (data.umf_basis_diff === null || data.umf_basis_diff === undefined)
+        ? null
+        : Number(data.umf_basis_diff);
+
+    if (data.umf_source === 'glazy_umf' || (basis_diff !== null && basis_diff > GLAZY_UMF_DIFF_WARNING_THRESHOLD)) {
+        const warning = document.createElement('div');
+        warning.className = 'glazy-source-warning';
+        warning.textContent = 'Внимание: в этом проекте UMF нормируется по другому набору флюсов, чем на glazy.org '
+            + '(PbO, например, здесь флюсом не считается), поэтому загруженные в поля числа — в другом масштабе, '
+            + 'чем на странице рецепта в Glazy. Расчёт при этом остаётся внутренне согласованным: решатель считает '
+            + 'кандидатов той же нормировкой. Но чтобы повторить такой рецепт, в инвентаре должны быть подходящие '
+            + 'материалы — для свинцовой глазури свинцовые, а они по умолчанию выключены.';
+        container.appendChild(warning);
+    } else if (basis_diff !== null && basis_diff > GLAZY_UMF_DIFF_NOTE_THRESHOLD) {
         const note = document.createElement('div');
         note.className = 'glazy-source-note';
         note.textContent = 'Glazy нормирует UMF по немного другому набору флюсов, поэтому загруженная в поля целевая формула может отличаться от чисел на glazy.org.';
@@ -1131,6 +1169,25 @@ function render_glazy_source(data) {
 
     container.hidden = false;
 }
+
+// The formula in the fields no longer matches the imported recipe. The card is
+// marked instead of being hidden: the link to the source recipe stays useful.
+// Called from every path that changes the formula except the import itself.
+function mark_glazy_source_stale() {
+    const container = elements.glazy_source;
+    if (!container || container.hidden) return;
+    if (container.classList.contains('glazy-source-stale')) return;
+
+    container.classList.add('glazy-source-stale');
+
+    const note = document.createElement('div');
+    note.className = 'glazy-source-stale-note';
+    note.textContent = 'Формула отредактирована вручную и больше не совпадает с этим рецептом.';
+    container.appendChild(note);
+}
+
+// index.html reaches the mark from its inline hashchange handler
+window.mark_glazy_source_stale = mark_glazy_source_stale;
 
 // Setup event listeners
 function setup_event_listeners() {
@@ -1174,6 +1231,8 @@ function setup_event_listeners() {
     const glazy_import_input = elements.glazy_import_input;
     if (glazy_import_input) {
         glazy_import_input.addEventListener('keydown', function(event) {
+            // A held Enter repeats: import_from_glazy() itself ignores the
+            // repeats while a request is in flight
             if (event.key === 'Enter') {
                 event.preventDefault();
                 import_from_glazy();

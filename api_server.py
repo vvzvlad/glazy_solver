@@ -394,6 +394,10 @@ def glazy_import():
                                   // own basis, because there was nothing to
                                   // recompute from
         "umf_glazy": {"SiO2": 2.5824, ...},   // the UMF of Glazy, for display
+        "umf_basis_diff": 0.0006, // largest per-oxide difference between "umf"
+                                  // and "umf_glazy"; null when Glazy gave no
+                                  // UMF to compare against. A large value means
+                                  // the two flux bases differ (a lead recipe)
         "weight_percent": {"SiO2": 48.5952, ...},
         "components": [
             {"name": "...", "percentage": 40.0, "is_additional": false, "glazy_material_id": 20668}
@@ -410,7 +414,11 @@ def glazy_import():
 
         raw_recipe = None
         if isinstance(data, dict):
-            raw_recipe = data.get('recipe', data.get('recipe_id'))
+            # An explicit "recipe": null must fall back to recipe_id as well, so
+            # the fallback is on the VALUE and not on the presence of the key
+            raw_recipe = data.get('recipe')
+            if raw_recipe is None:
+                raw_recipe = data.get('recipe_id')
 
         if raw_recipe is None or (isinstance(raw_recipe, str) and not raw_recipe.strip()):
             logger.warning("glazy_import_missing_recipe parameter in request")
@@ -421,7 +429,9 @@ def glazy_import():
 
         recipe_id = parse_recipe_id(raw_recipe)
         if recipe_id is None:
-            logger.warning(f"glazy_import_invalid_recipe_id: {raw_recipe}")
+            # repr + a length cap: the raw value is user input and the log format
+            # is one line per record, so a newline in it would forge records
+            logger.warning(f"glazy_import_invalid_recipe_id: {repr(raw_recipe)[:200]}")
             return jsonify({
                 "error": "invalid_recipe_id",
                 "message": "expected a glazy.org recipe url or a numeric recipe id"

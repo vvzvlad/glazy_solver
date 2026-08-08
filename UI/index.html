@@ -368,7 +368,13 @@
                         
                         // Заново добавляем оксиды
                         add_initial_oxides();
-                        
+
+                        // The formula came from outside, it is no longer the
+                        // imported Glazy recipe
+                        if (typeof window.mark_glazy_source_stale === 'function') {
+                            window.mark_glazy_source_stale();
+                        }
+
                         // Пересчитываем рецепт
                         solve_recipe();
                         

@@ -28,24 +28,40 @@
 # recipe 72382), so nothing is lost in the common case. The numbers of Glazy are
 # still returned as umf_glazy, for display next to ours.
 #
+# A lead recipe is a legitimate case of a large divergence and NOT an error: our
+# UMF then comes out on the basis of the little alkali the recipe carries, so the
+# numbers look nothing like the ones on glazy.org - but the solver evaluates its
+# candidates with the very same functions, so the target stays self-consistent
+# and find_best_recipe reproduces the original recipe when the lead materials are
+# enabled in the inventory. umf_basis_diff reports how far apart the two bases
+# are and the UI explains it. The one basis that is genuinely unusable is the
+# fallback of weights_to_umf() when NO flux of our classification is present at
+# all ("the smallest oxide is unity"): that one is arbitrary, the solver does not
+# reproduce it, and _has_flux() keeps the weights path away from it.
+#
 # This module stays Flask free: it raises GlazyImportError and the API layer
 # turns that into the JSON error format of the project.
 
 import html
 import math
 import re
+from urllib.parse import urlparse
 import requests
-from common import load_molar_masses, weights_to_umf
+from common import load_molar_masses, oxides_classification, weights_to_umf
 
 GLAZY_API_BASE = 'https://api.glazy.org/api'
 GLAZY_RECIPE_URL = 'https://glazy.org/recipes/{recipe_id}'
 
 # Glazy serves the anonymous API to its own frontend; Origin/Referer of that
-# frontend are what makes the request pass, Accept keeps the answer JSON
+# frontend are what makes the request pass, Accept keeps the answer JSON.
+# The User-Agent names the project: the default "python-requests/2.x" is a
+# routine CDN block target and such a block would only surface here as an
+# opaque glazy_unavailable 502.
 GLAZY_HEADERS = {
     'Accept': 'application/json',
     'Origin': 'https://glazy.org',
     'Referer': 'https://glazy.org/',
+    'User-Agent': 'glazy_solver/1.0 (+https://glazy.org recipe import)',
 }
 
 # (connect, read). A host that does not accept a connection within 5 s is down
@@ -58,12 +74,28 @@ HTTP_TIMEOUT = (5, 20)
 UMF_SOURCE_WEIGHTS = 'weights'
 UMF_SOURCE_GLAZY = 'glazy_umf'
 
-# A URL keeps the id after "recipes/"; the slug, the query and the fragment that
-# may follow are irrelevant. This form is matched BEFORE the bare-digits one so
-# that a URL carrying other numbers (a material id, a year in a slug) can never
-# be read as an id itself.
-_RECIPE_URL_RE = re.compile(r'recipes/(\d+)')
+# How far our UMF may drift from the one of Glazy before the divergence is worth
+# saying out loud. Below NOTE the two flux bases agree for practical purposes and
+# the UI stays silent; above WARNING they are not the same basis at all (a lead
+# recipe, where PbO is a flux for Glazy and not for us) and the UI warns
+# prominently. Kept here next to the umf_basis_diff computation and mirrored in
+# UI/js/app.js, which is what applies them.
+UMF_BASIS_DIFF_NOTE = 0.01
+UMF_BASIS_DIFF_WARNING = 0.5
+
+# The id is the FIRST path segment after "recipes/": a link that merely mentions
+# "recipes" deeper in its path (a material page, a search result) points at
+# something else and importing a number out of it would silently load an
+# unrelated recipe. The optional "api/" prefix accepts the API URL of a recipe
+# as well. The slug, the query and the fragment that may follow are irrelevant.
+# This form is matched BEFORE the bare-digits one so that a URL carrying other
+# numbers can never be read as an id itself.
+_RECIPE_PATH_RE = re.compile(r'\A/?(?:api/)?recipes/(\d+)(?:[/?#]|$)')
 _BARE_ID_RE = re.compile(r'\A(\d+)\Z')
+
+# A recipe id is only meaningful on Glazy itself, so a link to any other host is
+# rejected instead of being mined for digits
+GLAZY_HOSTS = ('glazy.org', 'www.glazy.org', 'api.glazy.org')
 
 
 class GlazyImportError(Exception):
@@ -81,6 +113,34 @@ class GlazyImportError(Exception):
         self.code = code
         self.message = message
         self.http_status = http_status
+
+
+def _split_host_and_path(text):
+    """
+    Split a pasted link into (host, path)
+
+    urlparse puts the host in netloc only when the link carries a scheme: a
+    scheme-less "glazy.org/recipes/72382" ends up entirely in path, so the first
+    segment is treated as a host when it looks like one (it has a dot).
+
+    Args:
+        text: the string the user pasted, already stripped
+
+    Returns:
+        (host, path); host is '' when the text carries no host at all
+    """
+    parsed = urlparse(text)
+
+    if parsed.netloc:
+        # Drop the userinfo and the port: only the hostname is compared
+        host = parsed.netloc.split('@')[-1].split(':')[0]
+        return host.lower(), parsed.path
+
+    head, separator, rest = parsed.path.partition('/')
+    if '.' in head:
+        return head.split(':')[0].lower(), separator + rest
+
+    return '', parsed.path
 
 
 def parse_recipe_id(value):
@@ -107,7 +167,11 @@ def parse_recipe_id(value):
     if not text:
         return None
 
-    match = _RECIPE_URL_RE.search(text)
+    host, path = _split_host_and_path(text)
+    if host and host not in GLAZY_HOSTS:
+        return None
+
+    match = _RECIPE_PATH_RE.match(path)
     if match is None:
         match = _BARE_ID_RE.match(text)
     if match is None:
@@ -193,9 +257,12 @@ def fetch_recipe(recipe_id):
 
     # Glazy answers HTTP 200 even for "recipe does not exist" and for a private
     # recipe, with the real status inside the body - so the body is inspected
-    # first and the HTTP status is only the fallback
-    if isinstance(payload, dict) and 'error' in payload:
-        status_code, message = _read_error_body(payload['error'], response.status_code)
+    # first and the HTTP status is only the fallback. The VALUE is what decides:
+    # a successful answer may well carry "error": null, and the mere presence of
+    # the key must not abort a valid import.
+    error_body = payload.get('error') if isinstance(payload, dict) else None
+    if error_body:
+        status_code, message = _read_error_body(error_body, response.status_code)
         raise _error_for_status(status_code, message)
 
     if response.status_code >= 400:
@@ -262,14 +329,31 @@ def _optional_int(raw_value):
         return None
 
 
+def _plain_text(value):
+    """
+    Turn a text field of Glazy into plain text
+
+    Glazy stores its text HTML escaped ("5&#189;" for 5 1/2, "Tom&#39;s Glaze
+    &amp; Co" for a recipe name). Everything is unescaped here, on the server,
+    so that every consumer can treat it as plain text: the UI inserts these
+    strings with textContent and must never have to interpret markup coming
+    from a third party.
+
+    Args:
+        value: raw value of Glazy, may be None
+
+    Returns:
+        unescaped and stripped string, '' when the value is absent
+    """
+    if value is None:
+        return ''
+
+    return html.unescape(str(value)).strip()
+
+
 def _cone_name(raw_value):
     """
     Normalize an Orton cone name of Glazy
-
-    Glazy stores the names HTML escaped ("5&#189;" for 5 1/2). They are
-    unescaped here, on the server, so that every consumer can treat them as
-    plain text: the UI inserts them with textContent and must never have to
-    interpret markup coming from a third party.
 
     Args:
         raw_value: cone name as returned by Glazy, may be None
@@ -277,11 +361,7 @@ def _cone_name(raw_value):
     Returns:
         unescaped cone name, or None when absent
     """
-    if raw_value is None:
-        return None
-
-    name = html.unescape(str(raw_value)).strip()
-    return name or None
+    return _plain_text(raw_value) or None
 
 
 def extract_components(recipe_data):
@@ -304,8 +384,11 @@ def extract_components(recipe_data):
         if not isinstance(entry, dict):
             continue
 
+        # A zero or negative amount is not a component of the recipe, and the
+        # card is a reference of the original: showing "-5.0%" in it would be
+        # worse than showing nothing
         percentage = _optional_float(entry.get('percentageAmount'))
-        if percentage is None:
+        if percentage is None or percentage <= 0:
             continue
 
         material = entry.get('material')
@@ -313,13 +396,57 @@ def extract_components(recipe_data):
             material = {}
 
         components.append({
-            'name': str(material.get('name') or ''),
+            'name': _plain_text(material.get('name')),
             'percentage': percentage,
             'is_additional': bool(entry.get('isAdditional')),
             'glazy_material_id': _optional_int(material.get('id')),
         })
 
     return components
+
+
+def _has_flux(weight_percent):
+    """
+    Tell whether an analysis carries any oxide our UMF normalizes on
+
+    weights_to_umf() normalizes on the sum of the r2o and ro oxides of
+    common.oxides_classification(). When none of them is present it falls back
+    to "the smallest oxide is unity", an arbitrary basis that the solver does
+    not reproduce for its candidates - so such a target could never be matched
+    and the weights path must not be used at all.
+
+    Args:
+        weight_percent: {oxide: weight percent}, already filtered
+
+    Returns:
+        True when at least one flux oxide of our classification is present
+    """
+    classes = oxides_classification()
+    fluxes = set(classes['r2o']) | set(classes['ro'])
+    return any(oxide in fluxes for oxide in weight_percent)
+
+
+def _umf_basis_diff(umf, umf_glazy):
+    """
+    Largest per-oxide difference between our target and the UMF of Glazy
+
+    A missing oxide counts as 0, which is what it means here: the two analyses
+    describe the same glaze, so an oxide present on one side only really is
+    absent from the other.
+
+    Args:
+        umf: our target UMF
+        umf_glazy: the UMF of Glazy, may be empty
+
+    Returns:
+        float maximum absolute difference, or None when there is nothing of
+        Glazy to compare against
+    """
+    if not umf_glazy:
+        return None
+
+    oxides = set(umf) | set(umf_glazy)
+    return max(abs(umf.get(oxide, 0.0) - umf_glazy.get(oxide, 0.0)) for oxide in oxides)
 
 
 def build_import_result(recipe_data, recipe_id=None):
@@ -344,12 +471,13 @@ def build_import_result(recipe_data, recipe_id=None):
     weight_percent = _numeric_oxides(analysis.get('percentageAnalysis'))
     umf_glazy = _numeric_oxides(analysis.get('umfAnalysis'))
 
-    if weight_percent:
+    if weight_percent and _has_flux(weight_percent):
         umf = weights_to_umf(weight_percent)
         umf_source = UMF_SOURCE_WEIGHTS
     elif umf_glazy:
-        # Nothing to recompute from: the target is taken as is, in the basis of
-        # Glazy. umf_source says so, the UI warns about it.
+        # Nothing to recompute from, or nothing to normalize on: the target is
+        # taken as is, in the basis of Glazy. umf_source says so, the UI warns
+        # about it.
         umf = dict(umf_glazy)
         umf_source = UMF_SOURCE_GLAZY
     else:
@@ -361,11 +489,12 @@ def build_import_result(recipe_data, recipe_id=None):
 
     return {
         'id': result_id,
-        'name': str(recipe_data.get('name') or ''),
+        'name': _plain_text(recipe_data.get('name')),
         'url': GLAZY_RECIPE_URL.format(recipe_id=result_id) if result_id is not None else None,
         'umf': umf,
         'umf_source': umf_source,
         'umf_glazy': umf_glazy,
+        'umf_basis_diff': _umf_basis_diff(umf, umf_glazy),
         'weight_percent': weight_percent,
         'components': extract_components(recipe_data),
         'cone_from': _cone_name(recipe_data.get('fromOrtonConeName')),

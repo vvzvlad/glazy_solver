@@ -1310,3 +1310,28 @@ tr.glazy-source-divider td {
     font-size: 11px;
     color: #f39c12;
 }
+
+/* Разные базисы UMF: числа в полях не в том масштабе, что на glazy.org */
+.glazy-source-warning {
+    margin-top: 8px;
+    padding: 6px 8px;
+    border: 1px solid #e74c3c;
+    border-radius: 3px;
+    background-color: #fdecea;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #c0392b;
+}
+
+/* Формула отредактирована вручную после импорта */
+.glazy-source.glazy-source-stale {
+    border-style: dashed;
+    border-color: #bbb;
+}
+
+.glazy-source-stale-note {
+    margin-top: 8px;
+    font-size: 11px;
+    font-style: italic;
+    color: #888;
+}

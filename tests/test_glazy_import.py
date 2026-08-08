@@ -25,6 +25,8 @@ from glazy_import import (
     build_import_result,
     extract_components,
     _numeric_oxides,
+    UMF_BASIS_DIFF_NOTE,
+    UMF_BASIS_DIFF_WARNING,
 )
 from common import weights_to_umf
 
@@ -52,8 +54,39 @@ SAMPLE_RECIPE = {
             "K2O": "0.1072", "MgO": "0.0386", "CaO": "0.7418", "SrO": "0.0029",
             "TiO2": "0.1714", "Fe2O3": "0.0115",
             "SiO2Al2O3Ratio": "4.4759", "R2OTotal": "0.2166", "ROTotal": "0.7834",
+            "xAl2O3": "0.5770", "SiO2xAl2O3Ratio": "4.4759",
         },
         "thermalExpansion": "7.9340",
+    },
+}
+
+# A lead glaze: PbO carries the melt and the alkali content is tiny. Glazy counts
+# PbO as a flux, common.oxides_classification() does not, so our UMF comes out on
+# the basis of that little K2O and looks nothing like the numbers of Glazy. That
+# is expected and is NOT an error: the solver evaluates its candidates with the
+# same functions, so the target stays self-consistent - the import must keep
+# computing it from the weights and only report how far the two bases are apart.
+LEAD_RECIPE = {
+    "id": 1234,
+    "name": "Lead Base",
+    "analysis": {
+        "percentageAnalysis": {
+            "PbO": "60.0000", "SiO2": "31.0000", "Al2O3": "7.5000", "K2O": "1.5000",
+        },
+        "umfAnalysis": {
+            "SiO2": "2.5100", "Al2O3": "0.3600", "PbO": "0.9500", "K2O": "0.0500",
+        },
+    },
+}
+
+# No oxide of our r2o/ro lists at all: weights_to_umf() would fall back to
+# "the smallest oxide is unity", a basis the solver never reproduces
+FLUXLESS_RECIPE = {
+    "id": 4321,
+    "name": "Fluxless",
+    "analysis": {
+        "percentageAnalysis": {"PbO": "55.0000", "SiO2": "35.0000", "Al2O3": "10.0000"},
+        "umfAnalysis": {"SiO2": "2.0000", "Al2O3": "0.3300", "PbO": "1.0000"},
     },
 }
 
@@ -93,9 +126,21 @@ class TestParseRecipeId(unittest.TestCase):
         self.assertEqual(parse_recipe_id("https://glazy.org/recipes/72382#analysis"), 72382)
         self.assertEqual(parse_recipe_id("glazy.org/recipes/72382"), 72382)
 
-    def test_url_form_wins_over_other_numbers(self):
-        """A number elsewhere in the URL must not be taken for the recipe id"""
-        self.assertEqual(parse_recipe_id("https://glazy.org/user/123/recipes/72382"), 72382)
+    def test_accepts_the_api_url_of_a_recipe(self):
+        self.assertEqual(parse_recipe_id("https://api.glazy.org/api/recipes/72382"), 72382)
+        self.assertEqual(parse_recipe_id("https://www.glazy.org/recipes/72382"), 72382)
+
+    def test_rejects_urls_that_only_mention_recipes(self):
+        """A recipe id is only read from a /recipes/<id> link on glazy.org itself"""
+        # Another host: whatever its recipe 1 is, it is not the one of Glazy
+        self.assertIsNone(parse_recipe_id("https://example.com/recipes/1"))
+        # A search result page: the id belongs to the query, not to the page
+        self.assertIsNone(parse_recipe_id("https://glazy.org/search?q=recipes/12"))
+        # The segment must be a whole one
+        self.assertIsNone(parse_recipe_id("prefixrecipes/42"))
+        # A material page listing recipes: importing 999 would be an unrelated recipe
+        self.assertIsNone(parse_recipe_id("https://glazy.org/materials/123/recipes/999"))
+        self.assertIsNone(parse_recipe_id("https://glazy.org/user/123/recipes/72382"))
 
     def test_rejects_everything_else(self):
         self.assertIsNone(parse_recipe_id(""))
@@ -115,7 +160,7 @@ class TestNumericOxides(unittest.TestCase):
     def test_derived_keys_are_dropped(self):
         oxides = _numeric_oxides(SAMPLE_RECIPE["analysis"]["umfAnalysis"])
 
-        for derived in ("SiO2Al2O3Ratio", "R2OTotal", "ROTotal"):
+        for derived in ("SiO2Al2O3Ratio", "R2OTotal", "ROTotal", "xAl2O3", "SiO2xAl2O3Ratio"):
             self.assertNotIn(derived, oxides)
         self.assertIn("SiO2", oxides)
 
@@ -169,6 +214,26 @@ class TestExtractComponents(unittest.TestCase):
             {"name": "Good", "percentage": 10.0, "is_additional": False, "glazy_material_id": None},
         ])
 
+    def test_non_positive_percentages_are_skipped(self):
+        """The card is a reference of the original, "-5.0%" would be worse than nothing"""
+        recipe = {"materialComponents": [
+            {"percentageAmount": "-5", "isAdditional": False, "material": {"name": "Negative"}},
+            {"percentageAmount": "0", "isAdditional": True, "material": {"name": "Zero"}},
+            {"percentageAmount": "0.05", "isAdditional": True, "material": {"name": "Tiny"}},
+        ]}
+
+        self.assertEqual(extract_components(recipe), [
+            {"name": "Tiny", "percentage": 0.05, "is_additional": True, "glazy_material_id": None},
+        ])
+
+    def test_html_entities_in_material_names_are_unescaped(self):
+        recipe = {"materialComponents": [
+            {"percentageAmount": "100", "isAdditional": False,
+             "material": {"id": 7, "name": "Tom&#39;s Clay &amp; Co"}},
+        ]}
+
+        self.assertEqual(extract_components(recipe)[0]["name"], "Tom's Clay & Co")
+
     def test_recipe_without_components(self):
         self.assertEqual(extract_components({}), [])
 
@@ -177,6 +242,11 @@ class TestFetchRecipe(unittest.TestCase):
 
     def test_returns_the_data_dictionary(self):
         with fake_get({"data": SAMPLE_RECIPE}):
+            self.assertEqual(fetch_recipe(72382), SAMPLE_RECIPE)
+
+    def test_null_error_key_is_not_an_error(self):
+        """A successful answer may carry "error": null next to its data"""
+        with fake_get({"error": None, "data": SAMPLE_RECIPE}):
             self.assertEqual(fetch_recipe(72382), SAMPLE_RECIPE)
 
     def test_error_body_with_http_200_is_an_error(self):
@@ -282,6 +352,70 @@ class TestBuildImportResult(unittest.TestCase):
             self.assertAlmostEqual(result["umf"][oxide], glazy_value, delta=0.01,
                                    msg=f"{oxide} diverges too much from the UMF of Glazy")
 
+    def test_umf_basis_diff_is_negligible_on_a_normal_recipe(self):
+        result = build_import_result(SAMPLE_RECIPE)
+
+        self.assertLessEqual(result["umf_basis_diff"], UMF_BASIS_DIFF_NOTE)
+
+    def test_umf_basis_diff_is_null_without_the_umf_of_glazy(self):
+        """Nothing of Glazy to compare against, so the UI must stay silent"""
+        recipe = copy.deepcopy(SAMPLE_RECIPE)
+        del recipe["analysis"]["umfAnalysis"]
+
+        result = build_import_result(recipe)
+
+        self.assertIsNone(result["umf_basis_diff"])
+        self.assertEqual(result["umf_glazy"], {})
+
+    def test_lead_recipe_target_still_comes_from_the_weights(self):
+        """
+        A lead glaze diverges from Glazy by design and must NOT be refused
+
+        Our UMF is normalized on the alkali content because PbO is no flux for
+        common.oxides_classification(), so the numbers are on a completely
+        different scale than the ones of Glazy. The solver measures its
+        candidates with the same functions, so the target is self-consistent and
+        reproducible - the import reports the divergence instead of failing.
+        """
+        result = build_import_result(LEAD_RECIPE)
+
+        expected_weights = _numeric_oxides(LEAD_RECIPE["analysis"]["percentageAnalysis"])
+
+        self.assertEqual(result["umf_source"], "weights")
+        self.assertEqual(result["umf"], weights_to_umf(expected_weights))
+        # Normalized on 1.5% K2O, so every oxide is far above its Glazy value
+        self.assertGreater(result["umf"]["SiO2"], 10)
+        self.assertGreater(result["umf_basis_diff"], UMF_BASIS_DIFF_WARNING)
+
+    def test_recipe_without_our_fluxes_falls_back_to_the_umf_of_glazy(self):
+        """
+        weights_to_umf() would normalize on "the smallest oxide", an arbitrary
+        basis the solver never reproduces, so the weights path is skipped
+        """
+        result = build_import_result(FLUXLESS_RECIPE)
+
+        self.assertEqual(result["umf_source"], "glazy_umf")
+        self.assertEqual(result["umf"], result["umf_glazy"])
+        # The weight analysis is still reported, only not used as the target
+        self.assertEqual(result["weight_percent"]["PbO"], 55.0)
+        self.assertEqual(result["umf_basis_diff"], 0)
+
+    def test_recipe_without_our_fluxes_and_without_a_glazy_umf(self):
+        recipe = copy.deepcopy(FLUXLESS_RECIPE)
+        del recipe["analysis"]["umfAnalysis"]
+
+        with self.assertRaises(GlazyImportError) as caught:
+            build_import_result(recipe)
+
+        self.assertEqual(caught.exception.code, "no_analysis")
+        self.assertEqual(caught.exception.http_status, 422)
+
+    def test_html_entities_in_the_recipe_name_are_unescaped(self):
+        recipe = copy.deepcopy(SAMPLE_RECIPE)
+        recipe["name"] = "Tom&#39;s Glaze &amp; Co"
+
+        self.assertEqual(build_import_result(recipe)["name"], "Tom's Glaze & Co")
+
     def test_glazy_umf_is_passed_through_without_derived_keys(self):
         result = build_import_result(SAMPLE_RECIPE)
 
@@ -372,6 +506,7 @@ class TestGlazyImportEndpoint(unittest.TestCase):
         self.assertEqual(data["umf_source"], "weights")
         self.assertEqual(data["umf"], weights_to_umf(_numeric_oxides(SAMPLE_RECIPE["analysis"]["percentageAnalysis"])))
         self.assertEqual(data["umf_glazy"]["SiO2"], 2.5824)
+        self.assertLessEqual(data["umf_basis_diff"], UMF_BASIS_DIFF_NOTE)
         self.assertEqual(data["weight_percent"]["SiO2"], 48.5952)
         self.assertEqual(data["components"][2], {
             "name": "Rutile", "percentage": 5.0, "is_additional": True, "glazy_material_id": 15393,
@@ -386,6 +521,24 @@ class TestGlazyImportEndpoint(unittest.TestCase):
 
         fetch.assert_called_once_with(72382)
         self.assertEqual(response.status_code, 200)
+
+    def test_explicit_null_recipe_falls_back_to_recipe_id(self):
+        with mock.patch.object(api_server, 'fetch_recipe', return_value=SAMPLE_RECIPE) as fetch:
+            response = self.post({"recipe": None, "recipe_id": 72382})
+
+        fetch.assert_called_once_with(72382)
+        self.assertEqual(response.status_code, 200)
+
+    def test_lead_recipe_is_imported_and_flagged(self):
+        """The divergence is reported as a number, the import itself succeeds"""
+        with mock.patch.object(api_server, 'fetch_recipe', return_value=LEAD_RECIPE):
+            response = self.post({"recipe": "1234"})
+
+        self.assertEqual(response.status_code, 200)
+
+        data = response.get_json()
+        self.assertEqual(data["umf_source"], "weights")
+        self.assertGreater(data["umf_basis_diff"], UMF_BASIS_DIFF_WARNING)
 
     def test_missing_recipe(self):
         response = self.post({})
