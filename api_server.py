@@ -14,8 +14,10 @@ import logging
 import os
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from solver_classic import find_multiple_solutions
-from common import weights_to_umf, umf_to_weights, load_materials, make_json_safe
+from solver_classic import find_multiple_solutions, calculate_recipe_composition
+from solver_iterative import find_best_recipe
+from common import (weights_to_umf, umf_to_weights, load_materials, make_json_safe,
+                    resolve_inventory, filter_materials_by_inventory)
 
 # Настройка логирования
 logging.basicConfig(
@@ -33,6 +35,44 @@ UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'UI')
 # Путь к директории с данными
 DATABASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database')
 
+# Available solver engines; the classic one stays the default so that the
+# behaviour without the "solver" parameter is unchanged
+SOLVER_CLASSIC = 'classic'
+SOLVER_ITERATIVE = 'iterative'
+AVAILABLE_SOLVERS = (SOLVER_CLASSIC, SOLVER_ITERATIVE)
+
+
+def iterative_solutions_to_classic_format(solutions, target_umf, inventory_data):
+    """
+    Convert the solutions of the iterative solver into the response format of
+    the classic one, so that the UI does not see any difference
+
+    Args:
+        solutions: list of solutions returned by find_best_recipe
+        target_umf: target UMF formula as it came in the request
+        inventory_data: optional list of available material names
+
+    Returns:
+        list of solutions with the keys of the classic solver
+    """
+    materials = load_materials(only_inventory=False, priority=True)
+    available_materials = filter_materials_by_inventory(materials, resolve_inventory(inventory_data))
+
+    converted = []
+    for solution in solutions:
+        composition = calculate_recipe_composition(available_materials, solution['recipe'])
+        converted.append({
+            'recipe': solution['recipe'],
+            'error': round(float(solution['error']), 4),
+            'target_composition': target_umf,
+            'actual_composition': {oxide: round(float(value), 4) for oxide, value in solution['result_umf'].items()},
+            'weight_composition': {oxide: round(float(value), 2) for oxide, value in composition.items()},
+            'materials_count': solution['materials_count'],
+        })
+
+    return converted
+
+
 @app.route('/api/solve', methods=['POST'])
 def solve_recipe():
     """
@@ -44,9 +84,10 @@ def solve_recipe():
         "max_solutions": 3,  // опционально, по умолчанию 3
         "min_materials": true,  // опционально, по умолчанию true
         "error_tolerance": 0.01,  // опционально, по умолчанию 0.01
-        "inventory": ["Material1", "Material2", ...]  // опционально, список доступных материалов
+        "inventory": ["Material1", "Material2", ...],  // опционально, список доступных материалов
+        "solver": "classic"  // опционально, "classic" (по умолчанию) или "iterative"
     }
-    
+
     Возвращает:
     [
         {
@@ -73,17 +114,34 @@ def solve_recipe():
         min_materials = data.get('min_materials', True)
         error_tolerance = data.get('error_tolerance', 0.01)
         inventory_data = data.get('inventory', None)
-        
-        logger.info(f"solving recipe for umf: {umf}, max_solutions: {max_solutions}, min_materials: {min_materials}")
-        
-        solutions = find_multiple_solutions(
-            umf, 
-            max_solutions=max_solutions,
-            min_materials=min_materials,
-            error_tolerance=error_tolerance,
-            inventory_data=inventory_data
-        )
-        
+        solver_name = data.get('solver', SOLVER_CLASSIC)
+
+        if solver_name not in AVAILABLE_SOLVERS:
+            logger.warning(f"unknown_solver requested: {solver_name}")
+            return jsonify({
+                "error": "unknown_solver",
+                "message": f"unknown solver '{solver_name}', expected one of: {', '.join(AVAILABLE_SOLVERS)}"
+            }), 400
+
+        logger.info(f"solving recipe for umf: {umf}, max_solutions: {max_solutions}, min_materials: {min_materials}, solver: {solver_name}")
+
+        if solver_name == SOLVER_ITERATIVE:
+            iterative_solutions = find_best_recipe(
+                inventory_data,
+                umf,
+                max_solutions=max_solutions,
+                verbose=False
+            )
+            solutions = iterative_solutions_to_classic_format(iterative_solutions, umf, inventory_data)
+        else:
+            solutions = find_multiple_solutions(
+                umf,
+                max_solutions=max_solutions,
+                min_materials=min_materials,
+                error_tolerance=error_tolerance,
+                inventory_data=inventory_data
+            )
+
         if isinstance(solutions, dict) and 'error' in solutions:
             logger.error(f"calculation_error: {solutions['error']}")
             return jsonify({"error": "calculation_error", "message": solutions['error']}), 500
