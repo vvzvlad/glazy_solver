@@ -359,7 +359,14 @@ class TestToleranceFilesThatDoNotWork(unittest.TestCase):
                 with self.assertLogs('sensitivity', level='WARNING'):
                     tolerances = load_tolerances(path)
                     result = recipe_sensitivity(recipe, self.materials, tolerances)
-                    flat_sigma = self.matching_flat_sigma(recipe, result, payload)
+
+                # Outside the assertLogs, like write_tolerances above it: this
+                # helper calls recipe_sensitivity itself, once per candidate
+                # sigma, on a file that is flat by construction - so it always
+                # logs sensitivity_flat_sigmas and there is always at least one
+                # candidate. Inside the block it satisfied the assertion on its
+                # own and the call under test could have gone silent unnoticed.
+                flat_sigma = self.matching_flat_sigma(recipe, result, payload)
 
                 if flat_sigma is None:
                     self.assertIsNone(flat_warning(result), f"{name}: a working file called flat")
@@ -924,8 +931,12 @@ class TestRecipeSensitivity(unittest.TestCase):
                                share_of(baseline, "Улексит (Химпэк)"), places=6)
 
     def test_single_material_recipe(self):
-        # One material is the flat ranking by definition - there is nothing for
-        # the tolerances to tell apart - so the answer says so
+        # Nepheline syenite alone comes out flat because every oxide of it takes
+        # the "feldspar" 0.02 and the shipped file overrides none of them - NOT
+        # because a one-material recipe is flat by definition. It is not: an
+        # override applies per material-oxide pair, so ulexite alone has two
+        # applied sigmas (0.08 by class, 0.10 on B2O3) and answers with no
+        # warning at all. See test_a_single_material_is_not_flat_by_itself.
         with self.assertLogs('sensitivity', level='WARNING'):
             result = recipe_sensitivity({"Нефелин-сиенит VR13": 100}, self.materials)
 
@@ -934,6 +945,28 @@ class TestRecipeSensitivity(unittest.TestCase):
         self.assertAlmostEqual(result["by_material"][0]["share"], 1.0, delta=1e-6)
         self.assertTrue(result["per_oxide"])
         self.assertIsNotNone(flat_warning(result))
+
+    def test_a_single_material_is_not_flat_by_itself(self):
+        """
+        The generalisation the documentation used to make, pinned as false
+
+        "A recipe of one material" and "every material in one class" were listed
+        as cases that always carry the flat warning. They do not: a sigma is
+        applied per material-oxide pair, and the shipped file overrides B2O3 of
+        ulexite and borax to 0.10 over the 0.08 of their "hydrate_borate" class.
+        So one ulexite has two applied sigmas and is ranked by them, and a reader
+        who trusted the old text would read a one-row by_material with share 1.0
+        as a meaningful ranking on the strength of a warning that never came.
+        """
+        for recipe in ({"Улексит (Химпэк)": 100},
+                       {"Бура, Na2O 2 B2O3 10 H2O": 100},
+                       {"Улексит (Химпэк)": 50, "Бура, Na2O 2 B2O3 10 H2O": 50}):
+            with self.subTest(str(recipe)):
+                result = recipe_sensitivity(recipe, self.materials)
+
+                self.assertIsNone(result["error"])
+                self.assertIsNone(flat_warning(result),
+                                  f"{recipe}: called flat although B2O3 is overridden")
 
     def assert_nonfinite_share_is_skipped(self, amount):
         recipe = dict(TRANSPARENT_RECIPE)

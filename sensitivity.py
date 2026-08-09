@@ -110,7 +110,16 @@ FLAT_SIGMA_WARNING = (
 # and worth naming: "все получили 0.02" is a sentence its reader can check
 # against material_tolerance.json in a second, while "все получили одинаковую"
 # leaves them to work out which one.
-FLAT_SIGMA_OBSERVED = "все они получили одну и ту же сигму {sigma:g}"
+#
+# "Материалы, способные сдвинуть формулу" and not "все материалы рецепта",
+# because the two differ inside the very same answer: a material with an empty
+# formula (a pigment, SiC, CMC, water, gypsum - 37 of the 216 entries) is
+# perturbed nowhere, so it contributes no sigma to the set this message reports,
+# and its by_material row says so with sigma_used: null. The wider wording was
+# refuted by the row printed next to it.
+FLAT_SIGMA_OBSERVED = (
+    "все материалы, способные сдвинуть формулу, получили одну и ту же "
+    "сигму {sigma:g}")
 NO_SIGMA_OBSERVED = "ни одна сигма не вошла в расчёт"
 
 # The one cause this module can actually see from here, and it is only said when
@@ -473,6 +482,13 @@ def material_sigma(material, tolerances):
         try:
             content_value = float(content)
         except (TypeError, ValueError):
+            # Reachable only on a direct call to material_sigma(). Through
+            # recipe_sensitivity() it is dead code: calculate_recipe_composition()
+            # multiplies the same cell by the share several steps earlier and
+            # raises the TypeError there, which the endpoint answers with a 500.
+            # That hole is not this module's to close - it belongs to a
+            # validation of materials.json on the way in - and this guard is
+            # deliberately left in place for whoever does close it.
             continue
         if not math.isfinite(content_value):
             # materials.json is written by glazy_import and edited by hand too;
@@ -751,10 +767,17 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
         # and whatever level that number came from. A file that never mentions
         # these materials, a name a supplier changed, an override on an oxide the
         # material does not carry, a missing file and a recipe whose materials
-        # all share one class all land here, and they land here for the same
-        # reason: what the file contains was never the question, what got used is.
-        logger.warning(f"sensitivity_flat_sigmas: one sigma for the whole recipe: "
-                       f"{sorted(applied_sigmas)}")
+        # all resolved to one and the same number land here, and they land here
+        # for the same reason: what the file contains was never the question,
+        # what got used is. Sharing a class is not by itself enough and is not
+        # claimed to be: an override lifts one oxide of one material off the
+        # class number, and the shipped file does exactly that to B2O3 of ulexite
+        # and borax, so a recipe of either alone has TWO applied sigmas.
+        #
+        # The log line is worded neutrally: the set is empty when nothing was
+        # perturbed at all - an inf cell in a formula gets there - and "one sigma
+        # for the whole recipe: []" was a line contradicted by its own payload.
+        logger.warning(f"sensitivity_flat_sigmas: applied sigmas: {sorted(applied_sigmas)}")
         warnings.append(_flat_sigma_warning(applied_sigmas, tolerances, used))
 
     by_material, share_warning = _material_shares(material_rows)
