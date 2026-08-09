@@ -182,6 +182,17 @@ class TestSensitivityEndpoint(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.get_json()['error'], 'no_fluxes')
 
+    def assert_no_nonfinite_numbers(self, response):
+        """
+        make_json_safe turns both of them into strings sitting in a field
+        documented as a number, and "Infinity" is the one an overflow produces:
+        checking only for "NaN" is what let the previous fix pass while the
+        endpoint was still answering 200 with "sigma": "Infinity"
+        """
+        body = response.get_data(as_text=True)
+        for token in ('NaN', 'Infinity'):
+            self.assertNotIn(token, body, f"the response carries a {token}: {body[:400]}")
+
     def test_an_infinite_share_is_not_answered_with_nan(self):
         """
         1e400 is valid JSON and Python parses it into inf, which used to travel
@@ -194,18 +205,60 @@ class TestSensitivityEndpoint(unittest.TestCase):
             content_type='application/json')
 
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn('NaN', response.get_data(as_text=True))
+        self.assert_no_nonfinite_numbers(response)
 
         body = response.get_json()
         self.assertIsNone(body['error'])
         self.assertEqual({row['material'] for row in body['by_material']}, {"Мел, CaCO3"})
         self.assertTrue(body['warnings'])
 
-    def test_an_inventory_parameter_no_longer_restricts_the_analysis(self):
+    def test_a_finite_but_absurd_share_is_not_answered_with_infinity(self):
+        """
+        The share stays finite, the SQUARE of the response to it does not: 1e156
+        still comes back as numbers and 1e160 used to come back as
+        {"oxide": "SiO2", "value": 1.66e+159, "sigma": "Infinity"} under
+        error: null. The guard on "is the input finite" cannot see this one.
+        """
+        response = self.client.post('/api/sensitivity', json={
+            "recipe": {"Кварцевая мука Кварцверке W12": 1e160, "Мел, CaCO3": 10}})
+
+        self.assertEqual(response.status_code, 200)
+        self.assert_no_nonfinite_numbers(response)
+
+        body = response.get_json()
+        self.assertNotIn("Кварцевая мука Кварцверке W12",
+                         {row['material'] for row in body['by_material']})
+        self.assertTrue(any("Кварцевая мука" in warning for warning in body['warnings']))
+
+    def test_a_wall_of_huge_shares_does_not_come_back_as_a_composition_of_infinities(self):
+        """Several materials at the float ceiling used to overflow the composition itself"""
+        response = self.client.post('/api/sensitivity', json={
+            "recipe": {"Кварцевая мука Кварцверке W12": 1.5e308, "Мел, CaCO3": 1.5e308,
+                       "Нефелин-сиенит VR13": 1.5e308}})
+
+        self.assert_no_nonfinite_numbers(response)
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.get_json()['error'], 'no_known_materials')
+
+    def test_a_rejected_share_is_not_reported_as_a_material_missing_from_the_database(self):
+        """The name is spelled perfectly and is in the database; the share is what was refused"""
+        response = self.client.post(
+            '/api/sensitivity',
+            data='{"recipe": {"Мел, CaCO3": 1e400}}',
+            content_type='application/json')
+
+        self.assertEqual(response.status_code, 422)
+        body = response.get_json()
+        self.assertEqual(body['error'], 'no_known_materials')
+        self.assertNotIn('не найден в базе', body['message'])
+        self.assertTrue(body['warnings'])
+
+    def test_an_inventory_parameter_is_ignored_but_not_in_silence(self):
         """
         The parameter is gone: all it could do was drop materials of the recipe,
         and then "umf" reported the formula of what was left instead of the
-        formula the caller asked about
+        formula the caller asked about. An old client still sending one gets
+        different numbers than it used to, so the response has to say so.
         """
         response = self.client.post('/api/sensitivity', json={
             "recipe": self.RECIPE,
@@ -214,15 +267,30 @@ class TestSensitivityEndpoint(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.get_json()
         self.assertEqual({row['material'] for row in body['by_material']}, set(self.RECIPE))
-        self.assertEqual(body['warnings'], [])
+        self.assertIn(api_server.IGNORED_INVENTORY_WARNING, body['warnings'])
+
+    def test_a_request_without_an_inventory_gets_no_such_warning(self):
+        response = self.client.post('/api/sensitivity', json={"recipe": self.RECIPE})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['warnings'], [])
 
     def test_an_inventory_of_the_wrong_type_is_ignored_instead_of_crashing(self):
         response = self.client.post('/api/sensitivity',
                                     json={"recipe": self.RECIPE, "inventory": 5})
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual({row['material'] for row in response.get_json()['by_material']},
-                         set(self.RECIPE))
+        body = response.get_json()
+        self.assertEqual({row['material'] for row in body['by_material']}, set(self.RECIPE))
+        self.assertIn(api_server.IGNORED_INVENTORY_WARNING, body['warnings'])
+
+    def test_the_ignored_inventory_is_reported_on_a_refused_recipe_too(self):
+        response = self.client.post('/api/sensitivity', json={
+            "recipe": {"Кварцевая мука Кварцверке W12": 60, "Глинозем, Al203": 40},
+            "inventory": ["Кварцевая мука Кварцверке W12"]})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn(api_server.IGNORED_INVENTORY_WARNING, response.get_json()['warnings'])
 
     def test_the_whole_database_is_searched(self):
         """A recipe names its own materials; being out of stock is not a reason to drop one"""

@@ -20,11 +20,17 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common import load_materials, weights_to_umf
 from solver_classic import calculate_recipe_composition
-from sensitivity import (FALLBACK_RELATIVE, load_tolerances, material_sigma,
-                         recipe_sensitivity)
+from sensitivity import (DEGRADED_TOLERANCES_WARNING, FALLBACK_RELATIVE, MAX_PERCENTAGE,
+                         NONFINITE_CONTRIBUTION_WARNING, ZERO_CONTRIBUTION_WARNING,
+                         _all_finite, _material_shares, _top_affected,
+                         load_tolerances, material_sigma, recipe_sensitivity)
 
 # A path that cannot exist, to stand in for an unreadable tolerance database
 MISSING_TOLERANCES = os.path.join(tempfile.gettempdir(), 'no_such_material_tolerance.json')
+
+SHIPPED_TOLERANCES_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    'database', 'material_tolerance.json')
 
 # The reference "Прозрачная глазурь △6" of database/recipes.json, the same one
 # tests/test_common.py checks the UMF of
@@ -50,6 +56,15 @@ def share_of(result, material_name):
         if row["material"] == material_name:
             return row["share"]
     raise AssertionError(f"{material_name} is missing from by_material")
+
+
+def shares(result):
+    return {row["material"]: row["share"] for row in result["by_material"]}
+
+
+def shipped_tolerances_file():
+    with open(SHIPPED_TOLERANCES_PATH, 'r', encoding='utf-8') as f:
+        return json.load(f)
 
 
 class TestMaterialSigma(unittest.TestCase):
@@ -119,14 +134,18 @@ class TestToleranceLoading(unittest.TestCase):
         small sigma and the material drops down the ranking"). A process wide
         cache would silently postpone every such edit to the next restart.
         """
+        assigned = {"Каолин КЖФ-1": {"class": "clay"}}
         path = self.write_tolerances({"default_relative": 0.05, "classes": {"clay": 0.05},
-                                      "materials": {}})
+                                      "materials": assigned})
         self.assertEqual(load_tolerances(path)["classes"]["clay"], 0.05)
 
         with open(path, 'w', encoding='utf-8') as f:
-            json.dump({"default_relative": 0.05, "classes": {"clay": 0.30}, "materials": {}}, f)
+            json.dump({"default_relative": 0.05, "classes": {"clay": 0.30},
+                       "materials": assigned}, f)
 
-        self.assertEqual(load_tolerances(path)["classes"]["clay"], 0.30)
+        fresh = load_tolerances(path)
+        self.assertEqual(fresh["classes"]["clay"], 0.30)
+        self.assertFalse(fresh["degraded"])
 
     def test_a_caller_mutating_the_result_cannot_corrupt_the_next_read(self):
         tolerances = load_tolerances()
@@ -153,6 +172,164 @@ class TestToleranceLoading(unittest.TestCase):
     def test_a_json_file_that_is_not_an_object_degrades_the_same_way(self):
         with self.assertLogs('sensitivity', level='WARNING'):
             self.assertTrue(load_tolerances(self.write_tolerances([0.05, 0.10]))["degraded"])
+
+
+class TestUnusableToleranceFiles(unittest.TestCase):
+    """
+    A file that parses is not a file that works
+
+    The file is documented as one to edit by hand, so the way it breaks in
+    practice is a typo in a key or a section deleted along with what it served -
+    not an unreadable disk. Every payload below is valid JSON and an object, and
+    every one of them used to come back with degraded: False and no warning at
+    all, while the ranking it produced was the flat one of a missing file.
+    """
+
+    def setUp(self):
+        self.materials = all_materials()
+        self.shipped = shipped_tolerances_file()
+
+        with self.assertLogs('sensitivity', level='WARNING'):
+            self.flat = shares(recipe_sensitivity(TRANSPARENT_RECIPE, self.materials,
+                                                  load_tolerances(MISSING_TOLERANCES)))
+
+    def write_tolerances(self, payload):
+        handle = tempfile.NamedTemporaryFile('w', suffix='.json', encoding='utf-8', delete=False)
+        self.addCleanup(os.unlink, handle.name)
+        with handle:
+            json.dump(payload, handle)
+        return handle.name
+
+    def unusable_files(self):
+        """(name, payload, degraded) - the table of the review, as a fixture"""
+        return [
+            ("an empty object", {}, True),
+            ("materials written as a list",
+             {"default_relative": 0.05, "classes": self.shipped["classes"], "materials": []},
+             True),
+            ("a junk default_relative and nothing else",
+             {"default_relative": "abc"}, True),
+            ("a typo in both section keys",
+             {"default_relative": 0.05, "class": self.shipped["classes"],
+              "material": self.shipped["materials"]}, True),
+            ("classes defined but assigned to nobody",
+             {"default_relative": 0.05, "classes": self.shipped["classes"], "materials": {}},
+             True),
+            ("classes written as a list, materials intact",
+             {"default_relative": 0.05, "classes": [], "materials": self.shipped["materials"]},
+             False),
+            ("a junk default_relative with both sections intact",
+             {"default_relative": "abc", "classes": self.shipped["classes"],
+              "materials": self.shipped["materials"]}, False),
+        ]
+
+    def test_the_flag_follows_what_the_file_can_actually_do(self):
+        for name, payload, degraded in self.unusable_files():
+            with self.subTest(name):
+                with self.assertLogs('sensitivity', level='WARNING'):
+                    tolerances = load_tolerances(self.write_tolerances(payload))
+
+                self.assertEqual(tolerances["degraded"], degraded)
+
+    def test_none_of_them_is_answered_in_silence(self):
+        """
+        The invariant, and not a list of specific checks: a warning is owed
+        whenever the file did not fully work, whatever the shape of the damage
+        """
+        for name, payload, _degraded in self.unusable_files():
+            with self.subTest(name):
+                with self.assertLogs('sensitivity', level='WARNING'):
+                    tolerances = load_tolerances(self.write_tolerances(payload))
+
+                result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
+
+                self.assertIsNone(result["error"])
+                self.assertTrue(result["warnings"],
+                                f"{name}: answered with no warning at all")
+
+    def test_an_answer_equal_to_the_flat_one_always_carries_the_degradation_warning(self):
+        """
+        Where the line is drawn: not "the file was readable" but "the numbers
+        differ from the ones a missing file gives". Those two answers are
+        indistinguishable to a caller, so they must not differ in what they say.
+        """
+        for name, payload, _degraded in self.unusable_files():
+            with self.subTest(name):
+                with self.assertLogs('sensitivity', level='WARNING'):
+                    tolerances = load_tolerances(self.write_tolerances(payload))
+
+                result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
+
+                if shares(result) == self.flat:
+                    self.assertIn(DEGRADED_TOLERANCES_WARNING, result["warnings"],
+                                  f"{name}: the flat ranking without the flat warning")
+                else:
+                    self.assertNotIn(DEGRADED_TOLERANCES_WARNING, result["warnings"],
+                                     f"{name}: a working file reported as degraded")
+
+    def test_a_partly_usable_file_keeps_working_and_still_reports_the_damage(self):
+        """
+        classes gone, materials intact: the per oxide overrides still resolve, so
+        ulexite stays the leader - with 0.56 instead of 0.700. Neither a flat
+        answer nor the right one, and the least visible of the three.
+        """
+        with self.assertLogs('sensitivity', level='WARNING'):
+            tolerances = load_tolerances(self.write_tolerances(
+                {"default_relative": 0.05, "classes": [],
+                 "materials": self.shipped["materials"]}))
+
+        result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
+
+        self.assertFalse(tolerances["degraded"])
+        self.assertEqual(result["by_material"][0]["material"], "Улексит (Химпэк)")
+        self.assertNotEqual(shares(result), self.flat)
+        self.assertNotEqual(share_of(result, "Улексит (Химпэк)"),
+                            share_of(recipe_sensitivity(TRANSPARENT_RECIPE, self.materials),
+                                     "Улексит (Химпэк)"))
+        self.assertTrue(any("classes" in warning for warning in result["warnings"]),
+                        f"nothing said about the dropped section: {result['warnings']}")
+
+    def test_a_substituted_section_is_logged_and_not_only_warned_about(self):
+        with self.assertLogs('sensitivity', level='WARNING') as logs:
+            load_tolerances(self.write_tolerances(
+                {"default_relative": 0.05, "classes": self.shipped["classes"],
+                 "materials": []}))
+
+        self.assertTrue(any('material_tolerance_section_ignored' in line for line in logs.output),
+                        f"the type substitution was not logged: {logs.output}")
+
+    def test_a_substituted_default_relative_is_logged_too(self):
+        with self.assertLogs('sensitivity', level='WARNING') as logs:
+            tolerances = load_tolerances(self.write_tolerances(
+                {"default_relative": "abc", "classes": self.shipped["classes"],
+                 "materials": self.shipped["materials"]}))
+
+        self.assertEqual(tolerances["default_relative"], FALLBACK_RELATIVE)
+        self.assertTrue(any('material_tolerance_bad_default' in line for line in logs.output),
+                        f"the substituted default was not logged: {logs.output}")
+
+    def test_a_broken_material_entry_does_not_take_the_rest_with_it(self):
+        materials_section = dict(self.shipped["materials"])
+        materials_section["Каолин КЖФ-1"] = "clay"
+
+        with self.assertLogs('sensitivity', level='WARNING') as logs:
+            tolerances = load_tolerances(self.write_tolerances(
+                {"default_relative": 0.05, "classes": self.shipped["classes"],
+                 "materials": materials_section}))
+
+        result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
+
+        self.assertFalse(tolerances["degraded"])
+        self.assertEqual(result["by_material"][0]["material"], "Улексит (Химпэк)")
+        self.assertTrue(any('material_tolerance_entry_ignored' in line for line in logs.output))
+        self.assertTrue(result["warnings"], "the dropped entry was not reported")
+
+    def test_the_shipped_file_reports_nothing_at_all(self):
+        """The complement: the fixture above must not fire on a healthy file"""
+        tolerances = load_tolerances()
+
+        self.assertFalse(tolerances["degraded"])
+        self.assertEqual(tolerances["issues"], [])
 
 
 class TestDegradedTolerances(unittest.TestCase):
@@ -362,6 +539,21 @@ class TestRecipeSensitivity(unittest.TestCase):
         result = recipe_sensitivity({"Философский камень": 100}, self.materials)
         self.assertEqual(result["error"], "no_known_materials")
 
+    def test_the_refusal_does_not_claim_a_material_is_missing_when_it_is_not(self):
+        """
+        Chalk IS in the database; what was rejected is its share. The old message
+        ("ни один материал рецепта не найден в базе") sent the reader looking for
+        a typo in a name that is spelled perfectly, and the real reason - which
+        is in "warnings" - was never pointed at.
+        """
+        result = recipe_sensitivity({"Мел, CaCO3": float('inf')}, self.materials)
+
+        self.assertEqual(result["error"], "no_known_materials")
+        self.assertNotIn("не найден в базе", result["message"])
+        self.assertIn("warnings", result["message"])
+        self.assertTrue(any("Мел, CaCO3" in warning for warning in result["warnings"]),
+                        f"the reason is not in the warnings either: {result['warnings']}")
+
     def test_manganese_recipe_warns_instead_of_crashing(self):
         """
         MnO2 belongs to no group of oxides_classification() (DATA_NOTES.md,
@@ -377,6 +569,170 @@ class TestRecipeSensitivity(unittest.TestCase):
         self.assertTrue(result["by_material"])
         self.assertTrue(any("флюс" in warning for warning in result["warnings"]),
                         f"expected a low flux warning, got {result['warnings']}")
+
+
+class TestFiniteResult(unittest.TestCase):
+    """
+    Being finite on the way in does not make the answer finite on the way out
+
+    The variance accumulates the SQUARE of the response, the shares divide by
+    their own sum and the per oxide spread takes a square root, so a number that
+    passed every guard on the input can still leave the finite range three steps
+    later. make_json_safe then turns it into the string "Infinity" or "NaN"
+    sitting in a field documented as a number, next to error: null.
+    """
+
+    def setUp(self):
+        self.materials = all_materials()
+
+    def write_tolerances(self, payload):
+        handle = tempfile.NamedTemporaryFile('w', suffix='.json', encoding='utf-8', delete=False)
+        self.addCleanup(os.unlink, handle.name)
+        with handle:
+            json.dump(payload, handle)
+        return handle.name
+
+    def assert_every_number_is_finite(self, result):
+        self.assertTrue(_all_finite(result), f"a number of the answer is not finite: {result}")
+
+    def test_a_share_beyond_the_percent_scale_is_skipped(self):
+        """1e156 still squares into a number, 1e160 does not - and both are shares in percent"""
+        result = recipe_sensitivity({"Кварцевая мука Кварцверке W12": 1e160, "Мел, CaCO3": 10},
+                                    self.materials)
+
+        self.assertIsNone(result["error"])
+        self.assert_every_number_is_finite(result)
+        self.assertNotIn("Кварцевая мука Кварцверке W12",
+                         {row["material"] for row in result["by_material"]})
+        self.assertTrue(any("Кварцевая мука" in warning for warning in result["warnings"]),
+                        f"expected a skip warning, got {result['warnings']}")
+
+    def test_the_bound_is_on_the_share_and_not_on_the_recipe_summing_to_100(self):
+        """A recipe of 200 g of chalk per 100 g of dry mix is a normal thing to ask about"""
+        result = recipe_sensitivity({"Нефелин-сиенит VR13": 300, "Мел, CaCO3": 120},
+                                    self.materials)
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["warnings"], [])
+        self.assert_every_number_is_finite(result)
+
+    def test_the_bound_admits_a_share_just_under_it(self):
+        result = recipe_sensitivity({"Нефелин-сиенит VR13": MAX_PERCENTAGE, "Мел, CaCO3": 10},
+                                    self.materials)
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["warnings"], [])
+        self.assert_every_number_is_finite(result)
+
+    def test_a_wall_of_huge_shares_cannot_overflow_the_composition_itself(self):
+        result = recipe_sensitivity({"Кварцевая мука Кварцверке W12": 1.5e308,
+                                     "Мел, CaCO3": 1.5e308,
+                                     "Нефелин-сиенит VR13": 1.5e308}, self.materials)
+
+        self.assertEqual(result["error"], "no_known_materials")
+        self.assertEqual(len(result["warnings"]), 3)
+
+    def test_a_hand_written_sigma_that_overflows_is_refused_instead_of_returned(self):
+        """
+        The tolerance file is edited by hand and _positive_float() only asks the
+        sigma to be a positive finite number. A sigma of 1e308 passes that and
+        comes back as "sigma": Infinity for SiO2 and "share": NaN for quartz -
+        under error: null, because inf/inf is nan and nan is neither <= 0 nor > 0.
+        """
+        tolerances = load_tolerances(self.write_tolerances({
+            "default_relative": 0.05,
+            "classes": {"silica": 1e308, "clay": 0.05},
+            "materials": {"Кварцевая мука Кварцверке W12": {"class": "silica"},
+                          "Каолин КЖФ-1": {"class": "clay"}},
+        }))
+
+        with self.assertLogs('sensitivity', level='ERROR'):
+            result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
+
+        self.assertFalse(tolerances["degraded"])
+        self.assertEqual(result["error"], "nonfinite_result")
+        self.assertEqual(result["per_oxide"], [])
+        self.assertEqual(result["by_material"], [])
+        self.assertTrue(result["message"])
+
+    def test_a_nonfinite_cell_of_a_material_formula_is_refused_and_named(self):
+        """
+        materials.json is written by an importer and edited by hand as well. Such
+        a cell poisons the base composition before any perturbation happens, so
+        the answer cannot be saved - but the log has to say which cell it was,
+        instead of leaving a bare "the result is not finite".
+        """
+        materials = copy.deepcopy(self.materials)
+        next(m for m in materials
+             if m["name"] == "Каолин КЖФ-1")["formula"]["Al2O3"] = float('inf')
+
+        with self.assertLogs('sensitivity', level='WARNING') as logs:
+            result = recipe_sensitivity({"Каолин КЖФ-1": 50, "Мел, CaCO3": 50}, materials)
+
+        self.assertEqual(result["error"], "nonfinite_result")
+        self.assertTrue(any('sensitivity_nonfinite_formula_cell' in line and 'Al2O3' in line
+                            for line in logs.output),
+                        f"the broken cell was not named in the log: {logs.output}")
+
+    def test_the_answer_of_the_reference_recipe_is_finite_everywhere(self):
+        self.assert_every_number_is_finite(recipe_sensitivity(TRANSPARENT_RECIPE, self.materials))
+
+
+class TestTotalContributionIsNotANumber(unittest.TestCase):
+    """
+    "not a number" must take the same branch as "zero", never the healthy one
+
+    Every comparison against nan is False, so a "total <= 0" test calls a
+    poisoned total healthy while the "total > 0" test right next to it zeroes
+    every share: the caller gets exactly the degenerate answer API.md promises to
+    always explain, with nothing explaining it.
+    """
+
+    def rows(self, *contributions):
+        return [{"material": f"m{index}", "contribution": value, "via_oxide": "SiO2",
+                 "sigma_used": 0.05, "affects": ["SiO2"]}
+                for index, value in enumerate(contributions)]
+
+    def test_a_zero_total_zeroes_the_shares_and_says_why(self):
+        rows, warning = _material_shares(self.rows(0.0, 0.0))
+
+        self.assertEqual([row["share"] for row in rows], [0.0, 0.0])
+        self.assertEqual(warning, ZERO_CONTRIBUTION_WARNING)
+
+    def test_a_nan_total_does_not_pass_for_a_healthy_one(self):
+        with self.assertLogs('sensitivity', level='ERROR'):
+            rows, warning = _material_shares(self.rows(1.0, float('nan')))
+
+        self.assertEqual([row["share"] for row in rows], [0.0, 0.0])
+        self.assertEqual(warning, NONFINITE_CONTRIBUTION_WARNING)
+
+    def test_an_infinite_total_is_reported_the_same_way(self):
+        with self.assertLogs('sensitivity', level='ERROR'):
+            rows, warning = _material_shares(self.rows(1.0, float('inf')))
+
+        self.assertEqual([row["share"] for row in rows], [0.0, 0.0])
+        self.assertEqual(warning, NONFINITE_CONTRIBUTION_WARNING)
+
+    def test_a_healthy_total_normalizes_and_warns_about_nothing(self):
+        rows, warning = _material_shares(self.rows(3.0, 1.0))
+
+        self.assertIsNone(warning)
+        self.assertEqual([row["share"] for row in rows], [0.75, 0.25])
+
+    def test_a_material_with_a_nan_contribution_claims_to_affect_nothing(self):
+        """
+        The row it used to produce contradicted itself: affects ["MgO", "CaO",
+        "SiO2"] next to share 0.0 and via_oxide null, because "nan < 0.05" is
+        False and the cut on the share of the leader never fired
+        """
+        self.assertEqual(_top_affected({"SiO2": float('nan'), "CaO": 1.0}, float('nan')), [])
+        self.assertEqual(_top_affected({"SiO2": 1.0, "CaO": 1.0}, float('inf')), [])
+        self.assertEqual(_top_affected({"SiO2": 1.0, "CaO": 1.0}, 0.0), [])
+
+    def test_all_finite_looks_inside_lists_and_dictionaries(self):
+        self.assertTrue(_all_finite({"a": [1, 2.0, {"b": None}], "c": "text", "d": True}))
+        self.assertFalse(_all_finite({"per_oxide": [{"sigma": float('inf')}]}))
+        self.assertFalse(_all_finite([{"share": float('nan')}]))
 
 
 class TestSigmaMonotonicity(unittest.TestCase):

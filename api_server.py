@@ -246,7 +246,15 @@ def solve_recipe():
 # above, and a recipe that passes the flux check always has a UMF); they are
 # listed so that a future path to them lands on 422 and not on the 400 default.
 SENSITIVITY_UNPROCESSABLE_ERRORS = ('no_fluxes', 'no_known_materials', 'empty_composition',
-                                    'empty_recipe', 'empty_umf')
+                                    'empty_recipe', 'empty_umf', 'nonfinite_result')
+
+# The endpoint used to accept an "inventory" and the parameter was removed, not
+# renamed: the request that carries it is now answered with different numbers
+# than before. Ignoring it without a word is the one outcome an old client cannot
+# notice, so the answer says it out loud.
+IGNORED_INVENTORY_WARNING = (
+    "параметр «inventory» больше не поддерживается и проигнорирован: "
+    "чувствительность всегда считается по всей базе материалов")
 
 
 @app.route('/api/sensitivity', methods=['POST'])
@@ -268,7 +276,8 @@ def sensitivity():
     always resolved against the WHOLE database. A recipe names its own materials
     exactly, so there is nothing to search for, and dropping one of them for
     being out of stock would silently analyse a different formula than the one
-    reported in "umf".
+    reported in "umf". A request that still sends one is answered anyway, with
+    IGNORED_INVENTORY_WARNING in "warnings".
 
     Returns:
     {
@@ -298,17 +307,23 @@ def sensitivity():
                 "message": "recipe parameter is required and must be a non-empty object"
             }), 400
 
+        request_warnings = []
+        if 'inventory' in data:
+            logger.warning("sensitivity_inventory_ignored: the parameter was removed")
+            request_warnings.append(IGNORED_INVENTORY_WARNING)
+
         materials = load_materials(only_inventory=False, priority=True)
 
         logger.info(f"sensitivity requested for {len(recipe)} materials")
 
         result = recipe_sensitivity(recipe, materials)
+        result['warnings'] = request_warnings + result.get('warnings', [])
 
         if result.get('error'):
             logger.warning(f"sensitivity_failed: {result['error']}: {result.get('message')}")
             status = 422 if result['error'] in SENSITIVITY_UNPROCESSABLE_ERRORS else 400
             return jsonify({"error": result['error'], "message": result.get('message', ''),
-                            "warnings": result.get('warnings', [])}), status
+                            "warnings": result['warnings']}), status
 
         logger.info(f"sensitivity done: {len(result['by_material'])} materials, {len(result['per_oxide'])} oxides, warnings={len(result['warnings'])}")
         return jsonify(make_json_safe(result))
