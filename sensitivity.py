@@ -19,11 +19,27 @@
 # to melt, and the degree of hydration of ulexite or borax moves the B2O3 it
 # actually brings.
 #
-# The ranking is by sensitivity TIMES uncertainty, not by sensitivity alone.
-# Quartz has an enormous lever on SiO2, but its analysis (99-100% SiO2) never
-# lies; ulexite has a smaller lever and a much wider spread - and it is the
-# dangerous one. A ranking by lever alone would name quartz every single time
-# and would be useless.
+# The ranking is by sensitivity TIMES uncertainty, not by sensitivity alone: a
+# material is dangerous when a big lever meets a wide spread, and the spread is
+# the half a direct calculation has no way to see.
+#
+# What that costs, measured on the reference clear glaze of database/recipes.json
+# rather than argued from first principles. With the shipped tolerances ulexite
+# leads at 0.700. With one flat 0.05 for everything - the answer of a missing
+# tolerance file - it falls to 0.275 and to third place, behind wollastonite at
+# 0.327 and nepheline at 0.321. Quartz sits last in BOTH, 0.003 and 0.027: its
+# lever on the SiO2 of this recipe is the biggest in raw UMF units (+0.011 per 1%
+# of its analysis, against +0.003 for the B2O3 of ulexite), but a contribution is
+# scored against the scale of the oxide it moves and SiO2 is already 3.15 there.
+# So "a ranking by lever alone names quartz" is not what happens here and is not
+# the argument for this metric; the argument is that the lever alone drops the
+# material with the least trustworthy analysis to third.
+#
+# And "the ranking by lever alone" is not even one ranking. The response is not
+# linear in the sigma - weights_to_umf renormalizes on a basis the perturbation
+# moves too - so the flat answer depends on WHICH flat number it is flat at: at
+# 0.05 wollastonite leads, at 0.2 and above nepheline does (measured over
+# 1e-6 ... 1.0). One more reason not to hand that answer back without a word.
 #
 # Method (one sigma, linear propagation, no Monte Carlo):
 #   1. u0 = weights_to_umf(calculate_recipe_composition(...)) - the base formula.
@@ -107,19 +123,25 @@ FLAT_SIGMA_WARNING = (
     "этого рецепта")
 
 # What was observed, appended to the line above. The number is part of the fact
-# and worth naming: "все получили 0.02" is a sentence its reader can check
-# against material_tolerance.json in a second, while "все получили одинаковую"
-# leaves them to work out which one.
+# and worth naming: "все применённые сигмы оказались одним числом 0.02" is a
+# sentence its reader can check against material_tolerance.json in a second,
+# while "оказались одинаковыми" leaves them to work out which one.
 #
-# "Материалы, способные сдвинуть формулу" and not "все материалы рецепта",
-# because the two differ inside the very same answer: a material with an empty
-# formula (a pigment, SiC, CMC, water, gypsum - 37 of the 216 entries) is
-# perturbed nowhere, so it contributes no sigma to the set this message reports,
-# and its by_material row says so with sigma_used: null. The wider wording was
-# refuted by the row printed next to it.
-FLAT_SIGMA_OBSERVED = (
-    "все материалы, способные сдвинуть формулу, получили одну и ту же "
-    "сигму {sigma:g}")
+# The sentence speaks of the SIGMAS and of nothing else, because a set of sigmas
+# is all this message has in hand. Both wider wordings tried before it said
+# something about MATERIALS, and each was refuted by a row printed in the same
+# answer:
+#
+#   "все материалы рецепта" - by the empty formula record (a pigment, SiC, CMC,
+#   water, gypsum: 37 of the 216 entries). It is perturbed nowhere, contributes
+#   no sigma to this set at all, and its row says so with sigma_used: null.
+#
+#   "все материалы, способные сдвинуть формулу" - by {"Мел, CaCO3": 100}. Chalk
+#   gets its 0.01, the perturbation runs, and the formula does not move by a
+#   digit: the UMF of a recipe whose only oxide is a flux is CaO 1.0 whatever
+#   the analysis says. The very same answer carries ZERO_CONTRIBUTION_WARNING,
+#   which states the opposite in the next line of "warnings".
+FLAT_SIGMA_OBSERVED = "все применённые сигмы оказались одним числом {sigma:g}"
 NO_SIGMA_OBSERVED = "ни одна сигма не вошла в расчёт"
 
 # The one cause this module can actually see from here, and it is only said when
@@ -169,10 +191,13 @@ NONFINITE_RESULT_MESSAGE = (
     "сигмы в database/material_tolerance.json")
 
 # Below this share of fluxes among all the moles of the recipe, the unity basis
-# of the UMF rests on traces and the whole formula is numerically unstable. Real
-# glazes sit around 0.19-0.21 (measured on the reference recipes); the manganese
-# metallic of DATA_NOTES.md, section 2, where MnO2 falls outside every group of
-# oxides_classification(), sits at 0.0037 and blows the UMF up by ~117x.
+# of the UMF rests on traces and the whole formula is numerically unstable.
+# Measured over the 11 recipes of database/recipes.json: ten of them land between
+# 0.135 and 0.359, and the eleventh is the manganese metallic of DATA_NOTES.md,
+# section 2, where MnO2 falls outside every group of oxides_classification() - it
+# sits at 0.0037 and blows the UMF up by ~117x. The bound is set an order of
+# magnitude below the lowest real one and not at the edge of it: what is being
+# caught is a recipe of a different kind, not a slightly leaner glaze.
 LOW_FLUX_FRACTION = 0.02
 
 # Fluxes at or below this many moles per 100 g of recipe mean there is no unity
@@ -315,7 +340,15 @@ def _object_section(data, key, path, issues):
 
 def _report_dropped_sigmas(classes, materials, path, issues):
     """
-    Name every value of the file that the resolution will not use
+    Name the values of the file that a material could have taken and will not
+
+    Not quite "every value the resolution will not use", which is what this said
+    before it was run against one: a class whose value is junk but not oversized
+    ("clay": "abc", 0, -0.1) and which no material points at is dropped without a
+    word. Measured - a file with three such classes and one material pointing at
+    a class that is not there answers with the single "entries point at a class
+    without a sigma". Nothing takes such a class, so nothing is lost by it; the
+    docstring simply must not promise the wider sweep.
 
     Strictly a description of the CONTENT, and no conclusion drawn from it. Its
     predecessor, _usable_sigma_count(), added up the same numbers and decided
@@ -455,8 +488,14 @@ def material_sigma(material, tolerances):
         tolerances: dictionary as returned by load_tolerances()
 
     Returns:
-        dictionary {oxide: relative_sigma} covering the oxides the material
-        actually carries; empty for a material with an empty formula
+        dictionary {oxide: relative_sigma}, one entry per oxide of the formula
+        that can be perturbed at all; empty for a material with an empty formula
+
+        Not "every oxide the material carries": a cell that is zero, not finite
+        or not a number gets no sigma, because there is nothing to multiply by
+        (1 + sigma) there. On database/materials.json as it stands this makes no
+        difference - all 216 records carry numeric non-zero cells - so the three
+        skips are guards against a hand edit, not a described state of the file.
 
     Every fallback below is silent by design: this function has no channel to
     report through and is called once per material. What was dropped and why is
@@ -489,6 +528,11 @@ def material_sigma(material, tolerances):
             # That hole is not this module's to close - it belongs to a
             # validation of materials.json on the way in - and this guard is
             # deliberately left in place for whoever does close it.
+            #
+            # Which makes it exactly as covered as a direct call makes it: a line
+            # trace of the whole suite found this branch never executed once, and
+            # the test that reaches it now calls material_sigma() itself, on a
+            # formula cell of "много".
             continue
         if not math.isfinite(content_value):
             # materials.json is written by glazy_import and edited by hand too;
@@ -558,10 +602,13 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
           "error": None                   # a code when nothing could be computed
         }
 
-        The shares of "by_material" sum to 1.0, except when no material can move
-        the formula at all - then every share is 0.0 and ZERO_CONTRIBUTION_WARNING
-        is in "warnings". Every number of the result is finite: an overflow
-        anywhere is answered with the "nonfinite_result" error instead.
+        The shares of "by_material" sum to 1.0 whenever the total contribution
+        came out a positive finite number. When it did not, every share is 0.0
+        and "warnings" says which of the two happened: nothing in the recipe can
+        move the formula (ZERO_CONTRIBUTION_WARNING), or the total left the
+        finite range (NONFINITE_CONTRIBUTION_WARNING). Every number of the
+        result is finite: an overflow anywhere is answered with the
+        "nonfinite_result" error instead.
     """
     if tolerances is None:
         tolerances = load_tolerances()
@@ -770,9 +817,13 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
         # all resolved to one and the same number land here, and they land here
         # for the same reason: what the file contains was never the question,
         # what got used is. Sharing a class is not by itself enough and is not
-        # claimed to be: an override lifts one oxide of one material off the
-        # class number, and the shipped file does exactly that to B2O3 of ulexite
-        # and borax, so a recipe of either alone has TWO applied sigmas.
+        # claimed to be: on the shipped file the B2O3 of ulexite and of borax
+        # resolves to 0.10 against their class 0.08, and a recipe of either alone
+        # comes back with TWO applied sigmas and no warning (measured). What an
+        # override does NOT do is guaranteed: written equal to the class number,
+        # or onto an oxide the material does not carry, or onto one with no molar
+        # mass, it leaves the set of one untouched - all three measured on the
+        # same file.
         #
         # The log line is worded neutrally: the set is empty when nothing was
         # perturbed at all - an inf cell in a formula gets there - and "one sigma
@@ -857,10 +908,16 @@ def _material_shares(material_rows):
     """
     Normalize the contributions into shares, and say so when they do not add up
 
-    A total of zero means nothing in the recipe can move the formula at all:
-    either every material has an empty formula, or the only oxide the recipe
-    carries is a flux and so IS the unity basis by itself (a recipe of pure chalk
-    is always exactly CaO 1.0). Every share is then honestly zero and the "shares
+    A total of zero means nothing in the recipe can move the formula at all.
+    Through recipe_sensitivity() one thing produces it: the UMF came out with a
+    single oxide, a flux, which therefore IS the unity basis and stays 1.0
+    whatever the analysis says (a recipe of pure chalk is exactly CaO 1.0). Swept
+    over the 1-4 material combinations of the 19 inventory materials, the four
+    answers that land here are all of that shape - chalk, zinc oxide, zinc
+    carbonate, and the two zinc materials together. A recipe of nothing but empty
+    formulas does NOT reach this branch: calculate_recipe_composition() returns
+    an empty composition several steps earlier and the answer is the
+    "empty_composition" error. Every share is then honestly zero and the "shares
     sum to 1" invariant does not apply - which is worth saying out loud, because
     a consumer normalizing by that sum divides by zero.
 
