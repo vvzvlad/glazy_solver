@@ -6,6 +6,10 @@ name: Tests
 # and are what a PR actually needs — without this workflow a broken test only
 # surfaces after the merge into main.
 on:
+  # Manual re-run: without it a run that flaked on runner networking could only be
+  # retried by pushing an empty commit to the PR branch. Safe to expose here — this
+  # workflow touches no registry and no secrets, it only runs the test suite.
+  workflow_dispatch:
   pull_request:
     branches: [ "main" ]
 
