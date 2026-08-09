@@ -60,6 +60,7 @@ from solver_classic import (
     find_multiple_solutions,
 )
 from solver_iterative import find_best_recipe
+import quality_metrics as qm
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -266,8 +267,29 @@ def run_iterative(target_umf: Dict[str, float],
 
 def evaluate(reference: Dict[str, Any], engine: str, solution: Optional[Dict[str, Any]],
              elapsed: float, status: str,
-             available_materials: Sequence[Dict]) -> Dict[str, Any]:
-    """Turn one engine run into a row of the comparison table"""
+             available_materials: Sequence[Dict],
+             prices: Optional[Dict[str, float]] = None,
+             catalogue: Optional[Sequence[Dict]] = None) -> Dict[str, Any]:
+    """
+    Turn one engine run into a row of the comparison table
+
+    The quality half of the row comes from quality_metrics.solution_quality()
+    measured against the original recipe of the fixture, so that comparing the
+    engines compares the quality of the answers and not only their chemistry.
+    Three of its numbers reach the table - junk, rounding_drift and the absolute
+    cost - and each of them degrades to "-" rather than to a wrong number when
+    it cannot be computed: the cost in particular is None unless every material
+    of the recipe carries a price, since a partial sum would make the cheaper
+    engine look like the one whose materials happen to be priced.
+
+    "catalogue" is the WHOLE material database rather than the inventory, and
+    only the quality metrics use it. The original recipe of a fixture may name a
+    material we do not stock - reference recipe 10 needs MnO2 and nothing in the
+    inventory carries any - and scoring it against the inventory alone would
+    report that material as unknown and quietly drop it out of the comparison.
+    The UMF columns keep using the inventory records, so nothing already in the
+    report moves.
+    """
     row: Dict[str, Any] = {
         'id': reference['id'],
         'name': reference['name'],
@@ -288,6 +310,13 @@ def evaluate(reference: Dict[str, Any], engine: str, solution: Optional[Dict[str
     total_error, max_error, worst_oxide = oxide_errors(target_umf, actual_umf)
     composition = compare_composition(recipe, reference['recipe'])
 
+    quality = qm.solution_quality(
+        normalize_recipe(recipe),
+        normalize_recipe(reference['recipe']),
+        catalogue if catalogue is not None else available_materials,
+        prices=prices,
+    )
+
     row.update({
         'recipe': recipe,
         'actual_umf': actual_umf,
@@ -296,6 +325,13 @@ def evaluate(reference: Dict[str, Any], engine: str, solution: Optional[Dict[str
         'worst_oxide': worst_oxide,
         'umf_error': float(calculate_umf_error(target_umf, actual_umf)),
         'materials_count': len(recipe),
+        'junk': quality['junk']['solution'],
+        'junk_original': quality['junk']['original'],
+        'drift': quality['rounding_drift']['value'],
+        'cost': quality['cost']['cost_abs'],
+        'cost_original': quality['cost']['original'],
+        'cost_coverage': quality['cost']['coverage'],
+        'quality_failures': quality['failures'],
     })
     row.update(composition)
 
@@ -309,10 +345,11 @@ def evaluate(reference: Dict[str, Any], engine: str, solution: Optional[Dict[str
 TABLE_HEADERS = [
     '#', 'Recipe', 'Engine', 'Status',
     'sumErr', 'maxErr', 'worst', 'umfErr', 'native*',
-    'mats', 'same', 'extra', 'lost', 'dShare', 'time,s', 'iter',
+    'mats', 'same', 'extra', 'lost', 'dShare', 'junk', 'drift', 'cost', 'time,s', 'iter',
 ]
 
-TABLE_ALIGN = ['r', 'l', 'l', 'l', 'r', 'r', 'l', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r']
+TABLE_ALIGN = ['r', 'l', 'l', 'l', 'r', 'r', 'l', 'r', 'r', 'r', 'r', 'r', 'r', 'r',
+               'r', 'r', 'r', 'r', 'r']
 
 
 def _number(value: Optional[float], digits: int) -> str:
@@ -350,6 +387,9 @@ def build_cells(rows: Sequence[Dict[str, Any]]) -> List[List[str]]:
             _integer(row.get('extra')),
             _integer(row.get('lost')),
             _number(row.get('share_delta'), 2),
+            _integer(row.get('junk')),
+            _number(row.get('drift'), 4),
+            _number(row.get('cost'), 1),
             _number(row.get('seconds'), 3),
             _integer(row.get('iterations')),
         ])
@@ -391,10 +431,11 @@ def render_markdown_table(headers: Sequence[str], cells: Sequence[Sequence[str]]
 
 SUMMARY_HEADERS = [
     'Engine', 'solved', 'sumErr avg', 'sumErr med', 'maxErr avg', 'umfErr avg',
-    'umfErr med', 'mats avg', 'exact sets', 'dShare avg', 'total time,s',
+    'umfErr med', 'mats avg', 'exact sets', 'dShare avg',
+    'junk total', 'drift avg', 'cost avg', 'priced', 'quality ok', 'total time,s',
 ]
 
-SUMMARY_ALIGN = ['l', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r']
+SUMMARY_ALIGN = ['l', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r', 'r']
 
 
 def summarize(rows: Sequence[Dict[str, Any]], engine: str, total_recipes: int) -> Dict[str, Any]:
@@ -422,6 +463,14 @@ def summarize(rows: Sequence[Dict[str, Any]], engine: str, total_recipes: int) -
         'materials_avg': mean('materials_count'),
         'exact_sets': sum(1 for row in solved if row.get('exact_set')),
         'share_delta_avg': mean('share_delta'),
+        'junk_total': sum(row['junk'] for row in solved if row.get('junk') is not None),
+        'drift_avg': mean('drift'),
+        # Averaged over the priced recipes only, with their number reported
+        # next to it: an average over a different set of recipes for each engine
+        # is not a comparison, so the reader has to see how many there were
+        'cost_avg': mean('cost'),
+        'cost_priced': sum(1 for row in solved if row.get('cost') is not None),
+        'quality_ok': sum(1 for row in solved if not row.get('quality_failures')),
         'total_seconds': sum(row['seconds'] for row in engine_rows),
     }
 
@@ -440,6 +489,11 @@ def build_summary_cells(summaries: Sequence[Dict[str, Any]]) -> List[List[str]]:
             _number(item['materials_avg'], 1),
             str(item['exact_sets']),
             _number(item['share_delta_avg'], 2),
+            _integer(item['junk_total']),
+            _number(item['drift_avg'], 4),
+            _number(item['cost_avg'], 1),
+            f"{item['cost_priced']}/{item['solved']}",
+            f"{item['quality_ok']}/{item['solved']}",
             _number(item['total_seconds'], 3),
         ])
     return cells
@@ -535,6 +589,21 @@ def build_conclusions(summaries: Sequence[Dict[str, Any]],
     compare('speed, total run time', 'total_seconds', 3)
     compare('recipe size, mean material count', 'materials_avg', 1)
     compare('closeness to the original recipe, mean sum of share differences', 'share_delta_avg', 2)
+    compare('quality, total junk components (lighter than 2%)', 'junk_total', 0)
+    compare('quality, mean rounding drift', 'drift_avg', 4)
+
+    # The cost is only comparable when both engines priced the same number of
+    # recipes; otherwise the cheaper looking engine may simply be the one whose
+    # materials happen to be in prices.json
+    if classic['cost_priced'] == iterative['cost_priced'] and classic['cost_priced'] > 0:
+        compare('cost, mean roubles per kg of dry batch', 'cost_avg', 1)
+    else:
+        lines.append(f'- cost: not comparable, prices cover {classic["cost_priced"]} classic and '
+                     f'{iterative["cost_priced"]} iterative solutions out of '
+                     f'{classic["total"]} recipes')
+
+    lines.append(f'- quality metrics with no failure: classic {classic["quality_ok"]}/{classic["solved"]}, '
+                 f'iterative {iterative["quality_ok"]}/{iterative["solved"]}')
 
     lines.append(f'- exact material set recovered: classic {classic["exact_sets"]}, '
                  f'iterative {iterative["exact_sets"]} (out of {classic["total"]} recipes)')
@@ -577,6 +646,13 @@ COLUMN_LEGEND = [
     'from the original recipe',
     '`dShare` - sum of absolute differences of the material shares over the shared materials, original recipe '
     'normalized to 100',
+    '`junk` - components lighter than quality_metrics.JUNK_WEIGHT_PERCENT (2% of the batch): too light to be '
+    'worth a separate bag, and usually an artefact of the fit rather than chemistry',
+    '`drift` - quality_metrics rounding_drift: the UMF error the recipe picks up when every share is rounded to '
+    'the 0.5% grid of a studio scale. A diagnostic of "can this be weighed out", NOT a degeneracy detector '
+    '(TZ_SOLVER_V2.md 10.9)',
+    '`cost` - roubles per kg of dry batch from database/prices.json. Empty when a single material of the recipe '
+    'has no price: a partial sum would make the engine whose materials happen to be priced look cheaper',
     '`iter` - iterations spent by the iterative solver, meaningless for classic',
 ]
 
@@ -635,7 +711,9 @@ def build_report(rows: Sequence[Dict[str, Any]], summaries: Sequence[Dict[str, A
 # --------------------------------------------------------------------------
 
 def compare(recipes: Sequence[Dict[str, Any]], inventory: Sequence[str],
-            available_materials: Sequence[Dict], seed: int) -> List[Dict[str, Any]]:
+            available_materials: Sequence[Dict], seed: int,
+            prices: Optional[Dict[str, float]] = None,
+            catalogue: Optional[Sequence[Dict]] = None) -> List[Dict[str, Any]]:
     """Run both engines over every reference recipe"""
     rows: List[Dict[str, Any]] = []
 
@@ -643,10 +721,12 @@ def compare(recipes: Sequence[Dict[str, Any]], inventory: Sequence[str],
         target_umf = reference['umf']
 
         solution, elapsed, status = run_classic(target_umf, inventory, seed)
-        rows.append(evaluate(reference, ENGINE_CLASSIC, solution, elapsed, status, available_materials))
+        rows.append(evaluate(reference, ENGINE_CLASSIC, solution, elapsed, status,
+                             available_materials, prices, catalogue))
 
         solution, elapsed, status = run_iterative(target_umf, inventory)
-        rows.append(evaluate(reference, ENGINE_ITERATIVE, solution, elapsed, status, available_materials))
+        rows.append(evaluate(reference, ENGINE_ITERATIVE, solution, elapsed, status,
+                             available_materials, prices, catalogue))
 
     return rows
 
@@ -675,7 +755,11 @@ def main() -> None:
     all_materials = load_materials(only_inventory=False, priority=True)
     available_materials = filter_materials_by_inventory(all_materials, inventory)
 
-    rows = compare(selected, inventory, available_materials, args.seed)
+    # An empty or partial price list is the normal state of database/prices.json,
+    # and the cost column simply stays empty where it cannot be computed
+    prices = qm.load_prices()
+
+    rows = compare(selected, inventory, available_materials, args.seed, prices, all_materials)
 
     summaries = [
         summarize(rows, ENGINE_CLASSIC, len(selected)),

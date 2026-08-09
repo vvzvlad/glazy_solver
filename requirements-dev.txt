@@ -1,3 +1,10 @@
 -r requirements.txt
 
 pytest==9.0.3
+
+# Parser of the Glazy dump (gzipped YAML) for the corpus benchmark of stage 7.6.
+# Development only, by the explicit exception of TZ_SOLVER_V2.md 7.6: the
+# runtime requirements.txt must not grow a YAML dependency. It is imported
+# lazily, inside bench/corpus.py, and only when the dump is actually parsed - so
+# a suite run without GLAZY_CORPUS never touches it.
+pyyaml>=6.0
