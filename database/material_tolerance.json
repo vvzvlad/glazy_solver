@@ -1,0 +1,41 @@
+{
+  "default_relative": 0.05,
+  "classes": {
+    "pure_oxide": 0.01,
+    "carbonate": 0.01,
+    "silica": 0.02,
+    "feldspar": 0.02,
+    "frit": 0.03,
+    "clay": 0.05,
+    "hydrate_borate": 0.08,
+    "ash": 0.20
+  },
+  "materials": {
+    "Глинозем, Al203": {"class": "pure_oxide"},
+    "Оксид титана, TiO2": {"class": "pure_oxide"},
+    "Оксид цинка, ZnO": {"class": "pure_oxide"},
+    "Алюминиевая пудра": {"class": "pure_oxide"},
+
+    "Мел, CaCO3": {"class": "carbonate"},
+    "Доломит МИДОЛ": {"class": "carbonate"},
+    "Карбонат цинка, ZnCO3": {"class": "carbonate"},
+
+    "Кварцевая мука Кварцверке W12": {"class": "silica"},
+
+    "Нефелин-сиенит VR13": {"class": "feldspar"},
+    "Полевой шпат FFF": {"class": "feldspar"},
+
+    "Фритта 100 (Рускерамика)": {"class": "frit"},
+
+    "Каолин КЖФ-1": {"class": "clay"},
+    "Бентонит": {"class": "clay"},
+    "Тальк Онотский": {"class": "clay"},
+    "Волластонит МИВОЛЛ": {"class": "clay"},
+
+    "Улексит (Химпэк)": {"class": "hydrate_borate", "oxides": {"B2O3": 0.10}},
+    "Бура, Na2O 2 B2O3 10 H2O": {"class": "hydrate_borate", "oxides": {"B2O3": 0.10}},
+
+    "Древесная зола": {"class": "ash"},
+    "Костная зола": {"class": "ash"}
+  }
+}

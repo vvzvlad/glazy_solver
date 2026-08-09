@@ -152,12 +152,18 @@ def calc_error(umf, target_umf):
     
     return data, stats
 
-def weights_to_umf(weight_composition):
+def weights_to_umf(weight_composition, round_digits=3):
     """
     Converts weight fractions to UMF (Unity Molecular Formula)
 
     Args:
         weight_composition: dictionary {oxide: weight_fraction}
+        round_digits: number of decimals the result is rounded to, 3 by default
+            (the readable form every existing caller expects). Pass None to get
+            the raw values: rounding to 3 decimals quantizes the result with a
+            step of 0.001, which destroys any response smaller than that -
+            sensitivity.py compares formulas that differ by a fraction of a
+            percent and needs the unrounded numbers.
 
     Returns:
         dictionary {oxide: umf_value}
@@ -186,10 +192,11 @@ def weights_to_umf(weight_composition):
         unity_factor = 1 / sum_fluxes
     
     umf = {oxide: amount * unity_factor for oxide, amount in molar_amounts.items()}
-    
+
     # Round values for readability
-    umf = {oxide: round(value, 3) for oxide, value in umf.items()}
-    
+    if round_digits is not None:
+        umf = {oxide: round(value, round_digits) for oxide, value in umf.items()}
+
     return umf
 
 def umf_to_weights(umf):

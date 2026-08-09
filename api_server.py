@@ -19,6 +19,7 @@ from solver_iterative import find_best_recipe
 from common import (weights_to_umf, umf_to_weights, load_materials, make_json_safe,
                     resolve_inventory, filter_materials_by_inventory)
 from glazy_import import GlazyImportError, parse_recipe_id, fetch_recipe, build_import_result
+from sensitivity import recipe_sensitivity
 
 # Logging setup
 logging.basicConfig(
@@ -237,6 +238,86 @@ def solve_recipe():
     except Exception as e:
         logger.exception(f"server_error: {str(e)}")
         return jsonify({"error": "server_error", "message": str(e)}), 500
+
+# HTTP status for a recipe that is syntactically fine but cannot be analysed -
+# the same code /api/glazy_import already uses for a recipe without an analysis
+SENSITIVITY_UNPROCESSABLE_ERRORS = ('no_fluxes', 'no_known_materials', 'empty_composition', 'empty_umf')
+
+
+@app.route('/api/sensitivity', methods=['POST'])
+def sensitivity():
+    """
+    API endpoint that reports what a recipe rests on: how much the uncertainty
+    of the material analyses moves its UMF, and which material moves it most
+
+    This is a separate endpoint and not a block of /api/solve on purpose: the
+    computation is optional and costs a full UMF recalculation per (material,
+    oxide) pair, so a caller that does not need it should not pay for it.
+
+    POST JSON parameters:
+    {
+        "recipe": {"Нефелин-сиенит VR13": 30.2, ...},  // required, weight percent
+        "inventory": ["Material1", ...]  // optional. Restricts the lookup of the
+                                         // recipe material names to that list.
+                                         // Omitted or null means the WHOLE
+                                         // database: a recipe names its own
+                                         // materials, there is nothing to search
+                                         // for, and silently dropping a material
+                                         // that is merely out of stock would
+                                         // change the formula being analysed.
+    }
+
+    Returns:
+    {
+        "umf": {"SiO2": 3.151, ...},          // base formula of the recipe
+        "per_oxide": [                        // sorted by relative spread, desc
+            {"oxide": "B2O3", "value": 0.266, "sigma": 0.02779, "relative": 0.1044},
+            ...
+        ],
+        "by_material": [                      // sorted by share, desc
+            {"material": "Улексит (Химпэк)", "share": 0.7004, "via_oxide": "B2O3",
+             "sigma_used": 0.1, "affects": ["B2O3", "MgO"]},
+            ...
+        ],
+        "warnings": ["..."],
+        "error": null
+    }
+    """
+    try:
+        data = request.get_json(silent=True)
+
+        recipe = data.get('recipe') if isinstance(data, dict) else None
+
+        if not isinstance(recipe, dict) or not recipe:
+            logger.warning("sensitivity_missing_recipe parameter in request")
+            return jsonify({
+                "error": "missing_recipe",
+                "message": "recipe parameter is required and must be a non-empty object"
+            }), 400
+
+        inventory_data = data.get('inventory', None)
+
+        materials = load_materials(only_inventory=False, priority=True)
+        if inventory_data is not None:
+            materials = filter_materials_by_inventory(materials, resolve_inventory(inventory_data))
+
+        logger.info(f"sensitivity requested for {len(recipe)} materials, inventory_size={len(inventory_data) if inventory_data is not None else 'all'}")
+
+        result = recipe_sensitivity(recipe, materials)
+
+        if result.get('error'):
+            logger.warning(f"sensitivity_failed: {result['error']}: {result.get('message')}")
+            status = 422 if result['error'] in SENSITIVITY_UNPROCESSABLE_ERRORS else 400
+            return jsonify({"error": result['error'], "message": result.get('message', ''),
+                            "warnings": result.get('warnings', [])}), status
+
+        logger.info(f"sensitivity done: {len(result['by_material'])} materials, {len(result['per_oxide'])} oxides, warnings={len(result['warnings'])}")
+        return jsonify(make_json_safe(result))
+
+    except Exception as e:
+        logger.exception(f"sensitivity_error: {str(e)}")
+        return jsonify({"error": "server_error", "message": str(e)}), 500
+
 
 @app.route('/api/molar_masses', methods=['GET'])
 def get_molar_masses():

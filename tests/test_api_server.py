@@ -137,5 +137,73 @@ class TestSolveEndpointSolverSelection(unittest.TestCase):
         self.assertEqual(response.get_json()['error'], 'unknown_solver')
 
 
+class TestSensitivityEndpoint(unittest.TestCase):
+    """POST /api/sensitivity - the math itself lives in tests/test_sensitivity.py"""
+
+    # The reference "Прозрачная глазурь △6"
+    RECIPE = {
+        "Нефелин-сиенит VR13": 30,
+        "Кварцевая мука Кварцверке W12": 20,
+        "Волластонит МИВОЛЛ": 20,
+        "Улексит (Химпэк)": 15,
+        "Каолин КЖФ-1": 15,
+    }
+
+    def setUp(self):
+        api_server.app.config['TESTING'] = True
+        self.client = api_server.app.test_client()
+
+    def test_returns_the_ranking(self):
+        response = self.client.post('/api/sensitivity', json={"recipe": self.RECIPE})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        for key in ('umf', 'per_oxide', 'by_material', 'warnings', 'error'):
+            self.assertIn(key, body)
+        self.assertIsNone(body['error'])
+        self.assertEqual(body['by_material'][0]['material'], "Улексит (Химпэк)")
+
+    def test_missing_recipe_returns_400(self):
+        response = self.client.post('/api/sensitivity', json={})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()['error'], 'missing_recipe')
+
+    def test_recipe_of_the_wrong_type_returns_400(self):
+        response = self.client.post('/api/sensitivity', json={"recipe": ["Улексит (Химпэк)"]})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()['error'], 'missing_recipe')
+
+    def test_fluxless_recipe_returns_422(self):
+        response = self.client.post('/api/sensitivity', json={
+            "recipe": {"Кварцевая мука Кварцверке W12": 60, "Глинозем, Al203": 40}})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.get_json()['error'], 'no_fluxes')
+
+    def test_material_outside_an_explicit_inventory_is_reported(self):
+        response = self.client.post('/api/sensitivity', json={
+            "recipe": self.RECIPE,
+            "inventory": ["Нефелин-сиенит VR13", "Кварцевая мука Кварцверке W12"]})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual({row['material'] for row in body['by_material']},
+                         {"Нефелин-сиенит VR13", "Кварцевая мука Кварцверке W12"})
+        self.assertTrue(body['warnings'])
+
+    def test_without_an_inventory_the_whole_database_is_searched(self):
+        """A recipe names its own materials; being out of stock is not a reason to drop one"""
+        recipe = {"Оксид марганца": 50, "Каолин КЖФ-1": 30, "Кварцевая мука Кварцверке W12": 20}
+
+        response = self.client.post('/api/sensitivity', json={"recipe": recipe})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        # "Оксид марганца" is inInventory: false and is still analysed
+        self.assertIn("Оксид марганца", {row['material'] for row in body['by_material']})
+
+
 if __name__ == '__main__':
     unittest.main()
