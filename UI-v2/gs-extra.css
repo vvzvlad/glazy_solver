@@ -1,0 +1,69 @@
+/* Rules for the components added in the second pass: oxide-as-axis buttons,
+   the two-variable projection, the contribution matrix, interval pre-checks,
+   and the "typed by you vs computed by the solver" legend. */
+
+.gs-ox-btn {
+  border: 0; background: transparent; padding: 0; text-align: left; cursor: pointer;
+  color: var(--ink); font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px;
+}
+.gs-ox-btn:hover { color: var(--ac); }
+.gs-ox-btn.is-ax-x::after { content: ' \2192x'; color: var(--ac); font-size: 9px; }
+.gs-ox-btn.is-ax-y::after { content: ' \2192y'; color: var(--ac); font-size: 9px; }
+
+.gs-colhead.is-iv, .gs-orow.is-iv { grid-template-columns: 46px 42px 42px 1fr 74px 16px; }
+.gs-colhead.is-plain, .gs-orow.is-plain { grid-template-columns: 48px 54px 18px; }
+.gs-colhead.is-iv span:nth-child(5) { text-align: right; }
+.gs-ach-num { white-space: nowrap; font-size: 9.5px; }
+
+.gs-ogroup-sum.is-off { color: var(--warn); }
+
+/* A zero deviation must still read as "measured and fine", not as an empty
+   column, so the fill keeps a minimum visible width. */
+.gs-dbar-fill { min-width: 2px; }
+
+/* Row-level destructive affordances stay out of the way until the row is
+   hovered - a dozen always-on crosses is pure noise in a dense table. */
+.gs-orow .gs-x, .gs-rrow .gs-x { opacity: 0; transition: opacity 0.1s ease; }
+.gs-orow:hover .gs-x, .gs-rrow:hover .gs-x, .gs-x:focus-visible { opacity: 1; }
+
+/* The proportion bar is normalised to the largest component, so it must not be
+   full-bleed: at full width it reads as "100%" instead of "the biggest one". */
+.gs-rrow { grid-template-columns: minmax(0, 1fr) minmax(80px, 180px) 46px 40px 18px; }
+.gs-rdelta.up, .gs-rdelta.down { color: var(--ink2); }
+.gs-toolbar .gs-check-l { white-space: nowrap; }
+
+.gs-inputlegend { display: flex; gap: 12px; margin: 8px 0 0; font-size: 10px; color: var(--ink3); }
+.gs-inputlegend span { display: inline-flex; align-items: center; gap: 4px; }
+.gs-lg-b { background: var(--ac); }
+.gs-lg-r { background: var(--ln2); }
+
+.gs-chart { margin-top: 10px; }
+.gs-chart-hd { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding-bottom: 2px; }
+.gs-chart-ax { font-size: 9.5px; color: var(--ink3); }
+.gs-region { fill: var(--ok-w); stroke: var(--ok); stroke-width: 1.2; }
+.gs-reqbox { fill: none; stroke: var(--ac); stroke-width: 1.5; stroke-dasharray: 4 3; }
+
+.gs-rrow.is-subtotal { border-top: 1px solid var(--ln); border-bottom: 1px solid var(--ln); color: var(--ink2); font-weight: 500; }
+.gs-ref-row.is-total { border-top: 1px solid var(--ln); color: var(--ink); font-weight: 500; margin-top: 2px; padding-top: 2px; }
+
+.gs-matrix-wrap { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--ln); overflow-x: auto; }
+.gs-matrix { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+.gs-matrix th, .gs-matrix td { padding: 2px 5px; text-align: right; white-space: nowrap; }
+.gs-matrix thead th { font: 500 9px 'IBM Plex Mono', monospace; color: var(--ink3); border-bottom: 1px solid var(--ln); }
+.gs-matrix td { font-family: 'IBM Plex Mono', monospace; }
+.gs-matrix .gs-matrix-name { text-align: left; max-width: 210px; font-family: 'IBM Plex Sans', sans-serif; }
+.gs-matrix .gs-matrix-name .gs-rname { display: inline-block; max-width: 182px; vertical-align: middle; }
+.gs-matrix tbody tr:hover { background: var(--sf2); }
+.gs-matrix tr.is-off { color: var(--ink3); text-decoration: line-through; }
+.gs-matrix-total td { border-top: 1px solid var(--ln); font-weight: 500; color: var(--ink2); }
+.gs-phantom { border: 0; background: transparent; color: var(--ink3); cursor: pointer; font-size: 8px; padding: 0 5px 0 0; vertical-align: middle; }
+.gs-phantom:hover { color: var(--ac); }
+
+.gs-issue { font-size: 11.5px; margin-top: 6px; color: var(--ink); }
+.gs-warnbox { border: 1px solid var(--ln); background: var(--sf); padding: 8px 10px; font-size: 11.5px; color: var(--ink2); }
+.gs-warnbox b { color: var(--ink); }
+
+.gs-iv-chip.is-act { cursor: pointer; background: var(--sf); font-family: 'IBM Plex Sans', sans-serif; }
+.gs-iv-chip.is-act:hover { border-color: var(--bad); color: var(--bad); }
+
+.gs-cmp .is-best { font-weight: 600; color: var(--ok); }

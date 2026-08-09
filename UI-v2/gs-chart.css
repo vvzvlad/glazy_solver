@@ -1,0 +1,13 @@
+/* The projection caption explains what the chart is NOT showing, which for a
+   single-target tool is most of the time. */
+.gs-chart-note {
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--ink3);
+}
+.gs-chart-note b { color: var(--ink2); font-weight: 500; }
+
+/* Two ratios now that the flux sum moved into the group header, where it can
+   also act as the "normalise" button instead of just scolding. */
+.gs-ratios { grid-template-columns: repeat(2, 1fr); }
