@@ -173,6 +173,7 @@ curl -X POST http://localhost:5000/api/solve \
       "K2O": 7.57
     },
     "inInventory": true,
+    "isWaterSoluble": false,
     "priority": 2,
     "description": null,
     "id": 216,
@@ -186,6 +187,7 @@ curl -X POST http://localhost:5000/api/solve \
 - `name`: имя материала, оно же ключ в рецепте
 - `formula`: оксидный состав материала в весовых процентах
 - `inInventory`: признак наличия материала в инвентаре по умолчанию
+- `isWaterSoluble`: материал растворяется в воде замеса (27 материалов из 216: бура, сода, поташ, силикат натрия, сульфаты и хлориды, вода, КМЦ). На расчёт **пока не влияет**: поле перенесено из исходной библиотеки как данные, решатель его не читает
 - `priority`: приоритет материала (меньше число — выше приоритет). Материалам, которых нет в `priorities.json`, проставляется 100
 
 **Пример запроса с cURL:**
@@ -232,21 +234,31 @@ curl -X GET http://localhost:5000/api/molar_masses
 Ключ `unity_presets` — именованные конвенции флюсов: плоские списки оксидов,
 которыми `common.flux_oxides(convention)` подменяет базис, собранный по группам.
 `legacy` — наша конвенция (ceramicscalc-2018), совпадает по составу с `unity`;
-`glazy` — конвенция современного Glazy, без `FeO/CoO/NiO/CuO`. На рецепте с
+`glazy` — конвенция современного Glazy, без `FeO/CoO/NiO/CuO`; `segerlab` —
+конвенция segerlab.ru, откуда взяты наши материалы и рецепты, она дополнительно
+считает флюсами `Fe2O3`, `SnO2`, `Cu2O`, `CdO` и `V2O5`. На рецепте с
 колорантом знаменатель unity у них разный, и весь UMF съезжает целиком, поэтому
-сравнивать наши числа с опубликованными в Glazy можно только через `glazy`.
+сравнивать наши числа с опубликованными в Glazy можно только через `glazy`, а с
+опубликованными в SegerLab — только через `segerlab` (весь их постоянный
+множитель 1.0022 — это `Fe2O3` в знаменателе).
+
+`MnO2` лежит в `ro`, то есть входит в unity: два материала базы — это почти
+чистый `MnO2`, и вне базиса сумма флюсов марганцевой глазури схлопывается до
+следов из каолина, раздувая всю формулу в ~117 раз. Подробности — в докстринге
+`common.flux_oxides()`.
 
 **Output:**
 ```json
 {
   "r2o": ["K2O", "Na2O", "Li2O"],
-  "ro": ["MgO", "CaO", "SrO", "BaO", "ZnO", "PbO", "MnO", "FeO", "CoO", "NiO", "CuO"],
+  "ro": ["MgO", "CaO", "SrO", "BaO", "ZnO", "PbO", "MnO", "MnO2", "FeO", "CoO", "NiO", "CuO"],
   "r2o3": ["Al2O3", "B2O3", "Fe2O3", "Cr2O3", "Mn2O3"],
-  "ro2": ["SiO2", "TiO2", "ZrO2", "SnO2", "GeO2", "MnO2"],
+  "ro2": ["SiO2", "TiO2", "ZrO2", "SnO2", "GeO2"],
   "unity": ["r2o", "ro"],
   "unity_presets": {
-    "legacy": ["Na2O", "K2O", "Li2O", "MgO", "CaO", "SrO", "BaO", "ZnO", "PbO", "MnO", "FeO", "CoO", "NiO", "CuO"],
-    "glazy": ["Na2O", "K2O", "Li2O", "PbO", "SrO", "BaO", "ZnO", "CaO", "MgO", "MnO"]
+    "legacy": ["Na2O", "K2O", "Li2O", "MgO", "CaO", "SrO", "BaO", "ZnO", "PbO", "MnO", "MnO2", "FeO", "CoO", "NiO", "CuO"],
+    "glazy": ["Na2O", "K2O", "Li2O", "PbO", "SrO", "BaO", "ZnO", "CaO", "MgO", "MnO"],
+    "segerlab": ["Na2O", "K2O", "Li2O", "CuO", "Cu2O", "SnO2", "MgO", "CaO", "SrO", "BaO", "ZnO", "PbO", "CdO", "MnO", "MnO2", "FeO", "Fe2O3", "CoO", "V2O5"]
   }
 }
 ```

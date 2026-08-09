@@ -76,9 +76,9 @@ let use_min_materials = true; // Добавляем переменную для 
 // Filled from GET /api/oxide_groups on init(); the literal below is the
 // fallback used when that endpoint is unreachable.
 let oxide_groups = {
-    'r2o_ro': ['K2O', 'Na2O', 'Li2O', 'MgO', 'CaO', 'SrO', 'BaO', 'ZnO', 'PbO', 'CdO', 'CuO', 'FeO', 'MnO'],
+    'r2o_ro': ['K2O', 'Na2O', 'Li2O', 'MgO', 'CaO', 'SrO', 'BaO', 'ZnO', 'PbO', 'CdO', 'CuO', 'FeO', 'MnO', 'MnO2'],
     'r2o3': ['Al2O3', 'B2O3', 'Fe2O3', 'Cr2O3', 'Bi2O3', 'La2O3', 'Y2O3', 'P2O5', 'V2O5'],
-    'ro2': ['SiO2', 'TiO2', 'ZrO2', 'SnO2', 'MnO2', 'GeO2']
+    'ro2': ['SiO2', 'TiO2', 'ZrO2', 'SnO2', 'GeO2']
 };
 
 // DOM Elements

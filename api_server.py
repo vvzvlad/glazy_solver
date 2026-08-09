@@ -287,7 +287,7 @@ def get_oxide_groups():
         "r2o3": ["Al2O3", ...],
         "ro2": ["SiO2", ...],
         "unity": ["r2o", "ro"],
-        "unity_presets": {"legacy": [...], "glazy": [...]}
+        "unity_presets": {"legacy": [...], "glazy": [...], "segerlab": [...]}
     }
     """
     try:

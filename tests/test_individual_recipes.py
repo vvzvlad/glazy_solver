@@ -433,16 +433,25 @@ class TestIndividualRecipes(unittest.TestCase):
         reference = self.get_reference("recipe_10_manganese_metallic_glaze")
         name = reference["name"]
 
-        # Skipped, not solved: the target UMF needs MnO2 ~115, while no material in
-        # database/materials.json carries MnO2 at all, so nothing in the inventory can
-        # supply it and the recipe is unreachable. Missing raw material, not a broken
-        # solver, hence a skip rather than a failure. Re-enable once an MnO2 source is
-        # added to the material database and flagged as inInventory.
+        # Skipped, not solved: the target needs MnO2 ~0.99 and the INVENTORY has no
+        # source of it. Two materials of database/materials.json do carry MnO2 -
+        # "Оксид марганца" (MnO2 86.9) and "Карбонат марганца" (MnO2 61.62) - but
+        # neither is flagged inInventory, so the solver has nothing to build the
+        # manganese with. Missing raw material, not a broken solver, hence a skip
+        # rather than a failure.
+        #
+        # The target itself is ordinary now: it used to read MnO2 ~115 / SiO2 ~131,
+        # which was an artefact of MnO2 sitting outside the unity basis and not a
+        # property of the glaze. With MnO2 classified as a flux the numbers are
+        # plain, so this recipe becomes solvable the moment a manganese source is
+        # flagged inInventory - re-enable the test then, no other change needed.
         print(f"\n\n\n\n\n=== тестирование рецепта: {name} ===")
-        print("тест пропущен: марганцевый металлик имеет экстремальные значения MnO2, решение не ожидается")
+        print("тест пропущен: в инвентаре нет источника марганца, решение не ожидается")
         self.skipTest(
-            f"'{name}': no material in the inventory supplies MnO2, while the target UMF "
-            "requires MnO2 ~115, so the recipe is unsolvable from the available raw materials"
+            f"'{name}': the target UMF needs MnO2 ~0.99 and no material flagged "
+            "inInventory carries MnO2 - the two that do (\"Оксид марганца\", "
+            "\"Карбонат марганца\") are out of the inventory, so the recipe is "
+            "unsolvable from the available raw materials"
         )
 
     def test_recipe_11_glupe_glaze(self):

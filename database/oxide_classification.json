@@ -1,11 +1,12 @@
 {
   "r2o": ["K2O", "Na2O", "Li2O"],
-  "ro": ["MgO", "CaO", "SrO", "BaO", "ZnO", "PbO", "MnO", "FeO", "CoO", "NiO", "CuO"],
+  "ro": ["MgO", "CaO", "SrO", "BaO", "ZnO", "PbO", "MnO", "MnO2", "FeO", "CoO", "NiO", "CuO"],
   "r2o3": ["Al2O3", "B2O3", "Fe2O3", "Cr2O3", "Mn2O3"],
-  "ro2": ["SiO2", "TiO2", "ZrO2", "SnO2", "GeO2", "MnO2"],
+  "ro2": ["SiO2", "TiO2", "ZrO2", "SnO2", "GeO2"],
   "unity": ["r2o", "ro"],
   "unity_presets": {
-    "legacy": ["Na2O", "K2O", "Li2O", "MgO", "CaO", "SrO", "BaO", "ZnO", "PbO", "MnO", "FeO", "CoO", "NiO", "CuO"],
-    "glazy": ["Na2O", "K2O", "Li2O", "PbO", "SrO", "BaO", "ZnO", "CaO", "MgO", "MnO"]
+    "legacy": ["Na2O", "K2O", "Li2O", "MgO", "CaO", "SrO", "BaO", "ZnO", "PbO", "MnO", "MnO2", "FeO", "CoO", "NiO", "CuO"],
+    "glazy": ["Na2O", "K2O", "Li2O", "PbO", "SrO", "BaO", "ZnO", "CaO", "MgO", "MnO"],
+    "segerlab": ["Na2O", "K2O", "Li2O", "CuO", "Cu2O", "SnO2", "MgO", "CaO", "SrO", "BaO", "ZnO", "PbO", "CdO", "MnO", "MnO2", "FeO", "Fe2O3", "CoO", "V2O5"]
   }
 }

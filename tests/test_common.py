@@ -366,11 +366,50 @@ class TestOxideClassificationIntegrity(unittest.TestCase):
 class TestFluxConventions(unittest.TestCase):
     """Named flux conventions: which oxides land in the unity denominator"""
 
-    def test_the_shipped_file_defines_both_conventions(self):
+    def test_the_shipped_file_defines_every_convention(self):
         classification = read_classification_file()
 
         self.assertIn('unity_presets', classification)
-        self.assertEqual(sorted(classification['unity_presets']), ['glazy', 'legacy'])
+        self.assertEqual(sorted(classification['unity_presets']),
+                         ['glazy', 'legacy', 'segerlab'])
+
+    def test_the_segerlab_preset_is_the_upstream_flux_basis(self):
+        """The preset is a transcription of segerlab.ru's Alcali + AEarth roles.
+
+        Pinned as a literal list rather than derived: the point of the preset is
+        that it does NOT follow our groups, so anything that recomputes it from
+        our classification would defeat it. If upstream ever regroups an oxide,
+        this test is where the difference has to be entered by hand.
+        """
+        self.assertEqual(
+            sorted(flux_oxides('segerlab')),
+            sorted(['Na2O', 'K2O', 'Li2O', 'CuO', 'Cu2O', 'SnO2',
+                    'MgO', 'CaO', 'SrO', 'BaO', 'ZnO', 'PbO', 'CdO',
+                    'MnO', 'MnO2', 'FeO', 'Fe2O3', 'CoO', 'V2O5']))
+
+        # The one difference that moves every number: Fe2O3 is a flux there and
+        # a stabilizer here, which is the whole 1.0022 factor between the two
+        self.assertIn('Fe2O3', flux_oxides('segerlab'))
+        self.assertNotIn('Fe2O3', flux_oxides())
+
+    def test_manganese_dioxide_is_a_flux(self):
+        """MnO2 belongs to the unity basis, not to RO2.
+
+        Two materials of the database are almost pure MnO2. With MnO2 outside
+        the basis the flux sum of a manganese glaze collapses to the traces its
+        clay brings, and the UMF inflates by two orders of magnitude - so this
+        is a numeric guarantee, not a taxonomy preference. See flux_oxides().
+        """
+        classification = read_classification_file()
+
+        self.assertIn('MnO2', classification['ro'])
+        self.assertNotIn('MnO2', classification['ro2'])
+        self.assertIn('MnO2', flux_oxides())
+
+        # A manganese glaze: the flux sum must be carried by the MnO2 itself
+        composition = {"MnO2": 43.45, "SiO2": 33.4, "Al2O3": 10.8, "K2O": 0.3}
+        umf = weights_to_umf(composition)
+        self.assertAlmostEqual(umf['MnO2'], 1.0, delta=0.02)
 
     def test_unity_cannot_name_the_presets_block_as_a_group(self):
         """Otherwise the basis would expand into convention names, not oxides"""
@@ -664,6 +703,53 @@ class TestInventoryHelpers(unittest.TestCase):
 
         self.assertEqual(len(filter_materials_with_formula(inventory_materials)),
                          len(inventory_materials))
+
+
+class TestWaterSolubleFlag(unittest.TestCase):
+    """The isWaterSoluble flag of database/materials.json
+
+    Carried over from the upstream library the database is a dump of. It is
+    data only for now - nothing in the solvers reads it yet - which is exactly
+    why it needs a test: a field no code touches is a field the next dump
+    regeneration drops without anything going red.
+    """
+
+    def test_every_material_carries_the_flag_as_a_boolean(self):
+        materials = load_materials(only_inventory=False, priority=False)
+
+        self.assertEqual(len(materials), 216)
+        missing = [m['name'] for m in materials if 'isWaterSoluble' not in m]
+        self.assertEqual(missing, [])
+
+        not_boolean = [m['name'] for m in materials
+                       if not isinstance(m['isWaterSoluble'], bool)]
+        self.assertEqual(not_boolean, [])
+
+    def test_exactly_twenty_seven_materials_are_water_soluble(self):
+        """The count upstream publishes; a drift means the dump was regenerated badly"""
+        materials = load_materials(only_inventory=False, priority=False)
+
+        soluble = [m['name'] for m in materials if m['isWaterSoluble']]
+        self.assertEqual(len(soluble), 27)
+
+        # Spot checks in both directions: the classic soluble raw materials are
+        # flagged and an ordinary insoluble one is not
+        for name in ["Бура, Na2O 2 B2O3 10 H2O", "Сода кольцинированная, Na2CO3",
+                     "Поташ (Карбонат калия)", "Силикат натрия", "Вода"]:
+            self.assertIn(name, soluble)
+        self.assertNotIn("Каолин КЖФ-1", soluble)
+
+    def test_the_flag_survives_the_inventory_load_path(self):
+        """load_materials() adds priority and filters; it must not drop fields"""
+        materials = load_materials(only_inventory=True, priority=True)
+
+        self.assertGreater(len(materials), 0)
+        self.assertTrue(all('isWaterSoluble' in m for m in materials))
+
+        # Borax is both in the inventory and water soluble - the one record that
+        # makes this path meaningful
+        borax = next(m for m in materials if m['name'] == "Бура, Na2O 2 B2O3 10 H2O")
+        self.assertIs(borax['isWaterSoluble'], True)
 
 
 class TestMaterialPriorities(unittest.TestCase):

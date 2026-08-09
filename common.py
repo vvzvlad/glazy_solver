@@ -263,7 +263,27 @@ def flux_oxides(convention=None):
     carrying a colorant the two conventions inflate the unity denominator
     differently and every oxide of the resulting UMF moves at once, so a test
     comparing against published Glazy numbers has to ask for "glazy" explicitly.
-    The named alternatives live in the "unity_presets" key of the same file.
+    The named alternatives live in the "unity_presets" key of the same file:
+    "legacy" is the default basis written out flat, "glazy" is the Glazy
+    convention, and "segerlab" is the convention of segerlab.ru - the source our
+    material and recipe data comes from - which additionally counts Fe2O3, SnO2,
+    Cu2O, CdO and V2O5 as fluxes. Fe2O3 is the whole of the constant 1.0022
+    factor between their published numbers and ours; the preset exists so their
+    formulas can be reproduced digit for digit when cross-checking, not because
+    the default changes.
+
+    MnO2 lives in "ro" and therefore in the basis, which is a deliberate call
+    and not the structural reading of the formula: the manganese colorant oxides
+    act as divalent fluxes in the melt - MnO2 gives up its oxygen well below
+    cone 6 and enters the glass as MnO - upstream classifies it as "AEarth" (a
+    flux), and the alternative is not merely a different opinion but a wrong
+    number.
+    Two materials of the database are almost pure MnO2, and with MnO2 outside
+    the basis the flux sum of a manganese glaze collapses to the trace K2O and
+    CaO of its kaolin (~0.0086) - the reference "Марганцевый металлик △6" then
+    comes out as MnO2 115.5 / SiO2 131.2 instead of MnO2 0.99 / SiO2 1.13, off
+    by two orders of magnitude. Grouping it with the other RO fluxes is what
+    the JSON cannot say for itself, so it is said here.
 
     An oxide is listed once even if it belongs to several unity groups: the
     callers sum over the returned list, and a duplicate would count that oxide
