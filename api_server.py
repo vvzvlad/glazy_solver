@@ -11,6 +11,7 @@
 
 import json
 import logging
+import math
 import os
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -19,6 +20,8 @@ from solver_iterative import find_best_recipe
 from common import (weights_to_umf, umf_to_weights, load_materials, make_json_safe,
                     resolve_inventory, filter_materials_by_inventory,
                     load_oxide_classification)
+from feasibility import (DEFAULT_FEASIBILITY_TOL, achievable_ranges, check_feasibility,
+                         matrix_diagnostics)
 from glazy_import import GlazyImportError, parse_recipe_id, fetch_recipe, build_import_result
 from sensitivity import recipe_sensitivity
 
@@ -260,6 +263,129 @@ def solve_recipe():
     except Exception as e:
         logger.exception(f"server_error: {str(e)}")
         return jsonify({"error": "server_error", "message": str(e)}), 500
+
+# A feasibility request that is syntactically fine but has nothing to compute
+# from: no usable oxide in the target, a target with no flux at all (there is no
+# unity to normalize by), or an inventory in which no material carries an oxide
+# analysis. The client can fix all three, so they are 422 and not 500.
+FEASIBILITY_UNPROCESSABLE_ERRORS = ('empty_target', 'no_target_fluxes',
+                                    'no_usable_materials', 'no_fluxes')
+
+
+@app.route('/api/feasibility', methods=['POST'])
+def feasibility():
+    """
+    API endpoint that answers whether a target UMF is reachable from a set of
+    materials at all, which oxide is to blame when it is not, and how far each
+    oxide and each material can move while the target still holds
+
+    No solver runs here. The verdict is a property of the target and the
+    inventory, not of a recipe, so the interface can show it while the user is
+    still typing the formula - before any recipe exists.
+
+    This is a separate endpoint and NOT a block added to the answer of
+    /api/solve, although section 2.4 of TZ_SOLVER_V2.md asked for the latter.
+    That response is a bare list of solutions, two interfaces read it (the live
+    UI/ and the UI-v2/ prototype), and wrapping it in an object to save one
+    round trip would break the one that works to help the one that is not wired
+    up yet.
+
+    POST JSON parameters:
+    {
+        "umf": {"SiO2": 3.15, "Al2O3": 0.38, "CaO": 0.72, ...},  // required
+        "inventory": ["Material1", ...],   // optional, null = the default stock
+        "passengers": {"Fe2O3": 0.03},     // optional, {oxide: upper bound}
+        "material_constraints": {"Улексит (Химпэк)": [0, 20]},  // optional, weight %
+        "tol": 0.05                        // optional, the verdict line
+    }
+
+    "inventory": null means the DEFAULT INVENTORY (the materials flagged
+    inInventory), exactly as in /api/solve, and deliberately not what the same
+    word means in /api/sensitivity, where it means the whole database. The two
+    endpoints are asking different questions: sensitivity analyses a recipe that
+    already names its own materials, while this one asks what can be built from
+    the stock at hand - and answering it against 216 materials the user does not
+    own would be a verdict about someone else's shelf.
+
+    Returns the result of feasibility.check_feasibility plus:
+    {
+        "diagnostics": {"cond": 488.9, "ill_conditioned": false, "rank": 12,
+                        "n_oxides": 12},
+        "achievable_ranges": {"feasible": true,
+                              "oxide_ranges": {"SiO2": [2.99, 3.31], ...},
+                              "material_ranges": {"Каолин КЖФ-1": [0, 27.96], ...},
+                              "example_recipe": {...}, "lp_count": 63}
+    }
+
+    An unbounded end of a range is null ("as much as you like"), which is a real
+    answer and not a missing one: while pure quartz is in the inventory and
+    nothing caps SiO2, there is no largest SiO2.
+    """
+    try:
+        data = request.get_json(silent=True)
+
+        umf = data.get('umf') if isinstance(data, dict) else None
+        if not isinstance(umf, dict) or not umf:
+            logger.warning("feasibility_missing_umf parameter in request")
+            return jsonify({"error": "missing_umf",
+                            "message": "umf parameter is required and must be a non-empty object"}), 400
+
+        inventory_data = data.get('inventory', None)
+        passengers = data.get('passengers', None)
+        material_constraints = data.get('material_constraints', None)
+        tol = data.get('tol', DEFAULT_FEASIBILITY_TOL)
+
+        if passengers is not None and not isinstance(passengers, dict):
+            return jsonify({"error": "invalid_parameter",
+                            "message": "passengers must be an object {oxide: upper_bound}"}), 400
+        if material_constraints is not None and not isinstance(material_constraints, dict):
+            return jsonify({"error": "invalid_parameter",
+                            "message": "material_constraints must be an object {material: [min, max]}"}), 400
+
+        try:
+            tol = float(tol)
+        except (TypeError, ValueError):
+            tol = float('nan')
+        if not math.isfinite(tol) or tol < 0:
+            return jsonify({"error": "invalid_parameter",
+                            "message": "tol must be a finite non-negative number"}), 400
+
+        inventory = resolve_inventory(inventory_data)
+        materials = filter_materials_by_inventory(
+            load_materials(only_inventory=False, priority=False), inventory)
+
+        logger.info(f"feasibility requested for {len(umf)} oxides over {len(materials)} materials, "
+                    f"tol={tol}, passengers={len(passengers or {})}")
+
+        result = check_feasibility(umf, materials, tol=tol, passengers=passengers)
+
+        if result.get('error'):
+            status = 422 if result['error'] in FEASIBILITY_UNPROCESSABLE_ERRORS else 500
+            logger.warning(f"feasibility_failed: {result['error']}: {result.get('message')}")
+            return jsonify({"error": result['error'], "message": result.get('message', ''),
+                            "warnings": result.get('warnings', [])}), status
+
+        # A passenger is a one sided ceiling in the range problem too, which is
+        # the same statement it makes in the verdict: "keep it under this", not
+        # "aim for this"
+        oxide_constraints = {oxide: [None, bound] for oxide, bound in (passengers or {}).items()}
+
+        result['diagnostics'] = matrix_diagnostics(
+            materials, sorted({oxide for material in materials
+                               for oxide in (material.get('formula') or {})}))
+        result['achievable_ranges'] = achievable_ranges(
+            umf, materials, oxide_constraints=oxide_constraints,
+            material_constraints=material_constraints, tol=tol)
+
+        logger.info(f"feasibility: {result['feasible']}, deviation "
+                    f"{result.get('max_relative_deviation')}, "
+                    f"unreachable {result.get('unreachable_oxides')}")
+        return jsonify(make_json_safe(result))
+
+    except Exception as e:
+        logger.exception(f"feasibility_error: {str(e)}")
+        return jsonify({"error": "server_error", "message": str(e)}), 500
+
 
 # HTTP status for a recipe that is syntactically fine but cannot be analysed -
 # the same code /api/glazy_import already uses for a recipe without an analysis.
