@@ -16,13 +16,42 @@ This module is the shared half of stage 7.6 / 7.7. Both consumers need exactly
 the same corpus, the same sample and the same per-case run, and they must not
 drift apart:
 
-    tests/test_inverse_corpus.py   the pass/fail gate of scenario A
+    tests/test_inverse_corpus.py   the pass/fail gate of scenarios A and B
     bench/diff_baseline.py         the baseline snapshot and its regression diff
     bench/history.py               the append only log of the runs worth keeping
 
 The last two also share the roll-up itself - METRICS, profile() and
 engine_profile() live here so that the diff and the history cannot end up
 computing "the median" two different ways.
+
+TWO SCENARIOS, ONE MACHINERY
+
+Both scenarios parse the same dump, build the same cases and aim at the same
+target - our own forward calculation of the dump recipe, which is what keeps the
+flux convention and Glazy's normalization out of the measurement. They differ in
+one line: what is on the shelf.
+
+    A   inventory = the recipe's OWN materials, injected through the materials=
+        seam. A perfect answer exists by construction, so what is measured is the
+        quality of the answer that comes back.
+    B   inventory = OUR inInventory materials, the 19 the workshop actually has,
+        with no injection at all - the literal production call. This is the real
+        use case: you saw a recipe made of American frits and you want that
+        chemistry out of what is on your shelf in Russia. The answer may not
+        exist, so feasibility.check_feasibility runs FIRST and a target our stock
+        genuinely cannot reach goes into an "honestly unreachable" bucket, which
+        is a correct answer and not a failure.
+
+Scenario B is where the cost metrics stop abstaining. Glazy material names are
+absent from database/prices.json, so cost_abs and assembly_score are None on
+every scenario A case; scenario B builds from our own inventory, 18 of whose 19
+materials are priced - everything except wood ash, which nobody sells - so on
+that side they are real numbers. What is NOT computed in scenario B is any
+comparison of cost with the original: a ratio against a frit-based American
+recipe measures the distance between two countries' supply chains, not the
+quality of the solver. Absolute cost only. The ratio abstains by itself, because
+the dump's materials carry no price, and that is left as the structural
+guarantee it is rather than being re-implemented as a special case here.
 
 The dump itself is CC BY-NC-SA licensed data and is never written into the
 repository: it lives in ~/.cache/glazy_solver/ (a location outside any git work
@@ -59,13 +88,14 @@ import numpy as np
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from common import flux_oxides, weights_to_umf
+from common import flux_oxides, load_materials, weights_to_umf
 from solver_classic import (
     calculate_recipe_composition,
     calculate_umf_error,
     find_multiple_solutions,
 )
 from solver_iterative import find_best_recipe
+import feasibility
 import quality_metrics as qm
 
 logger = logging.getLogger(__name__)
@@ -98,6 +128,11 @@ DEFAULT_SEED = 20260531
 DEFAULT_SAMPLE_SIZE = 300
 DEFAULT_CLASSIC_SUBSAMPLE = 50
 
+# Scenario B draws its targets out of the scenario A sample with the same seed,
+# so every B case is also an A case with the same glazy_id and the two scenarios
+# can be read side by side, case by case.
+DEFAULT_SCENARIO_B_SUBSAMPLE = 100
+
 # Size buckets of the stratification, as (label, low, high) with both ends
 # inclusive; "high" of None means "and up". Recipes of a single ingredient are
 # deliberately outside every bucket: there is nothing to solve there.
@@ -109,6 +144,21 @@ SIZE_BUCKETS = (
 
 ENGINE_ITERATIVE = 'iterative'
 ENGINE_CLASSIC = 'classic'
+
+SCENARIO_A = 'A'
+SCENARIO_B = 'B'
+SCENARIOS = (SCENARIO_A, SCENARIO_B)
+
+# The reachability verdict of scenario B is drawn with the production line, not
+# with one chosen for the benchmark: feasibility.DEFAULT_FEASIBILITY_TOL is what
+# POST /api/feasibility uses, and no passengers are declared because a target
+# built by forward-calculating a real recipe asks for every oxide it names.
+#
+# That the ceiling is not the driver here was measured rather than assumed: with
+# every oxide our stock can bring but the target does not name declared as a
+# passenger at 0.05, the verdict moved on 2 of the 100 cases. The unreachable
+# bucket is not made of contamination.
+FEASIBILITY_TOL = feasibility.DEFAULT_FEASIBILITY_TOL
 
 # The configuration the tests and the API actually run in. Numbers measured at
 # max_solutions=1 do not carry over: the beam width and the number of children
@@ -657,16 +707,83 @@ def subsample(sample: Sequence[Dict[str, Any]], size: int, seed: int = DEFAULT_S
 # running
 # --------------------------------------------------------------------------
 
-def _solve(case: Dict[str, Any], engine: str) -> Tuple[Optional[Dict[str, float]], str]:
+_INVENTORY_CACHE: List[Dict[str, Any]] = []
+
+
+def inventory_materials() -> List[Dict[str, Any]]:
+    """
+    Our own stock: the inInventory records of database/materials.json
+
+    Loaded once and handed out as the same list every time. Scenario B needs it
+    twice per case - the feasibility gate builds its LP from it and
+    quality_metrics measures the answer against it - and re-reading the database
+    a hundred times would be the slowest part of a benchmark that otherwise
+    takes four seconds.
+
+    Priorities are loaded with the records, so _priority_start_set() sees the
+    same starting set the API sees. This is deliberately NOT passed to the
+    solver: scenario B calls it with materials=None, which is the production
+    path, and this list only exists for the two consumers that cannot go through
+    the solver to get it.
+    """
+    if not _INVENTORY_CACHE:
+        _INVENTORY_CACHE.extend(load_materials(only_inventory=True, priority=True))
+    return _INVENTORY_CACHE
+
+
+def quality_materials(case: Dict[str, Any], scenario: str) -> List[Dict[str, Any]]:
+    """
+    The material records quality_metrics needs to judge one case
+
+    In scenario A the answer and the original are built from the same catalogue,
+    so the case's own records are the whole of it.
+
+    In scenario B they are built from two different catalogues - the answer from
+    our stock, the original from the dump - and quality_metrics needs both: the
+    solution's side for the conditioning and the rounding drift, the original's
+    side for the set of oxides the chemistry is made of, which is what tells a
+    junk component apart from a load bearing one.
+
+    The two name spaces DO intersect, which is worth knowing before assuming
+    they do not. Somebody uploaded part of the SegerLab catalogue our own
+    database came from (DATA_NOTES.md) to Glazy, so five names appear on both
+    sides: "Полевой шпат FFF", "Доломит МИДОЛ", "Улексит (Химпэк)", "Фритта 100
+    (Рускерамика)" and "Каолин КЖФ-1". Our record wins, because the answer being
+    scored was built from it, and calculate_recipe_composition takes the first
+    match. Seven of the eight dump entries under those names carry an analysis
+    identical to ours to two decimals; the eighth (Glazy id 364162, a second
+    "Каолин КЖФ-1" with SiO2 67.52 against our 47.00) does not, so an original
+    using THAT record is scored with our analysis instead of its own. What that
+    can move is the original's side of the junk rule and its condition number,
+    neither of which scenario B gates on - and no case of the pinned subsample
+    uses it. The alternative, letting the dump's record win, would misprice and
+    mis-analyse OUR answer, which the scenario does gate on.
+    """
+    if scenario == SCENARIO_A:
+        return list(case['materials'])
+
+    ours = inventory_materials()
+    known = {record.get('name') for record in ours}
+    return list(ours) + [record for record in case['materials']
+                         if record.get('name') not in known]
+
+
+def _solve(case: Dict[str, Any], engine: str,
+           scenario: str = SCENARIO_A) -> Tuple[Optional[Dict[str, float]], str]:
     """
     Run one engine over one case and return (recipe, status)
 
-    The inventory is the recipe's OWN materials, injected through the
-    materials= seam of both engines, so the target is reachable by construction
-    and what is measured is the quality of the answer rather than whether one
-    exists at all.
+    Scenario A injects the recipe's OWN materials through the materials= seam of
+    both engines, so the target is reachable by construction and what is
+    measured is the quality of the answer rather than whether one exists at all.
+
+    Scenario B injects nothing. materials=None is the production call: the
+    engine loads database/materials.json, resolves the default inventory out of
+    the inInventory flags and works from the 19 materials the workshop has. The
+    benchmark deliberately does not hand it a hand-built catalogue, because then
+    it would be measuring a configuration nobody runs.
     """
-    materials = case['materials']
+    materials = case['materials'] if scenario == SCENARIO_A else None
     target = case['target_umf']
 
     try:
@@ -701,7 +818,8 @@ def _solve(case: Dict[str, Any], engine: str) -> Tuple[Optional[Dict[str, float]
     return recipe, 'solved'
 
 
-def run_case(case: Dict[str, Any], engine: str = ENGINE_ITERATIVE) -> Dict[str, Any]:
+def run_case(case: Dict[str, Any], engine: str = ENGINE_ITERATIVE,
+             scenario: str = SCENARIO_A) -> Dict[str, Any]:
     """
     Solve one case and reduce it to the raw components the baseline stores
 
@@ -709,25 +827,47 @@ def run_case(case: Dict[str, Any], engine: str = ENGINE_ITERATIVE) -> Dict[str, 
     changing the score formula must not invalidate a baseline (TZ_SOLVER_V2.md
     7.7).
 
-    Note what is deliberately NOT passed to solution_quality(): prices and
-    priorities. Glazy material names do not appear in database/prices.json and
-    have no entry in priorities.json, so both metrics abstain (ok=None) and,
-    being None rather than False, can never enter "failures". Inventing either
-    of them would manufacture a verdict out of no data.
+    PRICES are always handed to solution_quality(), in both scenarios, and the
+    same list decides both. In scenario A it covers nothing - Glazy material
+    names are not in database/prices.json - so cost_abs, the cost ratio and
+    assembly_score all come back None, exactly as they did when the prices were
+    not passed at all. In scenario B it covers 18 of our 19 materials, so
+    cost_abs and assembly_score are real numbers wherever the answer avoids the
+    one unpriced material. One code path, and the abstention is a property of
+    the data rather than of a branch here.
+
+    PRIORITIES are never passed, in either scenario. The original recipe is a
+    Glazy one in both, its materials have no entry in priorities.json, and
+    scoring it against ours would invent a verdict out of no data.
+
+    THE QUALITY VERDICT differs, and this is the one place the two scenarios are
+    not symmetric. In scenario A the dump recipe is a genuine baseline: same
+    materials, same supply reality, so "is the answer worse than the original"
+    is a question with an answer, and quality_ok holds it. In scenario B there
+    is no comparable original - the dump recipe is made of American frits and
+    ours of Russian raw materials - so quality_ok is None: not "passed", not
+    "failed", but "not a question this scenario can ask". The raw components
+    (count, min_portion, junk_count, cond, cost_abs, assembly_score) are
+    recorded exactly the same way in both and are what scenario B is tracked by,
+    against the baseline rather than against a threshold.
+
+    In scenario B the FEASIBILITY GATE runs first, and the solver runs whatever
+    it says. Running the solver on a target the LP called unreachable is not
+    wasted work: it is the only way to catch the LP being wrong about it, and
+    the disagreements in both directions are what the scenario is really for.
     """
-    start = time.perf_counter()
-    recipe, status = _solve(case, engine)
-    elapsed = time.perf_counter() - start
+    if scenario not in SCENARIOS:
+        raise ValueError(f'unknown scenario {scenario!r}, expected one of {SCENARIOS}')
 
     result: Dict[str, Any] = {
         'glazy_id': case['glazy_id'],
         'name': case['name'],
-        'scenario': 'A',
+        'scenario': scenario,
         'engine': engine,
         'bucket': case['bucket'],
         'size': case['size'],
-        'status': status,
-        'seconds': elapsed,
+        'status': 'failed: not run',
+        'seconds': 0.0,
         'umf_error': None,
         'count': None,
         'cost_abs': None,
@@ -738,17 +878,38 @@ def run_case(case: Dict[str, Any], engine: str = ENGINE_ITERATIVE) -> Dict[str, 
         'cond': None,
         'failures': [],
         'chemistry_ok': False,
-        'quality_ok': False,
+        'quality_ok': False if scenario == SCENARIO_A else None,
+        # Scenario A asks nobody whether the target is reachable: it is, by
+        # construction. These stay None there and are what says so.
+        'feasible': None,
+        'max_relative_deviation': None,
+        'unreachable_oxides': None,
     }
+
+    start = time.perf_counter()
+
+    if scenario == SCENARIO_B:
+        verdict = feasibility.check_feasibility(
+            case['target_umf'], inventory_materials(), tol=FEASIBILITY_TOL)
+        result.update({
+            'feasible': verdict.get('feasible'),
+            'max_relative_deviation': verdict.get('max_relative_deviation'),
+            'unreachable_oxides': list(verdict.get('unreachable_oxides') or []),
+            'feasibility_error': verdict.get('error'),
+        })
+
+    recipe, status = _solve(case, engine, scenario)
+    result['status'] = status
+    result['seconds'] = time.perf_counter() - start
 
     if recipe is None:
         return result
 
-    materials = case['materials']
+    materials = quality_materials(case, scenario)
     actual_umf = weights_to_umf(calculate_recipe_composition(materials, recipe))
     umf_error = float(calculate_umf_error(case['target_umf'], actual_umf))
 
-    quality = qm.solution_quality(recipe, case['original'], materials)
+    quality = qm.solution_quality(recipe, case['original'], materials, prices=qm.load_prices())
 
     result.update({
         'umf_error': umf_error,
@@ -761,13 +922,14 @@ def run_case(case: Dict[str, Any], engine: str = ENGINE_ITERATIVE) -> Dict[str, 
         'cond': quality['conditioning']['cond'],
         'failures': list(quality['failures']),
         'chemistry_ok': umf_error <= MAX_UMF_ERROR,
-        'quality_ok': not quality['failures'],
+        'quality_ok': (not quality['failures']) if scenario == SCENARIO_A else None,
         # Kept for the failure log: which side of a gated metric actually moved
         'detail': {
             'count': quality['count'],
             'junk': quality['junk'],
             'min_portion': quality['min_portion'],
             'conditioning': quality['conditioning'],
+            'cost': quality['cost'],
         },
     })
 
@@ -775,11 +937,12 @@ def run_case(case: Dict[str, Any], engine: str = ENGINE_ITERATIVE) -> Dict[str, 
 
 
 def run_sample(sample: Sequence[Dict[str, Any]], engine: str = ENGINE_ITERATIVE,
-               progress: Optional[Any] = None) -> List[Dict[str, Any]]:
+               progress: Optional[Any] = None,
+               scenario: str = SCENARIO_A) -> List[Dict[str, Any]]:
     """Run a whole sample, optionally reporting progress through a callable"""
     results = []
     for index, case in enumerate(sample, start=1):
-        results.append(run_case(case, engine))
+        results.append(run_case(case, engine, scenario))
         if progress is not None and index % 25 == 0:
             progress(index, len(sample))
     return results
@@ -830,7 +993,83 @@ def chemistry_ok(row: Dict[str, Any]) -> bool:
     return float(error) <= MAX_UMF_ERROR
 
 
-def engine_profile(cases: Sequence[Dict[str, Any]], engine: str) -> Dict[str, Any]:
+def accounted_ok(row: Dict[str, Any]) -> bool:
+    """
+    Whether scenario B answered this case correctly, one way or the other
+
+    Two answers count, and the second is the whole point of the scenario:
+
+      * the chemistry gate was met - the target was reproduced from our stock;
+      * feasibility said the target is out of reach of our stock. There is no
+        recipe to be had, so "there is no recipe" is the correct answer and
+        counting it as a failure would make the benchmark punish honesty.
+
+    Undecided (feasible is None, an LP that did not converge) is NOT accounted
+    for: nobody answered anything.
+    """
+    if chemistry_ok(row):
+        return True
+    return row.get('feasible') is False
+
+
+def misclassification(row: Dict[str, Any]) -> Optional[str]:
+    """
+    Where the feasibility gate and the solver contradict each other, if they do
+
+    Each disagreement is a bug report against one of the two, and which one has
+    to be read case by case, so the row is named rather than counted:
+
+      "reachable_unsolved"   the LP promised a recipe and the solver did not
+                             find one. Either the search is missing something
+                             the LP can see, or the LP is over-promising
+      "unreachable_solved"   the LP said no recipe exists and the solver
+                             produced one that passes the chemistry gate anyway.
+                             The two verdicts are not measured on the same
+                             scale - the LP bounds the worst RELATIVE deviation
+                             of each oxide, the gate is an RMS of the ABSOLUTE
+                             deviations over the target's oxides - so a target
+                             whose only unreachable oxide is a colourant at UMF
+                             0.02 is honestly out of reach and honestly inside
+                             an RMS of 0.1 at the same time
+
+    None when they agree, and None for scenario A, which never asks.
+    """
+    feasible = row.get('feasible')
+    if feasible is None:
+        return None
+    if feasible and not chemistry_ok(row):
+        return 'reachable_unsolved'
+    if not feasible and chemistry_ok(row):
+        return 'unreachable_solved'
+    return None
+
+
+def group_key(scenario: Optional[str], engine: str) -> str:
+    """
+    The name one (scenario, engine) pair is profiled and logged under
+
+    Scenario A keeps the bare engine name, and that asymmetry is deliberate.
+    Every run recorded before scenario B existed measured scenario A and is
+    keyed "iterative" / "classic" in bench/history.jsonl; re-keying them would
+    either break the series the log exists for or require rewriting an append
+    only file. So scenario A stays the unlabelled default - it is what an
+    unqualified engine name has always meant - and a new scenario opens its own
+    series under its own key instead of silently redefining the old one.
+    """
+    if not scenario or scenario == SCENARIO_A:
+        return engine
+    return f'{scenario}/{engine}'
+
+
+def snapshot_groups(cases: Sequence[Dict[str, Any]]) -> List[Tuple[str, str]]:
+    """(scenario, engine) pairs present in a snapshot, in a stable order"""
+    pairs = {(row.get('scenario') or SCENARIO_A, row.get('engine'))
+             for row in cases if row.get('engine')}
+    return sorted(pairs)
+
+
+def engine_profile(cases: Sequence[Dict[str, Any]], engine: str,
+                   scenario: Optional[str] = None) -> Dict[str, Any]:
     """
     Roll the rows of ONE engine of one snapshot up into a single run's numbers
 
@@ -852,9 +1091,24 @@ def engine_profile(cases: Sequence[Dict[str, Any]], engine: str) -> Dict[str, An
     quality_ok: the quality verdict is not derivable from the stored components
     (it compares the solution against the original recipe, which the snapshot
     does not keep), so a snapshot written before that field existed cannot
-    answer the question and must not pretend to.
+    answer the question and must not pretend to. Scenario B carries a None there
+    for a different reason with the same shape - it has no comparable original
+    at all - and the two are indistinguishable from here on purpose: both mean
+    "this run cannot answer that question".
+
+    "reachability" is None for scenario A, which never asks whether the target
+    can be reached, and holds the scenario B verdict counts and the accounted
+    share otherwise. "priced" is filled in for both, and for scenario A it is
+    honestly zero: no Glazy material has a price.
+
+    Args:
+        scenario: keep only the rows of this scenario. None means every row of
+            the engine, which is what a snapshot holding one scenario wants and
+            what every caller written before scenario B existed asked for
     """
-    rows = [row for row in cases if row.get('engine') == engine]
+    rows = [row for row in cases
+            if row.get('engine') == engine
+            and (scenario is None or (row.get('scenario') or SCENARIO_A) == scenario)]
     total = len(rows)
 
     solved = [row for row in rows if row.get('status') == 'solved']
@@ -867,6 +1121,8 @@ def engine_profile(cases: Sequence[Dict[str, Any]], engine: str) -> Dict[str, An
         values = [float(row[name]) for row in solved if row.get(name) is not None]
         metrics[name] = profile(values)
 
+    priced = [row for row in solved if row.get('cost_abs') is not None]
+
     return {
         'cases': total,
         'solved': len(solved),
@@ -875,13 +1131,50 @@ def engine_profile(cases: Sequence[Dict[str, Any]], engine: str) -> Dict[str, An
         'chemistry_share': (len(chemistry) / total) if total else None,
         'both_levels': len(both) if both is not None else None,
         'both_levels_share': (len(both) / total) if (both is not None and total) else None,
+        'reachability': _reachability_profile(rows),
+        'priced': len(priced),
+        'priced_share': (len(priced) / len(solved)) if solved else None,
         'metrics': metrics,
     }
 
 
-def snapshot_engines(cases: Sequence[Dict[str, Any]]) -> List[str]:
-    """Engine names present in a snapshot, in a stable order"""
-    return sorted({row.get('engine') for row in cases if row.get('engine')})
+def _reachability_profile(rows: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    The scenario B half of a profile: the verdict counts and what came of them
+
+    None when no row carries a verdict at all, which is what scenario A looks
+    like. An empty feasibility field is not the same as "everything was
+    reachable" and must not be rendered as one.
+    """
+    judged = [row for row in rows if 'feasible' in row and row.get('feasible') is not None]
+    if not judged:
+        return None
+
+    total = len(rows)
+    reachable = [row for row in judged if row.get('feasible') is True]
+    unreachable = [row for row in judged if row.get('feasible') is False]
+    undecided = total - len(judged)
+
+    accounted = [row for row in rows if accounted_ok(row)]
+    solved_reachable = [row for row in reachable if chemistry_ok(row)]
+    misclassified = [row for row in rows if misclassification(row)]
+
+    return {
+        'reachable': len(reachable),
+        'unreachable': len(unreachable),
+        'undecided': undecided,
+        'accounted': len(accounted),
+        'accounted_share': (len(accounted) / total) if total else None,
+        'solved_among_reachable': len(solved_reachable),
+        'solved_among_reachable_share': (
+            (len(solved_reachable) / len(reachable)) if reachable else None),
+        'misclassified': len(misclassified),
+        'reachable_unsolved': sum(
+            1 for row in rows if misclassification(row) == 'reachable_unsolved'),
+        'unreachable_solved': sum(
+            1 for row in rows if misclassification(row) == 'unreachable_solved'),
+        'tol': FEASIBILITY_TOL,
+    }
 
 
 # --------------------------------------------------------------------------

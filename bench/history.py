@@ -28,7 +28,8 @@ distribution profile of every metric and the three pass shares, plus a free text
 note saying what the run was testing.
 
     python bench/history.py                     # print the series
-    python bench/history.py --engine iterative  # one engine only
+    python bench/history.py --engine iterative  # one series only ("B/iterative"
+                                                # is the scenario B one)
     python bench/history.py --last 5            # the tail, deltas still vs the
                                                 # previous line of the log
 
@@ -39,7 +40,7 @@ the log is for deliberate measurements, not for every invocation.
 
 Why a separate script rather than a --history mode of diff_baseline.py. Reading
 the log must not depend on being able to run the corpus: diff_baseline.py is
-built around solving 350 recipes and needs the 8 MB dump, pyyaml and a warm
+built around solving 450 recipes and needs the 8 MB dump, pyyaml and a warm
 cache, while answering "what happened over the last month" has to work on a
 laptop on a train. Importing this module costs nothing beyond the standard
 library and numpy, and its CLI never touches the dump.
@@ -59,13 +60,36 @@ WHAT A LINE HOLDS
     thresholds      the constants the shares depend on, so that moving one later
                     does not silently reinterpret the old lines
     run             seed, sample size, scenario, dump and solver configuration
-    sampled_ids     per engine: how many ids were drawn and a DIGEST of the list
+    sampled_ids     per series: how many ids were drawn and a DIGEST of the list
     data_hashes     bench/corpus.py's hashes of materials / prices / oxide
                     classification, so "the data changed" is distinguishable
                     from "the solver changed"
-    engines         per engine: case count, the three pass shares and the
-                    min / p10 / median / mean / p90 / p99 / max profile of every
-                    metric, computed by bench/corpus.engine_profile()
+    engines         per series: case count, the pass shares, the reachability
+                    verdict counts of scenario B and the min / p10 / median /
+                    mean / p90 / p99 / max profile of every metric, computed by
+                    bench/corpus.engine_profile()
+
+ONE SERIES PER SCENARIO AND ENGINE
+
+A run measures more than one thing: scenario A over two engines and scenario B
+over the iterative one. They must never be averaged together - scenario A's
+population is unpriced and reproduces a recipe from its own materials, scenario
+B's is priced and works from a 19 material stock - so the log keys a separate
+series per (scenario, engine) pair through bench/corpus.group_key().
+
+Scenario A keeps the bare engine name as its key. That is not tidiness, it is
+the only way the series survives: the lines written before scenario B existed
+all measured scenario A under the keys "iterative" and "classic", and an append
+only log cannot be re-keyed after the fact. Scenario B opens "B/iterative"
+alongside them, starting its own series from zero rather than pretending to
+continue one.
+
+The schema version is deliberately NOT bumped for this. No field changed
+meaning: "iterative" still means what it meant in every earlier line, and the
+new keys are additive, exactly like chemistry_ok and quality_ok before them.
+What did change is that run.scenario left COMPARABLE_RUN_KEYS - see the comment
+there for why keeping it would have raised a false alarm on every scenario A
+series the moment a run also measured B.
 
 The sampled ids are stored as a DIGEST rather than in full, and this is the one
 place where the record is deliberately not self-contained. The full list is 300
@@ -155,6 +179,9 @@ FIXED_COLUMNS = (
     ('solved', 7, '>'),
     ('chem', 7, '>'),
     ('both', 7, '>'),
+    # Scenario B's own gate: "solved OR honestly unreachable". A dash in
+    # scenario A, which never asks the question.
+    ('acct', 7, '>'),
 )
 METRIC_WIDTH = 10
 
@@ -164,7 +191,14 @@ NOTE_WIDTH = 100
 # Run parameters that must match before two lines can be compared at all. The
 # data hashes are checked separately and reported in their own words, because a
 # changed price list is the one incomparability that looks like a solver change.
-COMPARABLE_RUN_KEYS = ('seed', 'sample_size', 'classic_subsample', 'scenario', 'dump')
+#
+# "scenario" is NOT here, and used to be. It is now part of the series key, so
+# two lines of one series are the same scenario by construction and the check
+# would be dead weight - worse than that, it would fire on every scenario A
+# series the first time a run also measured scenario B, calling two runs of the
+# same 300 recipes "different corpora" because a second scenario was added
+# beside them.
+COMPARABLE_RUN_KEYS = ('seed', 'sample_size', 'classic_subsample', 'dump')
 
 
 # --------------------------------------------------------------------------
@@ -211,11 +245,12 @@ def build_record(snapshot: Dict[str, Any], recorded_at: str, kind: str = KIND_RE
     cases = snapshot.get('cases') or []
 
     sampled = {}
-    for engine, ids in sorted((run.get('sampled_ids') or {}).items()):
-        sampled[engine] = {'count': len(ids), 'sha256': sampled_ids_digest(ids)}
+    for series, ids in sorted((run.get('sampled_ids') or {}).items()):
+        sampled[series] = {'count': len(ids), 'sha256': sampled_ids_digest(ids)}
 
-    engines = {engine: bench_corpus.engine_profile(cases, engine)
-               for engine in bench_corpus.snapshot_engines(cases)}
+    engines = {bench_corpus.group_key(scenario, engine):
+               bench_corpus.engine_profile(cases, engine, scenario)
+               for scenario, engine in bench_corpus.snapshot_groups(cases)}
 
     return {
         'schema': SCHEMA_VERSION,
@@ -459,8 +494,14 @@ def _table_header() -> Tuple[str, str]:
     return header, '  ' + '-' * (len(header) - 2)
 
 
+def _accounted_share(entry: Dict[str, Any]) -> Optional[float]:
+    """Scenario B's accounted share, or None for a series that never asks"""
+    reachability = (entry or {}).get('reachability')
+    return None if not reachability else reachability.get('accounted_share')
+
+
 def _row(index: int, record: Dict[str, Any], entry: Dict[str, Any]) -> str:
-    """One run of one engine"""
+    """One run of one series"""
     commit = _short(record.get('git_commit')) + ('*' if record.get('git_dirty') else '')
     return _assemble(
         [
@@ -471,13 +512,14 @@ def _row(index: int, record: Dict[str, Any], entry: Dict[str, Any]) -> str:
             f"{entry.get('solved', 0)}/{entry.get('cases', 0)}",
             _format_share(entry.get('chemistry_share')),
             _format_share(entry.get('both_levels_share')),
+            _format_share(_accounted_share(entry)),
         ],
         [_format_number(value) for value in _headline_values(entry)],
     )
 
 
 def _delta_row(label: str, before: Dict[str, Any], after: Dict[str, Any]) -> str:
-    """The change between two runs of the same engine, in the same columns"""
+    """The change between two runs of the same series, in the same columns"""
     return _assemble(
         [
             '',
@@ -487,10 +529,41 @@ def _delta_row(label: str, before: Dict[str, Any], after: Dict[str, Any]) -> str
             f"{after.get('solved', 0) - before.get('solved', 0):+d}",
             _format_share_delta(before.get('chemistry_share'), after.get('chemistry_share')),
             _format_share_delta(before.get('both_levels_share'), after.get('both_levels_share')),
+            _format_share_delta(_accounted_share(before), _accounted_share(after)),
         ],
         [('-' if old is None or new is None else _format_number(new - old, signed=True))
          for old, new in zip(_headline_values(before), _headline_values(after))],
     )
+
+
+def _annotation_lines(entry: Dict[str, Any]) -> List[str]:
+    """
+    What the fixed columns cannot hold: the reachability split and the pricing
+
+    Both are printed only where they mean something. A scenario A series has no
+    feasibility verdict and no priced case, and two lines of dashes under every
+    row would say nothing at the cost of making the table unreadable.
+    """
+    lines: List[str] = []
+
+    reachability = entry.get('reachability')
+    if reachability:
+        lines.append(
+            f"      feasibility(tol={reachability.get('tol')}): "
+            f"reachable {reachability.get('reachable')}, "
+            f"unreachable {reachability.get('unreachable')}, "
+            f"undecided {reachability.get('undecided')}; "
+            f"misclassified {reachability.get('misclassified')} "
+            f"(LP said reachable, solver missed: {reachability.get('reachable_unsolved')}; "
+            f"LP said unreachable, solver hit it: {reachability.get('unreachable_solved')})")
+
+    if entry.get('priced'):
+        lines.append(
+            f"      fully priced {entry.get('priced')}/{entry.get('solved')} solved "
+            f"({_format_share(entry.get('priced_share'))}) - cost_abs and assembly_score "
+            f"are real numbers on those and None on the rest")
+
+    return lines
 
 
 def _note_lines(record: Dict[str, Any]) -> List[str]:
@@ -512,12 +585,16 @@ def render(records: Sequence[Dict[str, Any]], problems: Sequence[str],
            path: str, engines: Optional[Sequence[str]] = None,
            last: Optional[int] = None) -> List[str]:
     """
-    The whole report: one block per engine, one row per run, deltas underneath
+    The whole report: one block per series, one row per run, deltas underneath
 
-    Deltas are always taken against the PREVIOUS run of the same engine in the
+    Deltas are always taken against the PREVIOUS run of the same series in the
     log, even when --last hides that run: a regression that crept in over three
     runs has to read as a trend down the column, and a delta measured against
     whatever happens to be on screen would not be one.
+
+    A "series" is one (scenario, engine) pair - "iterative" for scenario A,
+    "B/iterative" for scenario B - and the two are never merged: their
+    populations differ in what is on the shelf and in whether it has a price.
     """
     lines: List[str] = []
     lines.append('GLAZY CORPUS RUN HISTORY')
@@ -545,7 +622,8 @@ def render(records: Sequence[Dict[str, Any]], problems: Sequence[str],
     if engines is not None:
         missing = [engine for engine in engines if engine not in present]
         for engine in missing:
-            lines.append(f'!! no run in the log carries an engine called {engine!r}')
+            lines.append(f'!! no run in the log carries a series called {engine!r}; '
+                         f'the log holds {present}')
 
     for engine in wanted:
         series = [record for record in records if engine in (record.get('engines') or {})]
@@ -571,6 +649,7 @@ def render(records: Sequence[Dict[str, Any]], problems: Sequence[str],
                              f'#{first_shown}')
 
             lines.append(_row(index, record, entry))
+            lines.extend(_annotation_lines(entry))
 
             if index > 1:
                 previous = series[index - 2]
@@ -611,9 +690,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument('--log', default=bench_corpus.HISTORY_PATH,
                         help='path of the log (default: bench/history.jsonl)')
     parser.add_argument('--engine', action='append', default=None,
-                        help='show only this engine; repeatable')
+                        help='show only this series; repeatable. A series is a '
+                             '(scenario, engine) pair: "iterative" and "classic" are '
+                             'scenario A, "B/iterative" is scenario B')
     parser.add_argument('--last', type=int, default=None,
-                        help='show only the last N runs of each engine; deltas are '
+                        help='show only the last N runs of each series; deltas are '
                              'still measured against the previous run of the log')
     args = parser.parse_args(argv)
 

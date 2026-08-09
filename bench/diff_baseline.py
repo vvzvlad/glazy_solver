@@ -27,16 +27,22 @@ assembly_score, min_portion, junk_count, rounding_drift, conditioning.cond - and
 never a rolled up score. The roll-up happens here, at diff time, so changing the
 score formula does not invalidate a baseline that took ten minutes to produce.
 
-Three rules keep the comparison honest, and each of them exists because the
-naive version lies:
+Four rules keep the comparison honest, and each of them exists because the naive
+version lies:
 
+  * the two scenarios are profiled SEPARATELY, one block per (scenario, engine)
+    pair. Mixing them would average a population built from a recipe's own
+    materials, where nothing has a price, with one built from our 19 material
+    stock, where almost everything does - the cost aggregates of the mixture
+    would describe neither;
   * percentiles are computed over the INTERSECTION of the solved sets of the two
     runs. A case flipping between solved and failed would otherwise drop out of
     one distribution and shift every aggregate silently. Changes of the solved
     set are reported as their own line, with the ids;
-  * assembly_score is None wherever the prices do not cover the recipe - which
-    for Glazy materials is everywhere - so its percentiles use the same
-    intersection rule on "is it defined", not just on "is it solved";
+  * assembly_score is None wherever the prices do not cover the recipe - always
+    in scenario A, and in scenario B wherever the answer uses the one inventory
+    material nobody sells - so its percentiles use the same intersection rule on
+    "is it defined", not just on "is it solved";
   * the input data files are hashed into the snapshot. An updated price list
     moves every cost metric without a line of solver code being touched, and
     that is not a regression. When the hashes differ the report says so loudly
@@ -88,12 +94,17 @@ MAX_CHEMISTRY_ERROR_EPSILON = 1e-6
 #
 # 7.7 names assembly_score. It is cost_abs x len(recipe) and it is None wherever
 # the prices do not cover the recipe, which for Glazy material names is every
-# single case - so on this corpus the gate would have nothing to hold on to.
-# 10.10 says what to do about that in as many words: "with assembly_score = None
-# the baseline compares count, junk, min_portion and conditioning". Those four
-# are therefore the fallback, and they are gated individually rather than being
-# mashed into an invented composite - a gate nobody can name the subject of is
-# not a gate.
+# single case of scenario A - so on that half of the corpus the gate would have
+# nothing to hold on to. 10.10 says what to do about that in as many words:
+# "with assembly_score = None the baseline compares count, junk, min_portion and
+# conditioning". Those four are therefore the fallback, and they are gated
+# individually rather than being mashed into an invented composite - a gate
+# nobody can name the subject of is not a gate.
+#
+# Scenario B is where the primary score finally has values: its answers are
+# built from our own inventory, 18 of whose 19 materials are priced. The choice
+# is made per (scenario, engine) block from the data rather than from the
+# scenario name, and the report prints which one it made and why.
 PRIMARY_TRACKED_SCORE = 'assembly_score'
 FALLBACK_TRACKED_SCORES = ('count', 'junk_count', 'min_portion', 'cond')
 
@@ -125,10 +136,19 @@ METRICS: Tuple[Tuple[str, str], ...] = bench_corpus.METRICS
 # file exists to keep rare. Snapshots written before them simply have no
 # quality verdict, and bench/corpus.engine_profile() reports that as None
 # rather than as zero.
+# The scenario B fields go in for the same reason and on the same terms. The
+# feasibility verdict cannot be recomputed from the components either - it is
+# the answer of an LP over our inventory, not a property of the recipe - and
+# without it a stored run cannot say which of its cases were honestly
+# unreachable, which is the one thing scenario B measures. unreachable_oxides is
+# the list itself rather than a count because that list IS the bug report: "no
+# lithium source" and "the flux ratio is 20% out on MgO" are different findings
+# and a number cannot tell them apart.
 CASE_FIELDS = (
     'glazy_id', 'scenario', 'engine', 'status', 'bucket', 'size',
     'umf_error', 'count', 'cost_abs', 'assembly_score', 'min_portion',
     'junk_count', 'rounding_drift', 'cond', 'chemistry_ok', 'quality_ok',
+    'feasible', 'max_relative_deviation', 'unreachable_oxides',
 )
 
 # Below this the two values are the same number and the case is "unchanged".
@@ -140,33 +160,58 @@ EQUAL_EPSILON = 1e-9
 # --------------------------------------------------------------------------
 
 def run_corpus(seed: int, sample_size: int, classic_size: int,
+               scenario_b_size: Optional[int] = None,
                verbose: bool = True) -> Dict[str, Any]:
     """
-    Run scenario A over the sample and return a snapshot-shaped dictionary
+    Run both scenarios over the sample and return a snapshot-shaped dictionary
 
-    Both engines are run: the iterative one over the whole sample, the classic
-    one over its subsample, exactly as the corpus test does.
+    Three passes, exactly the ones the corpus test makes:
+
+        A / iterative   the whole sample
+        A / classic     its subsample, because the classic engine is slow
+        B / iterative   a second subsample of the same sample, against our own
+                        19 material inventory
+
+    Scenario B runs the iterative engine only. It is the engine POST /api/solve
+    defaults to, it is the one with the backward elimination pass, and the
+    spec asks for one B run rather than an engine comparison; adding a classic
+    B pass would double the block count of every report to say something nobody
+    asked.
     """
+    scenario_b_size = (bench_corpus.DEFAULT_SCENARIO_B_SUBSAMPLE
+                       if scenario_b_size is None else scenario_b_size)
+
     corpus, timings = bench_corpus.load_corpus()
     cases, rejected = bench_corpus.build_cases(corpus)
     sample = bench_corpus.stratified_sample(cases, size=sample_size, seed=seed)
     classic_sample = bench_corpus.subsample(sample, classic_size, seed=seed)
+    # Drawn out of the SAME sample with the SAME seed, so every scenario B case
+    # is a scenario A case with the same glazy_id and the two can be read side
+    # by side, case by case.
+    scenario_b_sample = bench_corpus.subsample(sample, scenario_b_size, seed=seed)
 
     if verbose:
         print(f"corpus {timings['dump']} loaded from {timings['source']} in {timings['seconds']:.2f}s; "
-              f"{len(cases)} usable cases, sample {len(sample)}, classic subsample {len(classic_sample)}")
+              f"{len(cases)} usable cases, sample {len(sample)}, classic subsample "
+              f"{len(classic_sample)}, scenario B subsample {len(scenario_b_sample)}")
 
     rows: List[Dict[str, Any]] = []
     started = time.perf_counter()
 
-    for engine, subset in ((bench_corpus.ENGINE_ITERATIVE, sample),
-                           (bench_corpus.ENGINE_CLASSIC, classic_sample)):
-        engine_started = time.perf_counter()
+    passes = (
+        (bench_corpus.SCENARIO_A, bench_corpus.ENGINE_ITERATIVE, sample),
+        (bench_corpus.SCENARIO_A, bench_corpus.ENGINE_CLASSIC, classic_sample),
+        (bench_corpus.SCENARIO_B, bench_corpus.ENGINE_ITERATIVE, scenario_b_sample),
+    )
+
+    for scenario, engine, subset in passes:
+        pass_started = time.perf_counter()
         for case in subset:
-            result = bench_corpus.run_case(case, engine)
+            result = bench_corpus.run_case(case, engine, scenario)
             rows.append({field: result.get(field) for field in CASE_FIELDS})
         if verbose:
-            print(f"  {engine}: {len(subset)} cases in {time.perf_counter() - engine_started:.1f}s")
+            print(f"  {bench_corpus.group_key(scenario, engine)}: {len(subset)} cases "
+                  f"in {time.perf_counter() - pass_started:.1f}s")
 
     return {
         'format_version': BASELINE_FORMAT_VERSION,
@@ -175,10 +220,14 @@ def run_corpus(seed: int, sample_size: int, classic_size: int,
             'seed': seed,
             'sample_size': sample_size,
             'classic_subsample': classic_size,
-            'scenario': 'A',
+            'scenario_b_subsample': scenario_b_size,
+            'scenario': '+'.join(bench_corpus.SCENARIOS),
+            # Keyed by series, not by engine: two passes share the iterative
+            # engine and draw different subsets, and one list per engine could
+            # only hold one of them.
             'sampled_ids': {
-                bench_corpus.ENGINE_ITERATIVE: [case['glazy_id'] for case in sample],
-                bench_corpus.ENGINE_CLASSIC: [case['glazy_id'] for case in classic_sample],
+                bench_corpus.group_key(scenario, engine): [case['glazy_id'] for case in subset]
+                for scenario, engine, subset in passes
             },
             'dump': timings['dump'],
             'dump_size': timings['dump_size'],
@@ -191,6 +240,7 @@ def run_corpus(seed: int, sample_size: int, classic_size: int,
                 'max_solutions': bench_corpus.MAX_SOLUTIONS,
                 'classic_seed': bench_corpus.CLASSIC_SEED,
                 'candidate_search': 'exhaustive',
+                'feasibility_tol': bench_corpus.FEASIBILITY_TOL,
             },
             'seconds': time.perf_counter() - started,
         },
@@ -208,9 +258,20 @@ def run_corpus(seed: int, sample_size: int, classic_size: int,
 _profile = bench_corpus.profile
 
 
-def _index(cases: Sequence[Dict[str, Any]], engine: str) -> Dict[int, Dict[str, Any]]:
-    """Cases of one engine keyed by their Glazy id"""
-    return {row['glazy_id']: row for row in cases if row.get('engine') == engine}
+def _index(cases: Sequence[Dict[str, Any]], engine: str,
+           scenario: Optional[str] = None) -> Dict[int, Dict[str, Any]]:
+    """
+    Cases of one (scenario, engine) pair keyed by their Glazy id
+
+    The scenario has to be part of the filter, not only of the report heading:
+    the same glazy_id appears once per scenario, so an engine-only index would
+    silently keep whichever row came last and compare a scenario B answer
+    against a scenario A baseline.
+    """
+    return {row['glazy_id']: row for row in cases
+            if row.get('engine') == engine
+            and (scenario is None
+                 or (row.get('scenario') or bench_corpus.SCENARIO_A) == scenario)}
 
 
 def _solved_ids(index: Dict[int, Dict[str, Any]]) -> set:
@@ -240,9 +301,39 @@ def _relative_change(direction: str, before: float, after: float) -> Optional[fl
     return (before - after) / abs(before)
 
 
+def _reachability(index: Dict[int, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    The scenario B side of one run: the verdict counts and the two misclass sets
+
+    None when no row carries a feasibility verdict, which is what scenario A
+    looks like - an absent verdict is not "everything was reachable".
+    """
+    judged = [row for row in index.values() if row.get('feasible') is not None]
+    if not judged:
+        return None
+
+    rows = list(index.values())
+    accounted = [row for row in rows if bench_corpus.accounted_ok(row)]
+
+    return {
+        'cases': len(rows),
+        'reachable': sum(1 for row in judged if row.get('feasible') is True),
+        'unreachable': sum(1 for row in judged if row.get('feasible') is False),
+        'undecided': len(rows) - len(judged),
+        'accounted': len(accounted),
+        'accounted_share': len(accounted) / len(rows) if rows else 0.0,
+        'reachable_unsolved': sorted(
+            row['glazy_id'] for row in rows
+            if bench_corpus.misclassification(row) == 'reachable_unsolved'),
+        'unreachable_solved': sorted(
+            row['glazy_id'] for row in rows
+            if bench_corpus.misclassification(row) == 'unreachable_solved'),
+    }
+
+
 def compare_engine(baseline_index: Dict[int, Dict[str, Any]],
                    current_index: Dict[int, Dict[str, Any]]) -> Dict[str, Any]:
-    """Everything the report needs about one engine"""
+    """Everything the report needs about one (scenario, engine) pair"""
     baseline_solved = _solved_ids(baseline_index)
     current_solved = _solved_ids(current_index)
 
@@ -303,6 +394,8 @@ def compare_engine(baseline_index: Dict[int, Dict[str, Any]],
         'gained': gained,
         'intersection': intersection,
         'metrics': metrics,
+        'baseline_reachability': _reachability(baseline_index),
+        'current_reachability': _reachability(current_index),
     }
 
 
@@ -364,6 +457,47 @@ def _profile_lines(name: str, entry: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def _reachability_lines(result: Dict[str, Any]) -> List[str]:
+    """
+    The scenario B block: the verdict split, the accounted share, the disputes
+
+    Silent for a series that carries no feasibility verdict. The two
+    misclassification sets are printed as ID LISTS and diffed against the
+    baseline's, because they are the output of the scenario, not a statistic
+    about it: a case joining or leaving either set is a bug appearing or being
+    fixed, and a count would hide which.
+    """
+    before = result.get('baseline_reachability')
+    after = result.get('current_reachability')
+    if not before and not after:
+        return []
+
+    lines: List[str] = []
+    empty: Dict[str, Any] = {'reachable': 0, 'unreachable': 0, 'undecided': 0,
+                             'accounted': 0, 'accounted_share': 0.0, 'cases': 0,
+                             'reachable_unsolved': [], 'unreachable_solved': []}
+    before = before or empty
+    after = after or empty
+
+    lines.append(f"  feasibility: reachable {before['reachable']} -> {after['reachable']}, "
+                 f"unreachable {before['unreachable']} -> {after['unreachable']}, "
+                 f"undecided {before['undecided']} -> {after['undecided']}")
+    lines.append(f"  accounted (solved OR honestly unreachable): "
+                 f"{before['accounted']}/{before['cases']} ({before['accounted_share']:.2%}) -> "
+                 f"{after['accounted']}/{after['cases']} ({after['accounted_share']:.2%})")
+
+    for key, label in (('reachable_unsolved', 'LP said reachable, solver missed'),
+                       ('unreachable_solved', 'LP said unreachable, solver hit it')):
+        was, now = set(before[key]), set(after[key])
+        lines.append(f"  {label}: {len(was)} -> {len(now)}  {sorted(now)}")
+        if was - now:
+            lines.append(f"      no longer disputed: {sorted(was - now)}")
+        if now - was:
+            lines.append(f"      newly disputed:     {sorted(now - was)}")
+
+    return lines
+
+
 def build_report(baseline: Dict[str, Any], current: Dict[str, Any]) -> Tuple[List[str], Dict[str, Any]]:
     """
     Assemble the whole report and the machine readable comparison behind it
@@ -393,10 +527,10 @@ def build_report(baseline: Dict[str, Any], current: Dict[str, Any]) -> Tuple[Lis
     if baseline['run'].get('dump') != current['run'].get('dump'):
         findings.append(f"DUMP CHANGED: {baseline['run'].get('dump')} -> {current['run'].get('dump')}")
 
-    for engine, ids in (baseline['run'].get('sampled_ids') or {}).items():
-        current_ids = (current['run'].get('sampled_ids') or {}).get(engine)
+    for series, ids in (baseline['run'].get('sampled_ids') or {}).items():
+        current_ids = (current['run'].get('sampled_ids') or {}).get(series)
         if current_ids is not None and list(ids) != list(current_ids):
-            findings.append(f"SAMPLE CHANGED for {engine}: the same seed drew a different set of ids, "
+            findings.append(f"SAMPLE CHANGED for {series}: the same seed drew a different set of ids, "
                             f"so the corpus itself moved under the baseline")
 
     baseline_hashes = baseline['run'].get('data_hashes') or {}
@@ -421,15 +555,22 @@ def build_report(baseline: Dict[str, Any], current: Dict[str, Any]) -> Tuple[Lis
         lines.append('')
     comparison['provenance']['findings'] = findings
 
-    # --- per engine -------------------------------------------------------
-    engines = sorted({row.get('engine') for row in baseline['cases']}
-                     | {row.get('engine') for row in current['cases']})
+    # --- per (scenario, engine) -------------------------------------------
+    # One block per series, never a merged one: scenario A's population is
+    # unpriced and reproduces a recipe from its own materials, scenario B's is
+    # priced and works from a 19 material stock. An average over both would
+    # describe neither of them.
+    groups = sorted(set(bench_corpus.snapshot_groups(baseline['cases']))
+                    | set(bench_corpus.snapshot_groups(current['cases'])))
 
-    for engine in engines:
-        result = compare_engine(_index(baseline['cases'], engine), _index(current['cases'], engine))
-        comparison['engines'][engine] = result
+    for scenario, engine in groups:
+        series = bench_corpus.group_key(scenario, engine)
+        result = compare_engine(_index(baseline['cases'], engine, scenario),
+                                _index(current['cases'], engine, scenario))
+        comparison['engines'][series] = result
 
-        lines.append(f'--- engine: {engine} ' + '-' * (78 - 13 - len(engine)))
+        lines.append(f'--- engine: {series} ' + '-' * max(0, 78 - 13 - len(series)))
+        lines.append(f"  scenario {scenario}, engine {engine}")
         lines.append(f"  cases: baseline {result['baseline_cases']}, current {result['current_cases']}")
         if result['missing_from_current'] or result['new_in_current']:
             lines.append(f"  case set changed: {len(result['missing_from_current'])} gone, "
@@ -442,6 +583,7 @@ def build_report(baseline: Dict[str, Any], current: Dict[str, Any]) -> Tuple[Lis
             lines.append(f"  SOLVED -> FAILED ({len(result['lost'])}): {result['lost']}")
         if result['gained']:
             lines.append(f"  FAILED -> SOLVED ({len(result['gained'])}): {result['gained']}")
+        lines.extend(_reachability_lines(result))
         lines.append(f"  percentiles are computed over the {len(result['intersection'])} cases "
                      f"solved by BOTH runs")
         lines.append('')
@@ -483,13 +625,19 @@ def check_regressions(comparison: Dict[str, Any]) -> List[str]:
     """
     Everything --check considers a regression
 
-    Three gates, per engine:
+    Four gates, per series:
       * the median OR the p90 of a tracked score worsens by more than
         REGRESSION_TOLERANCE - the tail is gated alongside the centre, because a
         tweak that improves the median while wrecking ten cases is not an
         improvement;
       * the share of solved cases drops;
-      * the maximum chemistry error grows.
+      * the maximum chemistry error grows;
+      * scenario B only: the accounted share drops. "Solved OR honestly
+        unreachable" is that scenario's own criterion, and it can fall while the
+        solved share does not - a case can keep returning a recipe and stop
+        passing the chemistry gate. A rising unreachable count does not trip
+        this gate by itself, and must not: declining a target our stock cannot
+        reach is a correct answer, not a lost case.
 
     A measured warning about the reach of the first gate. Percentiles only move
     when enough cases move: a degradation confined to 4% of the sample slips
@@ -518,6 +666,16 @@ def check_regressions(comparison: Dict[str, Any]) -> List[str]:
             if after_max > before_max + MAX_CHEMISTRY_ERROR_EPSILON:
                 problems.append(f"{engine}: the maximum chemistry error grew "
                                 f"{before_max:.6f} -> {after_max:.6f}")
+
+        before_reach = result.get('baseline_reachability')
+        after_reach = result.get('current_reachability')
+        if before_reach and after_reach:
+            if after_reach['accounted_share'] < before_reach['accounted_share'] - EQUAL_EPSILON:
+                problems.append(
+                    f"{engine}: the accounted share dropped "
+                    f"{before_reach['accounted_share']:.2%} -> {after_reach['accounted_share']:.2%} "
+                    f"(newly disputed: "
+                    f"{sorted(set(after_reach['reachable_unsolved']) - set(before_reach['reachable_unsolved']))})")
 
         names = tracked_scores(metrics)
         if not names:
@@ -591,8 +749,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument('--baseline', default=bench_corpus.BASELINE_PATH,
                         help='path of the baseline snapshot (default: bench/quality_baseline.json)')
     parser.add_argument('--check', action='store_true',
-                        help='exit 1 when the tracked score, the solved share or the maximum '
-                             'chemistry error regressed')
+                        help='exit 1 when the tracked score, the solved share, the maximum '
+                             'chemistry error or the scenario B accounted share regressed')
     parser.add_argument('--rebaseline', action='store_true',
                         help='overwrite the snapshot with the current run; the only way to move it')
     parser.add_argument('--record', nargs='?', const='', default=None, metavar='NOTE',
@@ -608,6 +766,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help='sample size; defaults to the one recorded in the baseline')
     parser.add_argument('--classic-subsample', type=int, default=None,
                         help='classic subsample size; defaults to the one recorded in the baseline')
+    parser.add_argument('--scenario-b-subsample', type=int, default=None,
+                        help='scenario B subsample size; defaults to the one recorded in the '
+                             'baseline, or to bench/corpus.DEFAULT_SCENARIO_B_SUBSAMPLE for a '
+                             'baseline written before scenario B existed')
     parser.add_argument('--save-current', default=None,
                         help='also write the current run to this path, for offline comparison')
     parser.add_argument('--current', default=None,
@@ -621,22 +783,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     seed = args.seed
     sample_size = args.sample_size
     classic_size = args.classic_subsample
+    scenario_b_size = args.scenario_b_subsample
 
-    if existing is not None:
-        seed = seed if seed is not None else existing['run']['seed']
-        sample_size = sample_size if sample_size is not None else existing['run']['sample_size']
-        classic_size = classic_size if classic_size is not None else existing['run']['classic_subsample']
-    else:
-        seed = seed if seed is not None else bench_corpus.DEFAULT_SEED
-        sample_size = sample_size if sample_size is not None else bench_corpus.DEFAULT_SAMPLE_SIZE
-        classic_size = classic_size if classic_size is not None else bench_corpus.DEFAULT_CLASSIC_SUBSAMPLE
+    # A baseline written before scenario B existed has no size for it recorded,
+    # so the default fills in rather than the run refusing to start: the point
+    # of a diff against an older baseline is to see what changed, and "the
+    # baseline has no scenario B" is one of the things that changed.
+    recorded = (existing or {}).get('run', {})
+    seed = seed if seed is not None else recorded.get('seed', bench_corpus.DEFAULT_SEED)
+    sample_size = (sample_size if sample_size is not None
+                   else recorded.get('sample_size', bench_corpus.DEFAULT_SAMPLE_SIZE))
+    classic_size = (classic_size if classic_size is not None
+                    else recorded.get('classic_subsample', bench_corpus.DEFAULT_CLASSIC_SUBSAMPLE))
+    scenario_b_size = (scenario_b_size if scenario_b_size is not None
+                       else recorded.get('scenario_b_subsample',
+                                         bench_corpus.DEFAULT_SCENARIO_B_SUBSAMPLE))
 
     if args.current:
         with open(args.current, 'r', encoding='utf-8') as f:
             current = json.load(f)
     else:
         try:
-            current = run_corpus(seed, sample_size, classic_size)
+            current = run_corpus(seed, sample_size, classic_size, scenario_b_size)
         except bench_corpus.CorpusUnavailable as exc:
             print(f'Glazy corpus unavailable: {exc}')
             return 2
