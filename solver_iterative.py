@@ -18,7 +18,7 @@ The algorithm mimics the way a human ceramist works:
    groups are taken one by one until the starting set is big enough).
 2. Solve the mix with NNLS in WEIGHT space (the same math the classic solver
    uses: target UMF -> weights, NNLS over the material formulas, result back
-   to UMF), drop materials weighing less than 0.1% and re-solve.
+   to UMF), drop materials weighing less than MIN_MATERIAL_WEIGHT and re-solve.
 3. Look at the per-oxide residual, find the oxide that is the furthest away
    from the target - the focus oxide of this step.
 4. Rank the materials that are not in the set yet by a score that is built from
@@ -58,6 +58,12 @@ the rollback to the best state found.
 When more than one solution is requested the candidate step feeds several
 children into the beam and the search turns into a beam search over several
 branches.
+
+The search itself only ever ADDS materials, so the last thing that happens to a
+recipe is _prune_solution(): greedy backward elimination that drops every
+material whose removal does not make the fit worse. That is where noise
+components go - not into a weight threshold, which cannot tell a rounding
+artefact apart from half a percent of cobalt carbonate.
 """
 
 import argparse
@@ -88,16 +94,45 @@ from solver_classic import (
 
 logger = logging.getLogger(__name__)
 
-# Recipe entries below this weight percent are considered noise and dropped.
-# One percent of a 100 g batch is 1 g, which is where a studio scale stops being
-# trustworthy - below it the solver is fitting the fourth decimal of an oxide
-# with an ingredient nobody can actually weigh out. The previous 0.1 let those
-# through: on the eleven reference recipes it produced 6 such trace entries and
-# recovered the original material set in 6 cases out of 11, while 1.0 produces
-# none and recovers 7, with a slightly SMALLER total UMF error (115.5467 against
-# 115.6420). Raising it further to 2.0 changes nothing, so the threshold is not
-# a tuned number, it is a floor.
-MIN_MATERIAL_WEIGHT = 1.0
+# Numerical floor of the NNLS solution, NOT a way to keep the recipe short.
+# A weight this small is the solver's own noise - a column that got a sliver of
+# mass while fitting the fourth decimal of an oxide - and 0.1 is where
+# solver_classic.solve_recipe already cuts, so the two agree.
+#
+# THIS NUMBER MUST NOT BE RAISED. It was 1.0 for one commit, on the argument
+# that one gram of a 100 g batch is what a studio scale can still weigh, and it
+# was reverted because a weight threshold cannot tell a numerical artefact apart
+# from an ingredient that is genuinely tiny. Measured on a target built from
+# feldspar 39.5 / quartz 30 / chalk 20 / kaolin 10 / cobalt carbonate 0.5, with
+# the cobalt in the inventory:
+#
+#   MIN=0.1  err 0.0030  {kaolin 9.99, quartz 30.01, chalk 20.02,
+#                         feldspar 39.48, CoCO3 0.5}
+#   MIN=1.0  err 0.0575  {kaolin 10.04, quartz 30.16, chalk 20.12, feldspar 39.68}
+#
+# 0.0575 is below the default error_threshold of 0.1, so the second answer is
+# returned as acceptable and nothing in it says that an ingredient was dropped:
+# a blue glaze silently becomes a clear one. Colourants are exactly the class of
+# material that weighs the least and matters the most. The cut was fuzzy on top
+# of that - a component genuinely needed at 1.00% went too, because the first
+# NNLS estimate landed just below the floor and _solve_material_set then removed
+# the material from `active` for good.
+#
+# Keeping a recipe free of pointless components is the job of _prune_solution(),
+# which asks whether a material can be removed WITHOUT making the fit worse
+# instead of asking how much it weighs.
+MIN_MATERIAL_WEIGHT = 0.1
+
+# How much the search objective may grow when a material is pruned out. The
+# comparison is per removal against the state the removal starts from, so a
+# recipe that loses n materials may drift by at most n times this.
+#
+# 0.005 of UMF error is invisible in a fired glaze - it is smaller than the
+# 0.0033 the published percentages of a textbook recipe already cost by being
+# rounded to one decimal. What it has to stay below is the cost of removing a
+# material that is actually needed, and the gap is an order of magnitude: on the
+# cobalt target above, dropping the 0.5% of cobalt carbonate costs 0.0545.
+PRUNE_ERROR_TOLERANCE = 0.005
 
 # Whole priority groups are added to the starting set until it holds at least
 # this many materials
@@ -570,6 +605,78 @@ def _shrink_to_limit(state: Dict[str, Any], problem: Dict[str, Any],
     return state
 
 
+def _prune_solution(state: Dict[str, Any], problem: Dict[str, Any],
+                    min_materials: int) -> Dict[str, Any]:
+    """
+    Drop from a solved state every material that is free to remove.
+
+    Greedy backward elimination: each round re-solves the recipe once per
+    material with that material taken out, keeps the removals whose objective
+    error grows by no more than PRUNE_ERROR_TOLERANCE, applies the one that ends
+    up with the lowest objective and starts again. It stops when no single
+    removal is free any more.
+
+    "Free to remove" is the whole point, and it is a different question from
+    "small". A noise component contributes nothing, so taking it out barely
+    moves the objective and it goes; half a percent of a colourant is the only
+    source of its oxide in the recipe, so taking it out moves the objective by
+    ten times the tolerance and it stays. A weight threshold cannot make that
+    distinction - see MIN_MATERIAL_WEIGHT for the measurement that killed one.
+
+    Only the materials the recipe actually USES are candidates and only they are
+    re-solved: the state carries the whole material set it was built from, and
+    putting a material that NNLS already zeroed back into the matrix would turn
+    a removal into a swap.
+
+    The floor is max(min_materials, 1): the caller's minimum is never broken
+    from this side, and the last material is never taken away even when the
+    caller asked for a minimum of zero.
+
+    Args:
+        state: a state as returned by _solve_material_set
+        problem: the problem context the state was solved against
+        min_materials: the caller's min_materials
+
+    Returns:
+        the pruned state, or the very same object when nothing could go
+    """
+    current = state
+    floor = max(int(min_materials), 1)
+
+    while current['materials_count'] > floor:
+        used = [material for material in current['materials']
+                if material['name'] in current['recipe']]
+        limit = current['objective_error'] + PRUNE_ERROR_TOLERANCE
+        best: Optional[Dict[str, Any]] = None
+
+        # sorted() so that two equally good removals always resolve the same
+        # way, whatever order the material set happens to be in
+        for dropped in sorted(used, key=lambda material: material.get('name', '')):
+            reduced = [material for material in used if material['name'] != dropped['name']]
+            if not reduced:
+                continue
+
+            candidate = _solve_material_set(reduced, problem)
+            if candidate is None or candidate['materials_count'] < floor:
+                continue
+            if candidate['objective_error'] > limit:
+                continue
+
+            if best is None or candidate['objective_error'] < best['objective_error']:
+                best = candidate
+
+        if best is None:
+            break
+
+        # _solve_material_set knows nothing about the search, so the bookkeeping
+        # of the state being replaced is carried over by hand
+        best['iterations'] = current.get('iterations', 1)
+        best['set_names'] = frozenset(material['name'] for material in best['materials'])
+        current = best
+
+    return current
+
+
 def _weight_residual(problem: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, float]:
     """
     Residual of the current recipe in weight percent: target minus actual.
@@ -835,6 +942,14 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
     """
     Find glaze recipes for a target UMF by adding materials one at a time.
 
+    Every recipe is put through _prune_solution() before it is ranked and
+    returned: the search only ever adds materials, and the pruning pass is what
+    takes back the ones that turned out not to be needed. A material is dropped
+    only when its removal costs at most PRUNE_ERROR_TOLERANCE of objective
+    error, so an ingredient the chemistry depends on survives however little it
+    weighs - see MIN_MATERIAL_WEIGHT for what happens when smallness is used as
+    the criterion instead.
+
     Args:
         inventory: list of available material names
         target_umf: target UMF formula as {oxide: value}. An oxide listed as an
@@ -843,7 +958,8 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
             are kept and penalized like any other requested value
         min_materials: minimum number of materials in a returned recipe; when no
             recipe reaches it the result is an empty list, the constraint is
-            never silently broken
+            never silently broken. The pruning pass respects it too and never
+            takes the last material away even when it is 0
         max_materials: maximum number of materials in a recipe; the starting set
             built from whole priority groups is shrunk down to this limit, so
             values below DEFAULT_MIN_START_MATERIALS are honoured too
@@ -873,14 +989,21 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
             the priority really pick what gets tried, and a step costs a
             constant number of NNLS runs.
             Measured by calling find_best_recipe once per reference recipe (11
-            of them, 19 material inventory, otherwise default arguments) and
-            counting the calls to scipy nnls: exhaustive 885 runs, recovering
-            the original material set exactly on 10 of the 11 recipes;
-            heuristic 271 runs and 5 of 11. The heuristic reaches the same 10 of
-            11 at TOP_CANDIDATES = 9, and there it costs 855 runs - about half
-            the inventory is tried per step, so it is no longer a shortcut and
-            no longer cheaper. The 11th recipe is out of reach for both: it
-            needs MnO2 and no material of the inventory carries any.
+            of them, the 19 material inventory of database/materials.json,
+            max_solutions=5 and every other argument at its default) and
+            counting the calls to scipy.optimize.nnls, the pruning pass
+            included: exhaustive 2586 runs, recovering the original material set
+            exactly on 9 of the 11 recipes; heuristic 900 runs and 7 of 11. The
+            heuristic gets to 8 of 11 at TOP_CANDIDATES = 9, and there it costs
+            2247 runs - about half the inventory is tried per step, so it is no
+            longer a shortcut and no longer cheaper, and it still does not catch
+            up. The 11th recipe is out of reach for every mode: it needs MnO2
+            and no material of the inventory carries any.
+            The configuration matters to these numbers and used to be left out
+            of this paragraph, which is a good way to mislead yourself: the run
+            count scales with max_solutions through the beam width, and the
+            backward elimination pass raised it by a factor of 3.34 on its own
+            (the same sweep costs 774 runs with the pass removed).
         materials: optional material records to use as the database, same shape
             as database/materials.json entries. Meant for the tests and for
             callers carrying their own catalogue; when it is given together with
@@ -902,7 +1025,9 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
         of the best one come first and among those the SHORTEST one leads, the
         rest follow by increasing objective. The first solution therefore has an
         objective inside the tie band, not necessarily the smallest one in the
-        list. Every solution holds:
+        list. That order is established AFTER the pruning pass, so it holds on
+        the recipes actually returned rather than on the ones the search built.
+        Every solution holds:
             recipe          {material: weight percent}, adds up to exactly 100
             error           calculate_umf_error(target_umf, result_umf); it can
                             be recomputed from the two dictionaries below
@@ -919,8 +1044,9 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
                             inventory can bring, the oxides penalize_unlisted
                             talks about
             unlisted_weight the penalize_unlisted value actually applied
-            materials_count number of materials in the recipe
-            iterations      how many steps the recipe took
+            materials_count number of materials in the recipe, after pruning
+            iterations      how many search steps the recipe took; the pruning
+                            pass is not a step and does not raise it
     """
     solution_limit = _int_argument(max_solutions, 'max_solutions')
     material_limit = _int_argument(max_materials, 'max_materials')
@@ -1050,14 +1176,58 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
                        f"the pool holds {len(pool)} states")
         return []
 
-    best_error = min(s['objective_error'] for s in solutions)
-    solutions.sort(key=lambda s: _solution_sort_key(s, best_error))
+    # Backward elimination, and it happens HERE - after the search, before the
+    # sort and before the max_solutions cut. Three decisions are packed into
+    # that placement:
+    #
+    # * NOT inside the beam loop. Pruning one state costs O(materials) NNLS runs
+    #   per round, the loop solves tens to hundreds of states per call, and the
+    #   beam is going to add materials on top of whatever was pruned anyway.
+    # * BEFORE the sort, because pruning changes materials_count, and
+    #   _solution_sort_key ranks by materials_count inside the tie band. Sorting
+    #   first would order the recipes by a size they no longer have.
+    # * BEFORE the max_solutions cut, for the same reason: a recipe that prunes
+    #   from seven materials down to four has to be able to overtake one that
+    #   started at five and stayed there, and one that prunes onto a recipe
+    #   already in the list has to lose its slot to the next distinct answer.
+    #
+    # Every DISTINCT recipe of the pool is pruned, not just the ones that would
+    # have been returned, and that is deliberate: neither the objective nor the
+    # material count moves monotonically under pruning (a removal is allowed to
+    # grow the objective, and on the reference set it sometimes shrinks it -
+    # recipe 06 went from 5.8311 on three materials to 3.2224 on one), so there
+    # is no admissible way to decide in advance which candidates cannot reach
+    # the top max_solutions. What bounds the cost instead is the deduplication
+    # in front of the pass: the pool holds one state per material set TRIED, and
+    # many of those sets collapse onto the same recipe once NNLS has zeroed the
+    # columns it does not need. Measured over the eleven reference recipes
+    # (19 material inventory, default arguments) the search solves 13 to 111
+    # states per call but only 1 to 37 distinct recipes, and the pass costs
+    # 774 -> 2586 scipy nnls calls in total. Stopping the pass as soon as
+    # max_solutions distinct pruned recipes exist would cost 1650 instead and
+    # returns the same best recipe on all eleven, but it decides the cut on
+    # unpruned material counts, which is the one thing this placement is for.
+    seen_before_pruning = set()
+    pruned: List[Dict[str, Any]] = []
 
-    # Drop duplicates by recipe composition
+    for solution in solutions:
+        key = _recipe_key(solution['recipe'])
+        if key in seen_before_pruning:
+            continue
+        seen_before_pruning.add(key)
+        pruned.append(_prune_solution(solution, problem, material_floor))
+
+    best_error = min(s['objective_error'] for s in pruned)
+    pruned.sort(key=lambda s: _solution_sort_key(s, best_error))
+
+    # Drop duplicates by recipe composition. The pass above already deduplicated
+    # what went INTO the pruning, but two different recipes can prune onto the
+    # same one - that is exactly what happens when both of them carry the same
+    # answer plus one redundant material each
     unique: List[Dict[str, Any]] = []
     seen_recipes = set()
 
-    for solution in solutions:
+    for solution in pruned:
         if len(unique) >= solution_limit:
             break
 

@@ -159,7 +159,15 @@ class TestIndividualRecipes(unittest.TestCase):
         else:
             print(f"  приоритет:    {priority['solution']:.2f} / {priority['original']:.2f}"
                   f" (отношение {priority['ratio']:.3f})")
+        # Diagnostics: neither is gated, because nobody has measured a threshold
+        # for either. They are printed because they are the axes on which a
+        # chemically equal solution can still differ from the original - recipe
+        # 03 swaps wollastonite for chalk and gains 4.7 points of LOI, since
+        # chalk releases CO2 where wollastonite releases nothing.
         print(f"  дрейф весов:  {quality['rounding_drift']['value']:.4f} (диагностика, не гейт)")
+        loi = quality["loi"]
+        print(f"  ППП замеса:   {loi['solution']:.2f}% / {loi['original']:.2f}%"
+              f" (дельта {loi['delta']:+.2f}, диагностика, не гейт)")
 
         if quality["warnings"]:
             print(f"  ПРЕДУПРЕЖДЕНИЯ: {', '.join(quality['warnings'])}")

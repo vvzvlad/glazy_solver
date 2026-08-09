@@ -52,8 +52,13 @@ KAOLIN_RU = {'name': 'КАОЛИН КЖФ-1', 'formula': {'Al2O3': 40.21, 'SiO2'
 # A real edge case of the project database: two analyses sum to more than 100
 # (Cryolite 122.90, Zircon 135.22), which makes the batch LOI negative.
 ZIRCON = {'name': 'Zircon', 'formula': {'ZrO2': 66.00, 'SiO2': 69.22}}
+# 37 of the 216 real materials carry no oxide at all and all of them store an
+# empty formula: every pigment, the silicon carbide fractions, water, CMC,
+# charcoal, gypsum, alum. They are legal recipe entries with no chemistry.
+PIGMENT = {'name': 'Кобальт голубой пигмент 6226', 'formula': {}}
 
-MATERIALS = [FELDSPAR, FELDSPAR_TWIN, SILICA, WHITING, KAOLIN, IRON_OXIDE, ALUMINA, KAOLIN_RU, ZIRCON]
+MATERIALS = [FELDSPAR, FELDSPAR_TWIN, SILICA, WHITING, KAOLIN, IRON_OXIDE, ALUMINA,
+             KAOLIN_RU, ZIRCON, PIGMENT]
 
 # A plain, well behaved recipe used as the original in most of the tests
 BASE_RECIPE = {'Potash Feldspar': 40.0, 'Silica': 30.0, 'Whiting': 20.0, 'Kaolin': 10.0}
@@ -253,6 +258,46 @@ class TestConditioning(unittest.TestCase):
         self.assertFalse(report['conditioning']['ok'])
         self.assertIn('conditioning', report['failures'])
 
+    def test_a_pigment_does_not_make_a_recipe_degenerate(self):
+        # A material with no oxides is an empty column: no rows, one column, so
+        # a naive matrix loses rank and condemns every pigmented recipe. There
+        # are 37 such materials in the database, and a glaze really does carry
+        # 1% of cobalt pigment. Compared with itself, a recipe cannot possibly
+        # be worse than the original, so this must come back clean.
+        pigmented = {'Potash Feldspar': 39.0, 'Silica': 30.0, 'Whiting': 20.0,
+                     'Kaolin': 10.0, 'Кобальт голубой пигмент 6226': 1.0}
+
+        report = qm.solution_quality(pigmented, pigmented, MATERIALS)
+
+        self.assertEqual(report['failures'], [])
+        self.assertTrue(report['conditioning']['ok'])
+        self.assertFalse(report['conditioning']['rank_deficient'])
+        self.assertIsNotNone(report['conditioning']['cond'])
+        self.assertLess(report['conditioning']['cond'], qm.MAX_CONDITION_NUMBER)
+        # The pigment is reported rather than silently ignored, and it is not
+        # confused with a material we have never heard of
+        self.assertEqual(report['unanalysed_materials'], ['Кобальт голубой пигмент 6226'])
+        self.assertEqual(report['unknown_materials'], [])
+        # It has no column, so it cannot raise the rank - but it is still a bag
+        # on the shelf whose contribution we cannot justify
+        self.assertEqual(report['conditioning']['rank'], 4)
+        self.assertEqual(report['conditioning']['redundancy'], 1)
+
+    def test_a_pigment_does_not_hide_a_real_degeneracy(self):
+        # The exclusion must not become a way to smuggle a dependent set past
+        # the gate: the duplicated kaolin still sinks this recipe
+        pigmented_and_degenerate = {'Potash Feldspar': 39.0, 'Silica': 30.0, 'Whiting': 20.0,
+                                    'Kaolin': 5.0, 'КАОЛИН КЖФ-1': 5.0,
+                                    'Кобальт голубой пигмент 6226': 1.0}
+
+        report = qm.solution_quality(pigmented_and_degenerate, self.HONEST, MATERIALS)
+
+        self.assertIsNone(report['conditioning']['cond'])
+        self.assertTrue(report['conditioning']['rank_deficient'])
+        self.assertFalse(report['conditioning']['ok'])
+        self.assertIn('conditioning', report['failures'])
+        self.assertEqual(report['unanalysed_materials'], ['Кобальт голубой пигмент 6226'])
+
     def test_a_single_material_recipe_does_not_crash(self):
         report = qm.solution_quality({'Silica': 100.0}, {'Silica': 100.0}, MATERIALS)
 
@@ -411,6 +456,18 @@ class TestPriority(unittest.TestCase):
         self.assertIsNone(report['priority']['ok'])
         self.assertNotIn('priority', report['failures'])
 
+    def test_an_empty_mapping_abstains_instead_of_inventing_a_verdict(self):
+        # Every material would fall to DEFAULT_PRIORITY, which cancels in the
+        # ratio and returns a confident 1.0 built out of no data at all
+        recipe = dict(BASE_RECIPE, Silica=25.0, **{'Red Iron Oxide': 5.0})
+
+        report = qm.solution_quality(recipe, BASE_RECIPE, MATERIALS, priorities={})
+
+        self.assertIsNone(report['priority']['ratio'])
+        self.assertIsNone(report['priority']['solution'])
+        self.assertIsNone(report['priority']['ok'])
+        self.assertNotIn('priority', report['failures'])
+
     def test_unlisted_material_falls_back_to_the_default_priority(self):
         priorities = {'Potash Feldspar': 1, 'Silica': 1, 'Whiting': 2, 'Kaolin': 3}
         recipe = dict(BASE_RECIPE, Silica=25.0, **{'Red Iron Oxide': 5.0})
@@ -480,8 +537,21 @@ class TestUnknownMaterials(unittest.TestCase):
         report = qm.solution_quality(BASE_RECIPE, BASE_RECIPE, MATERIALS)
 
         self.assertEqual(report['unknown_materials'], [])
+        self.assertEqual(report['unanalysed_materials'], [])
         self.assertAlmostEqual(report['set_jaccard'], 1.0)
         self.assertAlmostEqual(report['share_delta'], 0.0)
+
+    def test_unknown_and_unanalysed_are_two_different_states(self):
+        # "we have never heard of it" and "we have it on file with no analysis"
+        # need separate fields: the first is a data gap, the second is a normal
+        # non-oxide ingredient, and only the first is worth chasing
+        recipe = dict(BASE_RECIPE, Silica=24.0,
+                      **{'Mystery Powder': 5.0, 'Кобальт голубой пигмент 6226': 1.0})
+
+        report = qm.solution_quality(recipe, BASE_RECIPE, MATERIALS)
+
+        self.assertEqual(report['unknown_materials'], ['Mystery Powder'])
+        self.assertEqual(report['unanalysed_materials'], ['Кобальт голубой пигмент 6226'])
 
 
 class TestLossOnIgnition(unittest.TestCase):
@@ -532,6 +602,35 @@ class TestLoadPrices(unittest.TestCase):
             json.dump({'Каолин КЖФ-1': 90}, f, ensure_ascii=False)
 
         self.assertEqual(qm.load_prices(path), {'Каолин КЖФ-1': 90})
+
+    def test_malformed_json_does_not_escape(self):
+        # A price list is optional data: a typo in it must not take down a
+        # metric run that does not even need prices
+        path = os.path.join(self.tmp_dir, 'broken.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('{"Каолин КЖФ-1": 90,}')
+
+        # Soft, but not silent: an unusable file that exists is logged, because
+        # pricing nothing looks exactly like having no prices
+        with self.assertLogs('quality_metrics', level='WARNING'):
+            self.assertEqual(qm.load_prices(path), {})
+
+    def test_a_json_list_is_not_a_price_list(self):
+        # Returning the list would blow up later on prices.get(), far away from
+        # the file that caused it
+        path = os.path.join(self.tmp_dir, 'list.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(['Каолин КЖФ-1', 90], f, ensure_ascii=False)
+
+        with self.assertLogs('quality_metrics', level='WARNING'):
+            self.assertEqual(qm.load_prices(path), {})
+
+    def test_a_bare_null_is_an_empty_price_list(self):
+        path = os.path.join(self.tmp_dir, 'null.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('null')
+
+        self.assertEqual(qm.load_prices(path), {})
 
     def test_the_committed_file_parses(self):
         # The price list is filled by hand over time, so this asserts the shape

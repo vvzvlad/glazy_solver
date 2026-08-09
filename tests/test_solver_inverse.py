@@ -40,7 +40,14 @@ from solver_classic import (
     find_multiple_solutions,
     solve_glaze_recipe,
 )
-from solver_iterative import find_best_recipe
+from solver_iterative import (
+    PRUNE_ERROR_TOLERANCE,
+    _build_problem,
+    _prune_solution,
+    _solve_material_set,
+    _usable_target,
+    find_best_recipe,
+)
 
 FIXTURES_DIR = os.path.join(PROJECT_DIR, 'tests', 'fixtures')
 
@@ -335,11 +342,14 @@ class TestCollinearFeldsparsChemistry(CollinearFeldsparsMixin, unittest.TestCase
 
 class TestCollinearFeldsparsConditioning(CollinearFeldsparsMixin, unittest.TestCase):
     """
-    What should hold and does not: the answer must not stand on a compensating pair
+    The answer must not stand on a compensating pair
 
-    Both tests below are expected failures. See their docstrings; the short
-    version is that this is a solver defect, not a threshold that wants
-    loosening, and the assertion must stay exactly as it is.
+    One engine holds this and one does not, and the difference is the whole
+    point of the pair: the iterative solver gained a backward elimination pass
+    (solver_iterative._prune_solution) and stopped splitting the feldspar mass
+    across the twins; the classic solver never learned to drop a material and
+    still does. Its test therefore stays an expected failure - the threshold is
+    right and the solver is wrong, not the other way round.
     """
 
     @unittest.expectedFailure
@@ -363,38 +373,136 @@ class TestCollinearFeldsparsConditioning(CollinearFeldsparsMixin, unittest.TestC
         the two apart (TZ_SOLVER_V2.md 10.9 measured that rounding_drift does
         not: it maxes out at 0.0153 on the whole degenerate family).
 
-        When the solver learns to drop a redundant material this test will report
-        an UNEXPECTED SUCCESS. That is the signal to delete this decorator, not
-        to delete the test.
+        The iterative counterpart below used to carry the same decorator and no
+        longer does, so the fix is known and it is not a threshold change: what
+        solve_recipe() lacks is a pass that asks whether a material can be
+        removed without making the fit worse. Its own x[i] > 0.1 filter cannot
+        answer that question - both twins weigh far more than 0.1%. When it grows
+        one this test will report an UNEXPECTED SUCCESS. That is the signal to
+        delete this decorator, not to delete the test.
         """
         recipe, _ = self.solve_classic()
 
         self.assertLessEqual(self.condition_number(recipe), MAX_CONDITION_NUMBER)
 
-    @unittest.expectedFailure
     def test_iterative_does_not_stand_on_a_compensating_pair(self):
         """
-        EXPECTED FAILURE - measured cond = 1849.6 against a threshold of 1e3.
+        Held by the pruning pass of the iterative solver - measured cond = 14.8.
 
-        The iterative solver lands on the same degenerate answer as the classic
-        one (Variant A 11.78 + Variant B 27.92 + Silica 30.27 + Whiting 20.01 +
-        Kaolin 10.02, UMF error 0.0), by a different route: all six materials of
+        The search still starts from the degenerate answer: all six materials of
         the fixture share one priority, so _priority_start_set takes the whole
-        group at once and the search starts from every material there is. From
-        there the beam only ever ADDS materials - nothing in it tries dropping
-        one - and _shrink_to_limit only fires above max_materials, which six
-        materials never reach. So the starting set is the answer, twins included.
+        group at once, the beam only ever ADDS materials and _shrink_to_limit
+        only fires above max_materials, which six materials never reach. What
+        changed is what happens to a solved state on the way out.
+        solver_iterative._prune_solution() re-solves the recipe once per
+        material with that material left out and accepts the removal whenever
+        the objective error grows by no more than PRUNE_ERROR_TOLERANCE. One of
+        the two twins is exactly that kind of material - the other one can carry
+        its share almost unchanged - so it goes, and the answer collapses onto
+        the well conditioned four material recipe that was always available:
 
-        This is a real defect of the solver, not a threshold to relax; see the
-        classic counterpart above for why MAX_CONDITION_NUMBER = 1e3 stays.
+            before  Variant A 11.78, Variant B 27.92, Silica 30.27,
+                    Whiting 20.01, Kaolin 10.02   err 0.0     cond 1849.6
+            after   Variant B 39.29, Silica 30.68,
+                    Whiting 20.01, Kaolin 10.02   err 0.0033  cond 14.8
 
-        When the solver learns to drop a redundant material this test will report
-        an UNEXPECTED SUCCESS. That is the signal to delete this decorator, not
-        to delete the test.
+        Note what the trade actually is: the fit gets very slightly WORSE (0.0
+        to 0.0033, three thousandths of a UMF unit, invisible in a fired glaze)
+        and the recipe gets two orders of magnitude better conditioned. A
+        threshold on the weight of a material could not have made that trade -
+        both twins weigh double digits.
+
+        MAX_CONDITION_NUMBER stays at 1e3 untouched, with 14.8 on one side of it
+        and the classic solver's 1849.6 on the other.
         """
         recipe, _ = self.solve_iterative()
 
         self.assertLessEqual(self.condition_number(recipe), MAX_CONDITION_NUMBER)
+
+
+class TestPruningPass(CollinearFeldsparsMixin, unittest.TestCase):
+    """
+    solver_iterative._prune_solution() on the fixture that motivated it
+
+    The conditioning test above pins the OUTCOME of pruning through the public
+    entry point. These tests pin the rule itself: what may be removed, how much
+    that is allowed to cost, and what stops it.
+    """
+
+    def setUp(self):
+        self.problem = _build_problem(_usable_target(self.target_umf), self.materials, 1.0)
+        self.unpruned = _solve_material_set(self.materials, self.problem)
+        self.assertIsNotNone(self.unpruned, "the fixture produced no recipe at all")
+
+    def test_the_unpruned_answer_really_does_carry_a_redundant_material(self):
+        """
+        Guards the premise: without this the two tests below prove nothing
+
+        NNLS over the whole catalogue splits the feldspar mass across the two
+        near-identical twins, and neither of them is small - the redundancy is
+        structural, not a rounding artefact, which is exactly why a threshold on
+        the weight of a material cannot see it.
+        """
+        recipe = self.unpruned['recipe']
+
+        self.assertIn('Custer Feldspar Variant A', recipe)
+        self.assertIn('Custer Feldspar Variant B', recipe)
+        for twin in ('Custer Feldspar Variant A', 'Custer Feldspar Variant B'):
+            self.assertGreater(recipe[twin], 1.0, f"{twin} is not a trace component")
+
+    def test_a_redundant_material_is_dropped_and_the_fit_barely_moves(self):
+        pruned = _prune_solution(self.unpruned, self.problem, 1)
+
+        self.assertLess(pruned['materials_count'], self.unpruned['materials_count'])
+        self.assertEqual(len(pruned['recipe']), pruned['materials_count'])
+
+        removed = set(self.unpruned['recipe']) - set(pruned['recipe'])
+        self.assertEqual(len(removed), 1, f"expected exactly one removal, got {sorted(removed)}")
+        self.assertTrue(removed <= {'Custer Feldspar Variant A', 'Custer Feldspar Variant B'},
+                        f"pruned something other than a feldspar twin: {sorted(removed)}")
+
+        # The rule is per removal, so one removal may cost one tolerance
+        growth = pruned['objective_error'] - self.unpruned['objective_error']
+        self.assertLessEqual(growth, PRUNE_ERROR_TOLERANCE * len(removed) + 1e-12,
+                             f"the objective grew by {growth}")
+        self.assertAlmostEqual(sum(pruned['recipe'].values()), 100.0, places=6)
+
+    def test_a_needed_material_survives_the_pass(self):
+        """Silica, whiting and kaolin are the only source of their oxides"""
+        pruned = _prune_solution(self.unpruned, self.problem, 1)
+
+        for material in ('Silica', 'Whiting', 'Kaolin'):
+            self.assertIn(material, pruned['recipe'])
+
+    def test_pruning_never_goes_below_min_materials(self):
+        """
+        The floor is a hard bound, and on this fixture it really binds
+
+        min_materials=5 is the count of the unpruned answer, so the one removal
+        that would otherwise happen is not allowed and the degenerate recipe is
+        returned untouched - a worse recipe, but the one the caller asked for.
+        """
+        for floor in (1, 2, 3, 4, 5):
+            with self.subTest(min_materials=floor):
+                pruned = _prune_solution(self.unpruned, self.problem, floor)
+                self.assertGreaterEqual(pruned['materials_count'], min(floor, self.unpruned['materials_count']))
+
+        blocked = _prune_solution(self.unpruned, self.problem, self.unpruned['materials_count'])
+        self.assertEqual(blocked['recipe'], self.unpruned['recipe'])
+
+    def test_a_min_materials_of_zero_still_leaves_one_material(self):
+        """An empty recipe is not a recipe, whatever the caller asked for"""
+        self.assertGreaterEqual(_prune_solution(self.unpruned, self.problem, 0)['materials_count'], 1)
+
+    def test_the_floor_reaches_the_public_entry_point(self):
+        """The same two answers, through find_best_recipe rather than by hand"""
+        free = find_best_recipe(None, self.target_umf, materials=self.materials,
+                                min_materials=1, max_solutions=1)
+        floored = find_best_recipe(None, self.target_umf, materials=self.materials,
+                                   min_materials=5, max_solutions=1)
+
+        self.assertEqual(free[0]['materials_count'], 4)
+        self.assertEqual(floored[0]['materials_count'], 5)
 
 
 if __name__ == '__main__':

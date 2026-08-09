@@ -63,7 +63,10 @@ Return shape of solution_quality():
                        "threshold": 5.0, "ok": True},
       "loi": {"solution": 11.2, "original": 10.4, "delta": 0.8},
       "loi_delta": 0.8,
+      # named by a recipe but absent from the material records
       "unknown_materials": [],
+      # in the records, but with an analysis carrying no oxide at all
+      "unanalysed_materials": ["Кобальт голубой пигмент 6226"],
       "failures": ["junk"],          # rules that gate, and were violated
       "warnings": ["clay_content"],  # rules that only warn
     }
@@ -92,6 +95,7 @@ is None and the coverage 0.0.
 """
 
 import json
+import logging
 import os
 
 import numpy as np
@@ -107,6 +111,8 @@ from solver_classic import (
     calculate_umf_error,
     create_oxide_matrix,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # A component lighter than this is "junk": below roughly two percent a raw
@@ -146,10 +152,28 @@ MAX_ROUNDING_DRIFT = 0.02
 # Condition number above which the set of materials the recipe uses counts as
 # degenerate: the solution is then held together by a compensating pair rather
 # than by chemistry, and small errors anywhere move the weights a long way. The
-# same 1e3 is used by matrix_diagnostics of stage 2, and the two populations sit
-# far apart around it - measured on the same three recipes, an honest feldspar /
-# silica / whiting / kaolin set gives 15.1 while the same chemistry rebuilt on a
-# near-collinear pair of feldspars gives 3668.8 (see TZ_SOLVER_V2.md 10.9).
+# threshold is shared with matrix_diagnostics of stage 2.
+#
+# Where the number comes from, and what it is worth. The often quoted pair of
+# figures - 15.1 for an honest feldspar / silica / whiting / kaolin set against
+# 3668.8 for the same chemistry rebuilt on a collinear pair of feldspars
+# (TZ_SOLVER_V2.md 10.9) - is measured against a SYNTHETIC twin that exists only
+# in tests/test_quality_metrics.py. It shows the metric responds to degeneracy;
+# it is not a calibration against real materials. Measured on the real database:
+#   - all 169 pairs of the 19 inventory materials that carry oxides score
+#     1.0 to 34.8 on their own, nowhere near the threshold;
+#   - of the 120 ways to add two inventory materials to a quartz / chalk /
+#     kaolin base, 118 stay at or below 300, and two cross: wollastonite with
+#     talc (5.6e3) and wollastonite with dolomite (1.5e4), because wollastonite
+#     is very nearly chalk plus quartz in oxide space - the same substitution
+#     the solver makes in reference recipe 03;
+#   - the two exact duplicates of the inventory - aluminium powder with alumina,
+#     and zinc carbonate with zinc oxide - are caught through the rank instead,
+#     as cond=None.
+# So the gate catches genuine linear dependence and near-duplicates, and leaves
+# merely similar materials alone: the closest ordinary pair in the inventory,
+# nepheline syenite VR13 with feldspar FFF, sits at 34.8. Do not move the number
+# without a measurement that justifies a different one.
 MAX_CONDITION_NUMBER = 1e3
 
 # A glaze with less clay than this will not stay in suspension no matter how
@@ -198,8 +222,11 @@ def load_prices(path=None):
 
     Returns:
         dictionary {material name: price per kg}; an empty dictionary when the
-        file is missing, empty or holds a bare null - the price list is optional
-        data and its absence must never break a metric run
+        file is missing, empty, holds a bare null, is not valid JSON or does not
+        hold an object - the price list is optional data and its absence or
+        corruption must never break a metric run. A file that exists but cannot
+        be used is logged, because silently pricing nothing looks exactly like
+        having no prices, and a typo would otherwise hide forever.
     """
     if path is None:
         path = PRICES_PATH
@@ -213,12 +240,44 @@ def load_prices(path=None):
     if not text:
         return {}
 
-    return json.loads(text) or {}
+    try:
+        prices = json.loads(text)
+    except json.JSONDecodeError as error:
+        logger.warning(f"{path}: not valid JSON ({error}) - continuing without prices")
+        return {}
+
+    if prices is None:
+        return {}
+
+    if not isinstance(prices, dict):
+        logger.warning(
+            f"{path}: expected an object of {{material: price}}, got {type(prices).__name__}"
+            " - continuing without prices"
+        )
+        return {}
+
+    return prices
 
 
 def _material_names(materials):
     """Set of the names of the given material records"""
     return {material.get('name') for material in materials}
+
+
+def _carries_oxides(material):
+    """
+    Whether a material record has an analysis a matrix can use
+
+    37 of the 216 materials of the database carry no oxide at all: every
+    pigment, all six silicon-carbide fractions, silicon nitride, silver nitrate,
+    cadmium carbonate, the phosphor, water, CMC, charcoal, gypsum and alum. They
+    are legal recipe entries - a glaze really does contain 1% of cobalt pigment
+    - but they are empty columns for any chemistry calculation.
+    """
+    formula = material.get('formula', {})
+    return sum(
+        content for oxide, content in formula.items() if oxide not in NON_OXIDE_KEYS
+    ) > 0
 
 
 def _is_clay(material_name):
@@ -359,10 +418,17 @@ def _condition_number(materials, recipe):
 
     The matrix is built from the materials the recipe actually uses, over the
     union of the oxides those materials carry. Both are sorted, so the number
-    does not depend on dictionary order. A material named by the recipe but
-    missing from the records contributes no column - it is already reported in
-    "unknown_materials" - but it still counts towards the redundancy below,
-    because a material we cannot analyse is a material we cannot justify.
+    does not depend on dictionary order.
+
+    Two kinds of material are left out of the matrix. One is a material missing
+    from the records, reported in "unknown_materials". The other, 37 times more
+    common, is a material that IS in the records but whose analysis carries no
+    oxide - a pigment, silicon carbide, water, CMC - reported in
+    "unanalysed_materials". Neither may be given a column: an empty column is
+    all zeros, which drops the rank below the number of columns and would
+    condemn every pigmented recipe as degenerate. They still count towards the
+    redundancy below, because a material we cannot analyse is a material whose
+    contribution we cannot justify.
 
     Note the metric judges the SET of materials, not the amounts: two recipes
     built from the same materials in different proportions have the same
@@ -375,7 +441,10 @@ def _condition_number(materials, recipe):
         than 1e16") between numbers that are pure floating point noise.
     """
     used = sorted(
-        (material for material in materials if material.get('name') in recipe),
+        (
+            material for material in materials
+            if material.get('name') in recipe and _carries_oxides(material)
+        ),
         key=lambda material: material.get('name'),
     )
     oxides = sorted({
@@ -536,8 +605,13 @@ def _priority_metric(recipe, original, priorities):
     a corpus of foreign recipes has none, and silently scoring it against
     priorities.json would invent a verdict. Without a mapping the metric is
     simply not computed.
+
+    An EMPTY mapping abstains for the same reason. Letting it through would send
+    every material to DEFAULT_PRIORITY, which cancels in the ratio and returns a
+    confident 1.0 with ok=True - a verdict manufactured out of no data at all,
+    which is worse than either abstaining or failing.
     """
-    if priorities is None:
+    if not priorities:
         return {'solution': None, 'original': None, 'ratio': None, 'ok': None}
 
     solution_priority = _weighted_sum(recipe, priorities, default=DEFAULT_PRIORITY) if recipe else None
@@ -631,10 +705,14 @@ def solution_quality(recipe, original, materials, prices=None, priorities=None):
                   than a correct answer (see the module docstring)
         materials: material records, same structure as database/materials.json
                    entries - at least "name" and "formula". Used for chemistry,
-                   loss on ignition and clay detection. A material named by a
-                   recipe but absent here contributes no oxides and is listed in
-                   "unknown_materials", so that a caller can tell "cheap recipe"
-                   apart from "half of it could not be analysed".
+                   loss on ignition and clay detection. Two kinds of material
+                   contribute no oxides and are reported separately, so that a
+                   caller can tell "cheap recipe" apart from "half of it could
+                   not be analysed": one absent from these records entirely
+                   ("unknown_materials"), and one present but with an analysis
+                   carrying no oxide at all - a pigment, silicon carbide, water
+                   ("unanalysed_materials"). Neither is allowed to fail the
+                   conditioning metric.
         prices: optional {material: price per kg}
         priorities: optional {material: int}, lower being more basic; a material
                     absent from the mapping gets common.DEFAULT_PRIORITY
@@ -645,8 +723,13 @@ def solution_quality(recipe, original, materials, prices=None, priorities=None):
     """
     prices = prices or {}
 
+    named = set(recipe) | set(original)
     known = _material_names(materials)
-    unknown_materials = sorted((set(recipe) | set(original)) - known)
+    unknown_materials = sorted(named - known)
+    unanalysed_materials = sorted(
+        material.get('name') for material in materials
+        if material.get('name') in named and not _carries_oxides(material)
+    )
 
     cost = _cost_metric(recipe, original, prices)
     solution_loi = _loi(materials, recipe)
@@ -679,6 +762,7 @@ def solution_quality(recipe, original, materials, prices=None, priorities=None):
         },
         'loi_delta': abs(solution_loi - original_loi),
         'unknown_materials': unknown_materials,
+        'unanalysed_materials': unanalysed_materials,
     }
 
     # A metric that could not be computed reports ok=None and must not be

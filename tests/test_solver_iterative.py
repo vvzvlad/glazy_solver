@@ -24,7 +24,8 @@ import unittest
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from solver_classic import calculate_umf_error
+from common import weights_to_umf
+from solver_classic import calculate_recipe_composition, calculate_umf_error
 from solver_iterative import (
     SEARCH_EXHAUSTIVE,
     SEARCH_HEURISTIC,
@@ -51,10 +52,15 @@ FULL_TARGET = {
 PARTIAL_TARGET = {"SiO2": 3.0, "Al2O3": 0.4, "CaO": 0.7, "Na2O": 0.3}
 
 
+def material_records():
+    """Every record of database/materials.json, inventory flag ignored"""
+    with open(os.path.join(ROOT, "database", "materials.json"), "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def inventory_from_database():
     """Names of the materials flagged inInventory in database/materials.json"""
-    with open(os.path.join(ROOT, "database", "materials.json"), "r", encoding="utf-8") as f:
-        return [m["name"] for m in json.load(f) if m.get("inInventory")]
+    return [m["name"] for m in material_records() if m.get("inInventory")]
 
 
 class SolverTestCase(unittest.TestCase):
@@ -316,6 +322,91 @@ class TestPartialTarget(SolverTestCase):
         """Nothing is unlisted in a complete target, so the weight cannot matter"""
         hard = find_best_recipe(self.inventory, FULL_TARGET, max_solutions=3, penalize_unlisted=1.0)
         self.assertTrue(hard)
+
+
+class TestTraceIngredient(SolverTestCase):
+    """
+    Half a percent of a colourant is an ingredient, not noise
+
+    This is the regression of the defect that MIN_MATERIAL_WEIGHT = 1.0 caused
+    and that _prune_solution replaced. A weight threshold high enough to keep
+    trace junk out of a recipe is also high enough to throw a colourant out of
+    it, and the answer that comes back after it is thrown out looks fine: the
+    UMF error stays well under the default error_threshold, so nothing in the
+    response says that the glaze just went from blue to clear.
+
+    The target is built by the forward calculation from a recipe that really
+    needs the colourant, so the test states its own premise instead of trusting
+    a number pasted from somewhere.
+
+    Everything below runs at the DEFAULT max_solutions, and that is not an
+    accident. The same target at max_solutions=1 still comes back without the
+    colourant, for a completely different reason that the pruning pass does not
+    touch: the colourant-free answer scores 0.0575, the default error_threshold
+    is 0.1, so find_best_recipe declares the branch converged and stops the
+    search before the colourant is ever tried. Passing error_threshold=0.01
+    recovers it at max_solutions=1 as well. That is a second, independent way
+    for a trace ingredient to go missing and it lives in the acceptance rule,
+    not in the weight floor.
+    """
+
+    COBALT = "Карбонат кобальта, CoCO3"
+
+    COLOURED_RECIPE = {
+        "Полевой шпат FFF": 39.5,
+        "Кварцевая мука Кварцверке W12": 30.0,
+        "Мел, CaCO3": 20.0,
+        "Каолин КЖФ-1": 10.0,
+        COBALT: 0.5,
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        records = {m["name"]: m for m in material_records()}
+        cls.records = [records[name] for name in cls.COLOURED_RECIPE]
+        cls.target = weights_to_umf(
+            calculate_recipe_composition(cls.records, cls.COLOURED_RECIPE))
+        # The inventory of the database has no colourant in it; this is the
+        # potter who owns one and wants it used
+        cls.coloured_inventory = list(cls.inventory) + [cls.COBALT]
+
+    def test_the_target_really_needs_the_colourant(self):
+        """The premise: CoO is in the target and nothing else can bring it"""
+        self.assertGreater(self.target.get("CoO", 0.0), 0.0)
+
+        carriers = [m["name"] for m in material_records()
+                    if m["name"] in self.coloured_inventory and "CoO" in m.get("formula", {})]
+        self.assertEqual(carriers, [self.COBALT])
+
+    def test_a_half_percent_colourant_is_not_dropped(self):
+        solutions = find_best_recipe(self.coloured_inventory, self.target)
+
+        self.assertTrue(solutions, "no solution for the coloured target")
+        recipe = solutions[0]['recipe']
+        self.assertIn(self.COBALT, recipe,
+                      f"the colourant was silently dropped: {recipe}")
+        self.assertAlmostEqual(recipe[self.COBALT], self.COLOURED_RECIPE[self.COBALT], delta=0.2)
+        self.assertAlmostEqual(solutions[0]['result_umf'].get('CoO', 0.0),
+                               self.target['CoO'], delta=0.002)
+
+    def test_dropping_it_would_have_passed_for_an_acceptable_answer(self):
+        """
+        Why this needs a test at all: the failure was invisible
+
+        Solved without the colourant in the inventory, the very same target
+        comes back with an error of about 0.057 - under the default
+        error_threshold of 0.1, so the caller is handed a clear glaze and told
+        it is a good answer. Nothing but the material list gives it away.
+        """
+        without = find_best_recipe(self.inventory, self.target)
+
+        self.assertTrue(without)
+        self.assertNotIn(self.COBALT, without[0]['recipe'])
+        self.assertLess(without[0]['error'], 0.1)
+
+        with_colourant = find_best_recipe(self.coloured_inventory, self.target)
+        self.assertLess(with_colourant[0]['error'], without[0]['error'])
 
 
 class TestDeterminism(SolverTestCase):
