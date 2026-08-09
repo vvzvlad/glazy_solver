@@ -35,8 +35,11 @@ Return shape of solution_quality():
     {
       # number of components; the solution may use one material more
       "count": {"solution": 5, "original": 5, "delta": 0, "ok": True},
-      # components lighter than JUNK_WEIGHT_PERCENT
+      # small components that carry nothing unique - the gated one
       "junk": {"solution": 0, "original": 1, "delta": -1, "ok": True},
+      # every component lighter than JUNK_WEIGHT_PERCENT, load bearing or not;
+      # diagnostic, so that "how many light components" is still answerable
+      "small_components": {"solution": 1, "original": 2, "delta": -1},
       # smallest component; "required" tells whether the rule applied at all
       "min_portion": {"solution": 4.2, "original": 3.0,
                       "required": True, "ok": True},
@@ -52,6 +55,10 @@ Return shape of solution_quality():
       # UMF error introduced by rounding every share to ROUNDING_STEP_PERCENT.
       # DIAGNOSTIC ONLY - it is not a degeneracy detector, see below
       "rounding_drift": {"value": 0.004, "original": 0.003, "ok": True},
+      # share of the batch we have no chemistry for, in either sense below;
+      # gated absolutely, because nothing can be claimed about that mass
+      "unanalysed_share": {"solution": 1.0, "original": 1.0,
+                           "threshold": 20.0, "ok": True},
       # "how easy is this to put together" in roubles x pieces; tracked against
       # a baseline, not a threshold, so it carries no "ok" and never fails.
       # None on either side when that side's cost is unknown - never a bare
@@ -96,6 +103,7 @@ is None and the coverage 0.0.
 
 import json
 import logging
+import math
 import os
 
 import numpy as np
@@ -115,10 +123,25 @@ from solver_classic import (
 logger = logging.getLogger(__name__)
 
 
-# A component lighter than this is "junk": below roughly two percent a raw
-# material stops being a recipe ingredient and becomes a rounding artefact of
-# the fit - it is hard to weigh, easy to forget, and rarely changes the fired
-# result enough to justify a separate bag on the shelf.
+# Below roughly two percent a raw material is hard to weigh, easy to forget and
+# rarely worth a separate bag on the shelf. That makes a component SMALL. It does
+# not by itself make it junk.
+#
+# Weight says nothing about importance: 0.5% of cobalt carbonate is the whole
+# difference between a blue glaze and a clear one. Measured over the Glazy dump,
+# 19862 of 35097 recipes (56.6%) carry a component under 2%, and 17378 of those
+# 33301 components (52.2%) are the ONLY source of an oxide in their own recipe -
+# cobalt carbonate at 0.19% for CoO, copper carbonate at 0.02% for CuO, zircopax
+# at 0.40% for ZrO2, lithium carbonate at 1.10% for Li2O. Counting those as junk
+# calls the reason a recipe exists an artefact of the fit.
+#
+# So a small component is junk only when it is NOT the sole carrier, within its
+# own recipe, of an oxide the original's chemistry contains - the same "load
+# bearing" test the solver's pruning pass applies before dropping a component,
+# so that the two agree on what may be thrown away. The metric keeps its teeth:
+# the other 47.8% of small components in the dump carry nothing unique and stay
+# junk, among them the 0.37% of feldspar that a solver adds to shave a fourth
+# decimal off an oxide every other material already supplies.
 JUNK_WEIGHT_PERCENT = 2.0
 
 # Nothing below one percent should appear in a 100 g batch at all: pottery
@@ -176,6 +199,32 @@ MAX_ROUNDING_DRIFT = 0.02
 # without a measurement that justifies a different one.
 MAX_CONDITION_NUMBER = 1e3
 
+# Share of the batch that may consist of material with no usable analysis -
+# either absent from the records or present with an oxide-free analysis. Such
+# material is excluded from the conditioning matrix, because an empty column
+# would condemn every pigmented recipe as degenerate; this rule is what stops
+# that exclusion from quietly becoming a licence. Nothing computes the chemistry
+# of that mass, so the UMF describes only the rest of the bucket, and past some
+# fraction the whole chemistry claim stops being a description of the fired
+# glaze.
+#
+# 20% is measured, not chosen by taste. Of the 34778 usable Glazy corpus cases,
+# 8.4% carry an oxide-free ingredient at all (9.7% of the standard 300-case
+# sample, matching the corpus benchmark), and among those carriers the median
+# share is 4.4% and the 90th percentile 19.7% - ordinary stain, grog, Darvan and
+# CMC practice lives below a fifth of the batch. Above it sits a different
+# animal: the 269 cases (0.77% of the corpus) over 20% are recipes built on
+# water, grog, terra sigillata or a ready-made commercial glaze, where the UMF
+# is a statement about a minority of the bucket. All eleven of our own reference
+# recipes are at 0%, so the rule costs nothing at home. A tighter 10% would fire
+# on 1.40% of the corpus, much of it legitimate stain-heavy work.
+#
+# There is deliberately no "no worse than the original" waiver here, unlike
+# min_portion. A sub-percent colorant in the original is evidence that the
+# chemistry needs one; 80% of water in the original is evidence that the record
+# is junk, and copying it does not make the copy judgeable.
+MAX_UNANALYSED_SHARE_PERCENT = 20.0
+
 # A glaze with less clay than this will not stay in suspension no matter how
 # perfect its chemistry: it settles into a brick at the bottom of the bucket.
 MIN_CLAY_PERCENT = 5.0
@@ -202,7 +251,8 @@ CLAY_KEYWORDS = (
 # original" requirement. Order fixes the order of the "failures" list.
 # rounding_drift is deliberately absent - it reports an "ok" flag for
 # information only and can never fail a solution.
-GATED_METRICS = ('count', 'junk', 'min_portion', 'cost', 'priority', 'conditioning')
+GATED_METRICS = ('count', 'junk', 'min_portion', 'cost', 'priority', 'conditioning',
+                 'unanalysed_share')
 
 # Metrics that only warn: technologically suspicious, but not a reason to
 # declare the solution worse than the original.
@@ -221,12 +271,14 @@ def load_prices(path=None):
               this module
 
     Returns:
-        dictionary {material name: price per kg}; an empty dictionary when the
-        file is missing, empty, holds a bare null, is not valid JSON or does not
-        hold an object - the price list is optional data and its absence or
-        corruption must never break a metric run. A file that exists but cannot
-        be used is logged, because silently pricing nothing looks exactly like
-        having no prices, and a typo would otherwise hide forever.
+        dictionary {material name: price per kg}, carrying only the entries
+        whose price is a finite number; an empty dictionary when the file is
+        missing, empty, holds a bare null, cannot be read or decoded, is not
+        valid JSON or does not hold an object. The price list is optional data:
+        neither its absence nor its corruption may break a metric run, and a
+        typo in one entry must cost that entry's coverage rather than crash a
+        corpus run four calls later. Anything a file loses this way is logged,
+        because silently pricing nothing looks exactly like having no prices.
     """
     if path is None:
         path = PRICES_PATH
@@ -234,16 +286,12 @@ def load_prices(path=None):
     if not os.path.isfile(path):
         return {}
 
-    with open(path, 'r', encoding='utf-8') as f:
-        text = f.read().strip()
-
-    if not text:
-        return {}
-
     try:
-        prices = json.loads(text)
-    except json.JSONDecodeError as error:
-        logger.warning(f"{path}: not valid JSON ({error}) - continuing without prices")
+        with open(path, 'r', encoding='utf-8') as f:
+            text = f.read().strip()
+        prices = json.loads(text) if text else None
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as error:
+        logger.warning(f"{path}: cannot be read as JSON ({error}) - continuing without prices")
         return {}
 
     if prices is None:
@@ -256,7 +304,25 @@ def load_prices(path=None):
         )
         return {}
 
-    return prices
+    # A price that is not a finite number would not fail here but four calls
+    # later, inside the cost metric, halfway through a corpus run. Dropping it
+    # degrades the coverage instead, which the cost metric already reports.
+    # bool is an int in Python and is never a price.
+    usable = {}
+    rejected = []
+    for material, price in prices.items():
+        if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price):
+            rejected.append(material)
+        else:
+            usable[material] = price
+
+    if rejected:
+        logger.warning(
+            f"{path}: dropping {len(rejected)} entries whose price is not a finite number: "
+            f"{', '.join(sorted(rejected))}"
+        )
+
+    return usable
 
 
 def _material_names(materials):
@@ -426,9 +492,12 @@ def _condition_number(materials, recipe):
     oxide - a pigment, silicon carbide, water, CMC - reported in
     "unanalysed_materials". Neither may be given a column: an empty column is
     all zeros, which drops the rank below the number of columns and would
-    condemn every pigmented recipe as degenerate. They still count towards the
-    redundancy below, because a material we cannot analyse is a material whose
-    contribution we cannot justify.
+    condemn every pigmented recipe as degenerate.
+
+    That exclusion is bounded by the "unanalysed_share" metric, NOT by the
+    redundancy reported below. Redundancy is diagnostic output that nothing
+    gates on, so leaning on it would mean the exclusion has no limit at all and
+    a recipe that is four fifths unanalysable would pass this metric clean.
 
     Note the metric judges the SET of materials, not the amounts: two recipes
     built from the same materials in different proportions have the same
@@ -531,10 +600,85 @@ def _count_metric(recipe, original):
     }
 
 
-def _junk_metric(recipe, original):
-    """Components too light to be worth a separate bag"""
-    solution_junk = sum(1 for weight in recipe.values() if weight < JUNK_WEIGHT_PERCENT)
-    original_junk = sum(1 for weight in original.values() if weight < JUNK_WEIGHT_PERCENT)
+def _chemistry_oxides(materials, recipe):
+    """
+    The oxides a recipe's chemistry actually contains
+
+    Read from the weight composition rather than from the UMF on purpose.
+    weights_to_umf() rounds to three decimals, and a colorant dosed at a few
+    hundredths of a percent - copper carbonate at 0.02% is a real Glazy
+    specimen - contributes a UMF value that rounds to zero. Its oxide would then
+    not count as part of the chemistry, its sole carrier would be junk again,
+    and the rule would fail on precisely the case it exists for.
+    """
+    composition = calculate_recipe_composition(materials, recipe)
+    return {
+        oxide for oxide, weight in composition.items()
+        if weight > 0 and oxide not in NON_OXIDE_KEYS
+    }
+
+
+def _carried_oxides(material):
+    """Oxides a material record actually brings to a batch"""
+    return {
+        oxide for oxide, content in material.get('formula', {}).items()
+        if content > 0 and oxide not in NON_OXIDE_KEYS
+    }
+
+
+def _sole_carrier_oxides(recipe, index):
+    """
+    For each material of the recipe, the oxides it is the only source of
+
+    Sole-carrier status is a property of THIS recipe, not of the database: chalk
+    is the only source of CaO in one recipe and one of three in the next, and
+    only the first makes it load bearing.
+    """
+    sources = {}
+    for name, weight in recipe.items():
+        if weight <= 0:
+            continue
+        for oxide in _carried_oxides(index.get(name, {})):
+            sources.setdefault(oxide, []).append(name)
+
+    sole = {}
+    for oxide, names in sources.items():
+        if len(names) == 1:
+            sole.setdefault(names[0], set()).add(oxide)
+
+    return sole
+
+
+def _count_small(recipe):
+    """Components lighter than JUNK_WEIGHT_PERCENT, load bearing or not"""
+    return sum(1 for weight in recipe.values() if weight < JUNK_WEIGHT_PERCENT)
+
+
+def _count_junk(recipe, index, chemistry_oxides):
+    """
+    Small components that carry nothing the chemistry could not get elsewhere
+
+    A material missing from the records or carrying no oxide brings nothing
+    unique by definition, so it is never exempt - being unanalysable is not a
+    reason to keep a component.
+    """
+    sole = _sole_carrier_oxides(recipe, index)
+    return sum(
+        1 for name, weight in recipe.items()
+        if weight < JUNK_WEIGHT_PERCENT and not (sole.get(name, frozenset()) & chemistry_oxides)
+    )
+
+
+def _junk_metric(recipe, original, index, chemistry_oxides):
+    """
+    Small components that are not the sole carrier of an oxide of the chemistry
+
+    Both sides are judged by the same rule and against the same set of oxides -
+    the original's - so that the comparison stays like for like. See the comment
+    on JUNK_WEIGHT_PERCENT for why weight alone is not the test.
+    """
+    solution_junk = _count_junk(recipe, index, chemistry_oxides)
+    original_junk = _count_junk(original, index, chemistry_oxides)
     return {
         'solution': solution_junk,
         'original': original_junk,
@@ -673,6 +817,32 @@ def _share_delta(recipe, original):
     return sum(abs(recipe[name] - original[name]) for name in set(recipe) & set(original))
 
 
+def _unanalysed_share_metric(recipe, original, unanalysable):
+    """
+    Share of the batch made of material whose chemistry we do not have
+
+    Both classes count: a material absent from the records and a material whose
+    analysis carries no oxide. Neither contributes to the computed chemistry, so
+    both are the same hole from this metric's point of view - which of the two
+    it was stays visible in "unknown_materials" and "unanalysed_materials".
+
+    This is a validity precondition rather than a comparison, so it is gated
+    absolutely and the original's share is reported for context only. A solver
+    solution scores 0 here by construction (the solvers drop oxide-free
+    materials from the inventory before they start), so the rule only ever
+    speaks about a recipe someone handed us.
+    """
+    solution_share = sum(weight for name, weight in recipe.items() if name in unanalysable)
+    original_share = sum(weight for name, weight in original.items() if name in unanalysable)
+
+    return {
+        'solution': solution_share,
+        'original': original_share,
+        'threshold': MAX_UNANALYSED_SHARE_PERCENT,
+        'ok': solution_share <= MAX_UNANALYSED_SHARE_PERCENT,
+    }
+
+
 def _clay_metric(recipe, original):
     """
     Total share of clay-like materials
@@ -731,6 +901,11 @@ def solution_quality(recipe, original, materials, prices=None, priorities=None):
         if material.get('name') in named and not _carries_oxides(material)
     )
 
+    index = {material.get('name'): material for material in materials}
+    chemistry_oxides = _chemistry_oxides(materials, original)
+    small_solution = _count_small(recipe)
+    small_original = _count_small(original)
+
     cost = _cost_metric(recipe, original, prices)
     solution_loi = _loi(materials, recipe)
     original_loi = _loi(materials, original)
@@ -739,7 +914,12 @@ def solution_quality(recipe, original, materials, prices=None, priorities=None):
 
     result = {
         'count': _count_metric(recipe, original),
-        'junk': _junk_metric(recipe, original),
+        'junk': _junk_metric(recipe, original, index, chemistry_oxides),
+        'small_components': {
+            'solution': small_solution,
+            'original': small_original,
+            'delta': small_solution - small_original,
+        },
         'min_portion': _min_portion_metric(recipe, original),
         'cost': cost,
         'priority': _priority_metric(recipe, original, priorities),
@@ -751,6 +931,9 @@ def solution_quality(recipe, original, materials, prices=None, priorities=None):
             'original': original_drift,
             'ok': None if drift is None else drift <= MAX_ROUNDING_DRIFT,
         },
+        'unanalysed_share': _unanalysed_share_metric(
+            recipe, original, set(unknown_materials) | set(unanalysed_materials)
+        ),
         'assembly_score': _assembly_score(recipe, cost['cost_abs'], original, cost['original']),
         'set_jaccard': _set_jaccard(recipe, original),
         'share_delta': _share_delta(recipe, original),

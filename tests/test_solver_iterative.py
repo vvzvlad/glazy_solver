@@ -200,12 +200,35 @@ class TestArgumentValidation(SolverTestCase):
 class TestSolutionShape(SolverTestCase):
 
     REQUIRED_KEYS = ('recipe', 'error', 'objective_error', 'result_umf', 'target_umf',
-                     'effective_target_umf', 'unlisted_weight', 'materials_count', 'iterations')
+                     'effective_target_umf', 'unlisted_weight', 'materials_count',
+                     'merged_variants', 'iterations')
 
     def test_every_documented_key_is_present(self):
         for solution in find_best_recipe(self.inventory, FULL_TARGET, max_solutions=3):
             for key in self.REQUIRED_KEYS:
                 self.assertIn(key, solution)
+
+    def test_merged_variants_counts_the_recipes_that_collapsed_onto_this_one(self):
+        """
+        Fewer solutions than asked for is not silence any more
+
+        Several recipes of the search can prune onto the same answer, and they
+        are merged instead of being listed as near-duplicates. The count is what
+        tells a caller that happened, so it has to be an honest integer even
+        when nothing collapsed.
+        """
+        solutions = find_best_recipe(self.inventory, FULL_TARGET, max_solutions=5)
+
+        for solution in solutions:
+            self.assertIsInstance(solution['merged_variants'], int)
+            self.assertGreaterEqual(solution['merged_variants'], 0)
+
+        # A target with many near-equivalent answers has to show at least one
+        # merge somewhere, otherwise this field is never exercised at all
+        crowded = find_best_recipe(self.inventory, PARTIAL_TARGET, max_solutions=5,
+                                   penalize_unlisted=0.0)
+        self.assertTrue(any(s['merged_variants'] > 0 for s in solutions + crowded),
+                        "no recipe collapsed onto another on either target")
 
     def test_recipe_weights_sum_to_exactly_100(self):
         targets = (FULL_TARGET, PARTIAL_TARGET)
@@ -334,6 +357,13 @@ class TestTraceIngredient(SolverTestCase):
     it, and the answer that comes back after it is thrown out looks fine: the
     UMF error stays well under the default error_threshold, so nothing in the
     response says that the glaze just went from blue to clear.
+
+    What keeps the colourant here is the sole carrier rule, not the size of the
+    error. Cobalt happens to be a flux, so its removal drags the unity
+    denominator and costs ten tolerances, which once looked like proof that the
+    tolerance protects colourants - it is not, and
+    tests/test_solver_inverse.py TestSoleCarrierRule holds the counterexample
+    with a colourant that is not a flux.
 
     The target is built by the forward calculation from a recipe that really
     needs the colourant, so the test states its own premise instead of trusting

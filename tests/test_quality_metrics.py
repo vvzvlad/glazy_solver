@@ -56,9 +56,21 @@ ZIRCON = {'name': 'Zircon', 'formula': {'ZrO2': 66.00, 'SiO2': 69.22}}
 # empty formula: every pigment, the silicon carbide fractions, water, CMC,
 # charcoal, gypsum, alum. They are legal recipe entries with no chemistry.
 PIGMENT = {'name': 'Кобальт голубой пигмент 6226', 'formula': {}}
+# A colorant dosed in fractions of a percent that is nevertheless the entire
+# reason its recipe exists - the Glazy dump has cobalt carbonate at 0.19% and
+# copper carbonate at 0.02%
+COBALT_CARBONATE = {'name': 'Углекислый кобальт', 'formula': {'CoO': 63.00}}
+COPPER_CARBONATE = {'name': 'Углекислая медь', 'formula': {'CuO': 71.90}}
+# A kaolin whose passport carries a trace of titania, after glazy 397 where EP
+# Kaolin is the only source of P2O5 in its recipe at 1.45%
+TITANIUM_KAOLIN = {'name': 'Каолин с титаном', 'formula': {'Al2O3': 40.00, 'SiO2': 47.00, 'TiO2': 0.05}}
+WATER = {'name': 'Вода', 'formula': {}}
+CMC = {'name': 'КМЦ', 'formula': {}}
+CARBIDE = {'name': 'Карбид кремния', 'formula': {}}
 
 MATERIALS = [FELDSPAR, FELDSPAR_TWIN, SILICA, WHITING, KAOLIN, IRON_OXIDE, ALUMINA,
-             KAOLIN_RU, ZIRCON, PIGMENT]
+             KAOLIN_RU, ZIRCON, PIGMENT, WATER, CMC, CARBIDE,
+             COBALT_CARBONATE, COPPER_CARBONATE, TITANIUM_KAOLIN]
 
 # A plain, well behaved recipe used as the original in most of the tests
 BASE_RECIPE = {'Potash Feldspar': 40.0, 'Silica': 30.0, 'Whiting': 20.0, 'Kaolin': 10.0}
@@ -106,6 +118,111 @@ class TestJunkAndMinPortion(unittest.TestCase):
         self.assertFalse(report['min_portion']['required'])
         self.assertTrue(report['min_portion']['ok'])
         self.assertNotIn('min_portion', report['failures'])
+
+
+class TestLoadBearingSmallComponents(unittest.TestCase):
+    """
+    A colourant is not junk for being light
+
+    Weight says nothing about importance: over the Glazy dump, 52.2% of the
+    components under 2% are the only source of an oxide in their own recipe.
+    Junk is a small component that carries nothing the chemistry could not get
+    from the rest of the batch.
+    """
+
+    # 0.5% of cobalt is the whole difference between a blue glaze and a clear one
+    BLUE = {'Potash Feldspar': 39.5, 'Silica': 30.0, 'Whiting': 20.0,
+            'Kaolin': 10.0, 'Углекислый кобальт': 0.5}
+
+    def test_a_light_sole_carrier_is_not_junk(self):
+        report = qm.solution_quality(self.BLUE, self.BLUE, MATERIALS)
+
+        self.assertEqual(report['junk']['solution'], 0)
+        self.assertEqual(report['small_components']['solution'], 1)
+        self.assertTrue(report['junk']['ok'])
+        self.assertEqual(report['failures'], [])
+
+    def test_a_light_component_that_carries_nothing_unique_is_junk(self):
+        # The 0.37% of feldspar that started this: every oxide it brings is
+        # already on the table from the other four materials
+        padded = {'Potash Feldspar': 0.37, 'Feldspar Twin': 39.13, 'Silica': 30.0,
+                  'Whiting': 20.0, 'Kaolin': 10.5}
+
+        report = qm.solution_quality(padded, BASE_RECIPE, MATERIALS)
+
+        self.assertEqual(report['junk']['solution'], 1)
+        self.assertEqual(report['small_components']['solution'], 1)
+        self.assertFalse(report['junk']['ok'])
+        self.assertIn('junk', report['failures'])
+
+    def test_both_counts_are_reported(self):
+        # One light colourant that stays, one light filler that does not
+        mixed = {'Potash Feldspar': 39.13, 'Silica': 30.0, 'Whiting': 20.0,
+                 'Kaolin': 10.0, 'Углекислый кобальт': 0.5, 'Red Iron Oxide': 0.37}
+
+        report = qm.solution_quality(mixed, mixed, MATERIALS)
+
+        # Iron oxide is not unique - the feldspar carries Fe2O3 as well
+        self.assertEqual(report['small_components']['solution'], 2)
+        self.assertEqual(report['junk']['solution'], 1)
+
+    def test_sole_carrier_status_belongs_to_the_recipe_not_the_database(self):
+        # The same material, load bearing in one recipe and redundant in the
+        # next, purely because of what else is in the bucket
+        alone = {'Potash Feldspar': 39.5, 'Silica': 30.0, 'Whiting': 20.0,
+                 'Kaolin': 10.0, 'Углекислый кобальт': 0.5}
+        accompanied = dict(alone, **{'Potash Feldspar': 29.5, 'Zircon': 10.0})
+
+        self.assertEqual(qm.solution_quality(alone, alone, MATERIALS)['junk']['solution'], 0)
+        # Zircon brings SiO2 and ZrO2, not CoO, so cobalt stays the sole carrier
+        self.assertEqual(qm.solution_quality(accompanied, accompanied, MATERIALS)['junk']['solution'], 0)
+
+        # ... but a second cobalt source takes the exemption away from both
+        shared = {'Potash Feldspar': 39.0, 'Silica': 30.0, 'Whiting': 20.0, 'Kaolin': 10.0,
+                  'Углекислый кобальт': 0.5, 'Углекислая медь': 0.5}
+        shared_report = qm.solution_quality(shared, shared, MATERIALS)
+        self.assertEqual(shared_report['small_components']['solution'], 2)
+        self.assertEqual(shared_report['junk']['solution'], 0)
+
+    def test_only_oxides_of_the_originals_chemistry_earn_the_exemption(self):
+        # Copper the original never asked for is not load bearing, it is noise
+        with_copper = {'Potash Feldspar': 39.5, 'Silica': 30.0, 'Whiting': 20.0,
+                       'Kaolin': 10.0, 'Углекислая медь': 0.5}
+
+        report = qm.solution_quality(with_copper, BASE_RECIPE, MATERIALS)
+
+        self.assertEqual(report['small_components']['solution'], 1)
+        self.assertEqual(report['junk']['solution'], 1)
+        self.assertIn('junk', report['failures'])
+
+    def test_an_unanalysable_small_component_is_never_exempt(self):
+        # Being unanalysable is not a reason to keep a component: nothing is
+        # known to be carried, so nothing unique is carried
+        with_pigment = {'Potash Feldspar': 39.5, 'Silica': 30.0, 'Whiting': 20.0,
+                        'Kaolin': 10.0, 'Кобальт голубой пигмент 6226': 0.5}
+
+        report = qm.solution_quality(with_pigment, BASE_RECIPE, MATERIALS)
+
+        self.assertEqual(report['junk']['solution'], 1)
+        self.assertEqual(report['small_components']['solution'], 1)
+
+    def test_a_trace_oxide_survives_the_umf_rounding_cliff(self):
+        # Keying the exemption on the UMF instead of the weight composition
+        # would lose 433 of the 17339 exemptions in the Glazy dump, because
+        # weights_to_umf() rounds to three decimals and a trace oxide rounds
+        # clean out of it. Modelled on glazy 397, where EP Kaolin at 1.45% is
+        # the only source of P2O5 in its recipe.
+        trace = {'Potash Feldspar': 38.5, 'Silica': 30.0, 'Whiting': 20.0,
+                 'Kaolin': 10.0, 'Каолин с титаном': 1.5}
+
+        umf = qm.weights_to_umf(qm.calculate_recipe_composition(MATERIALS, trace))
+        report = qm.solution_quality(trace, trace, MATERIALS)
+
+        # The oxide is really there and really invisible in the UMF
+        self.assertGreater(qm.calculate_recipe_composition(MATERIALS, trace)['TiO2'], 0.0)
+        self.assertEqual(umf.get('TiO2', 0.0), 0.0)
+        self.assertEqual(report['junk']['solution'], 0)
+        self.assertEqual(report['small_components']['solution'], 1)
 
 
 class TestCount(unittest.TestCase):
@@ -314,6 +431,82 @@ class TestConditioning(unittest.TestCase):
         self.assertEqual(report['conditioning']['redundancy'], 1)
         self.assertFalse(report['conditioning']['ok'])
         self.assertIn('conditioning', report['failures'])
+
+
+class TestUnanalysedShare(unittest.TestCase):
+    """
+    The bound on how much of the batch may have no chemistry behind it
+
+    Excluding oxide-free materials from the conditioning matrix is right - 1% of
+    pigment must not condemn a recipe - but unbounded it is a licence. This is
+    the bound. Threshold measured over the Glazy corpus: ordinary stain, grog
+    and CMC practice lives under a fifth of the batch (median 4.4% among the
+    carriers, 90th percentile 19.7%), and the 0.77% of cases above it are built
+    on water, grog or a ready-made commercial glaze.
+    """
+
+    def test_an_ordinary_pigment_dose_passes(self):
+        pigmented = {'Potash Feldspar': 39.0, 'Silica': 30.0, 'Whiting': 20.0,
+                     'Kaolin': 10.0, 'Кобальт голубой пигмент 6226': 1.0}
+
+        # Against itself, so that nothing else can colour the verdict: a 1%
+        # colorant is normal practice and must clear every gate
+        report = qm.solution_quality(pigmented, pigmented, MATERIALS)
+
+        self.assertAlmostEqual(report['unanalysed_share']['solution'], 1.0)
+        self.assertAlmostEqual(report['unanalysed_share']['threshold'],
+                               qm.MAX_UNANALYSED_SHARE_PERCENT)
+        self.assertTrue(report['unanalysed_share']['ok'])
+        self.assertEqual(report['failures'], [])
+
+    def test_a_batch_that_is_mostly_unanalysable_fails(self):
+        # The case the conditioning exclusion used to catch and then stopped
+        # catching: four fifths of the batch is material we cannot analyse, and
+        # the conditioning of the one remaining column is a perfect 1.0
+        mostly_unanalysable = {'Potash Feldspar': 20.0, 'Кобальт голубой пигмент 6226': 20.0,
+                               'Вода': 20.0, 'КМЦ': 20.0, 'Карбид кремния': 20.0}
+
+        report = qm.solution_quality(mostly_unanalysable, BASE_RECIPE, MATERIALS)
+
+        self.assertAlmostEqual(report['unanalysed_share']['solution'], 80.0)
+        self.assertFalse(report['unanalysed_share']['ok'])
+        self.assertIn('unanalysed_share', report['failures'])
+        # ... and the conditioning really is clean, which is the whole point:
+        # without this metric nothing would have objected
+        self.assertTrue(report['conditioning']['ok'])
+        self.assertAlmostEqual(report['conditioning']['cond'], 1.0)
+
+    def test_an_equally_unanalysable_original_grants_no_waiver(self):
+        # Unlike min_portion, this rule has no "no worse than the original"
+        # escape: a junk record does not make a copy of it judgeable
+        mostly_unanalysable = {'Potash Feldspar': 20.0, 'Вода': 40.0, 'КМЦ': 40.0}
+
+        report = qm.solution_quality(mostly_unanalysable, mostly_unanalysable, MATERIALS)
+
+        self.assertAlmostEqual(report['unanalysed_share']['original'], 80.0)
+        self.assertFalse(report['unanalysed_share']['ok'])
+        self.assertIn('unanalysed_share', report['failures'])
+
+    def test_unknown_materials_count_towards_the_same_share(self):
+        # A material we have never heard of contributes no chemistry either, so
+        # it is the same hole; which of the two it was stays visible in the
+        # two separate lists
+        recipe = {'Potash Feldspar': 40.0, 'Silica': 20.0,
+                  'Mystery Powder': 25.0, 'Кобальт голубой пигмент 6226': 15.0}
+
+        report = qm.solution_quality(recipe, BASE_RECIPE, MATERIALS)
+
+        self.assertAlmostEqual(report['unanalysed_share']['solution'], 40.0)
+        self.assertFalse(report['unanalysed_share']['ok'])
+        self.assertEqual(report['unknown_materials'], ['Mystery Powder'])
+        self.assertEqual(report['unanalysed_materials'], ['Кобальт голубой пигмент 6226'])
+
+    def test_a_clean_recipe_scores_zero(self):
+        report = qm.solution_quality(BASE_RECIPE, BASE_RECIPE, MATERIALS)
+
+        self.assertAlmostEqual(report['unanalysed_share']['solution'], 0.0)
+        self.assertAlmostEqual(report['unanalysed_share']['original'], 0.0)
+        self.assertTrue(report['unanalysed_share']['ok'])
 
 
 class TestCost(unittest.TestCase):
@@ -631,6 +824,46 @@ class TestLoadPrices(unittest.TestCase):
             f.write('null')
 
         self.assertEqual(qm.load_prices(path), {})
+
+    def test_a_non_utf8_file_does_not_escape(self):
+        # A price list saved from a Windows editor in cp1251, or any binary
+        # dropped in by accident, must not take down a metric run
+        path = os.path.join(self.tmp_dir, 'cp1251.json')
+        with open(path, 'wb') as f:
+            f.write('{"Мел, CaCO3": 79}'.encode('cp1251'))
+
+        with self.assertLogs('quality_metrics', level='WARNING'):
+            self.assertEqual(qm.load_prices(path), {})
+
+    def test_a_non_numeric_price_is_dropped_not_deferred(self):
+        # A string price survives the isinstance(dict) check and then explodes
+        # inside the cost metric, far away from the file that caused it
+        path = os.path.join(self.tmp_dir, 'typo.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump({'Мел, CaCO3': 'ninety', 'Каолин КЖФ-1': 90,
+                       'Кварц': True, 'Тальк': None}, f, ensure_ascii=False)
+
+        with self.assertLogs('quality_metrics', level='WARNING'):
+            prices = qm.load_prices(path)
+
+        self.assertEqual(prices, {'Каолин КЖФ-1': 90})
+
+    def test_a_typo_in_the_price_list_only_costs_coverage(self):
+        # The end-to-end version of the case above: the metric run completes
+        # with a lower coverage instead of raising
+        prices = {'Potash Feldspar': 100.0, 'Silica': 'fifty',
+                  'Whiting': 40.0, 'Kaolin': 90.0}
+        path = os.path.join(self.tmp_dir, 'partial.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(prices, f, ensure_ascii=False)
+
+        with self.assertLogs('quality_metrics', level='WARNING'):
+            loaded = qm.load_prices(path)
+        report = qm.solution_quality(BASE_RECIPE, BASE_RECIPE, MATERIALS, prices=loaded)
+
+        self.assertAlmostEqual(report['cost']['coverage'], 3.0 / 4.0)
+        self.assertIsNone(report['cost']['ratio'])
+        self.assertIsNone(report['cost']['ok'])
 
     def test_the_committed_file_parses(self):
         # The price list is filled by hand over time, so this asserts the shape

@@ -44,6 +44,7 @@ from solver_iterative import (
     PRUNE_ERROR_TOLERANCE,
     _build_problem,
     _prune_solution,
+    _sole_carriers,
     _solve_material_set,
     _usable_target,
     find_best_recipe,
@@ -503,6 +504,149 @@ class TestPruningPass(CollinearFeldsparsMixin, unittest.TestCase):
 
         self.assertEqual(free[0]['materials_count'], 4)
         self.assertEqual(floored[0]['materials_count'], 5)
+
+
+class TestSoleCarrierRule(unittest.TestCase):
+    """
+    The structural half of _prune_solution: what may never be removed
+
+    _sole_carriers answers one question - "is this material the only thing in
+    the recipe supplying an oxide the target asked for" - and the answer is what
+    protects colourants. No quantity takes part in it, which is the whole point:
+    a colourant works optically and contributes almost nothing to the chemistry,
+    so a threshold on chemical error cannot recognise one at any calibration.
+    """
+
+    SILICA = {'name': 'Silica', 'formula': {'SiO2': 100.0}}
+    WHITING = {'name': 'Whiting', 'formula': {'CaO': 56.1}}
+    KAOLIN = {'name': 'Kaolin', 'formula': {'Al2O3': 40.21, 'SiO2': 47.29}}
+    COBALT = {'name': 'Cobalt Carbonate', 'formula': {'CoO': 63.0}}
+    CHROME = {'name': 'Chrome Oxide', 'formula': {'Cr2O3': 100.0}}
+
+    def test_the_only_source_of_a_requested_oxide_is_protected(self):
+        used = [self.SILICA, self.WHITING, self.KAOLIN, self.COBALT]
+        target = {'SiO2': 3.0, 'Al2O3': 0.4, 'CaO': 1.0, 'CoO': 0.015}
+
+        # Cobalt for CoO, whiting for CaO, kaolin for Al2O3; SiO2 has three
+        # sources, so nothing is protected on its account
+        self.assertEqual(_sole_carriers(used, target),
+                         {'Cobalt Carbonate', 'Whiting', 'Kaolin'})
+
+    def test_a_second_source_removes_the_protection(self):
+        both = [self.SILICA, self.WHITING, self.KAOLIN, self.COBALT,
+                {'name': 'Cobalt Oxide', 'formula': {'CoO': 93.35}}]
+        target = {'SiO2': 3.0, 'Al2O3': 0.4, 'CaO': 1.0, 'CoO': 0.015}
+
+        carriers = _sole_carriers(both, target)
+        self.assertNotIn('Cobalt Carbonate', carriers)
+        self.assertNotIn('Cobalt Oxide', carriers)
+
+    def test_an_oxide_requested_as_zero_protects_nobody(self):
+        """"none of this" is a reason to drop the carrier, not to keep it"""
+        used = [self.SILICA, self.WHITING, self.CHROME]
+
+        self.assertNotIn('Chrome Oxide', _sole_carriers(used, {'SiO2': 3.0, 'Cr2O3': 0.0}))
+
+    def test_an_oxide_the_target_never_mentions_protects_nobody(self):
+        """An unlisted oxide is contamination by definition"""
+        used = [self.SILICA, self.WHITING, self.CHROME]
+
+        self.assertNotIn('Chrome Oxide', _sole_carriers(used, {'SiO2': 3.0}))
+
+    def test_a_non_flux_colourant_survives_a_removal_the_tolerance_would_allow(self):
+        """
+        The case that the error tolerance alone gets wrong
+
+        Chrome oxide is not a flux, so losing it does not drag the unity
+        denominator the way losing cobalt does, and its whole contribution to
+        the UMF error is smaller than PRUNE_ERROR_TOLERANCE. On the numbers
+        alone the removal is free. On the question the rule actually asks - is
+        anything else in this recipe carrying the Cr2O3 the target asked for -
+        it is not free at all.
+        """
+        materials = [self.SILICA, self.WHITING, self.KAOLIN, self.CHROME]
+        recipe = {'Silica': 30.0, 'Whiting': 25.0, 'Kaolin': 44.85, 'Chrome Oxide': 0.15}
+        target = forward_umf(materials, recipe)
+
+        problem = _build_problem(_usable_target(target), materials, 1.0)
+        state = _solve_material_set(materials, problem)
+        self.assertIn('Chrome Oxide', state['recipe'], "the fixture lost the colourant before pruning")
+
+        # The premise: dropping it really is cheap enough for the tolerance
+        without = _solve_material_set(
+            [m for m in materials if m['name'] != 'Chrome Oxide'], problem)
+        self.assertLessEqual(without['objective_error'],
+                             state['objective_error'] + PRUNE_ERROR_TOLERANCE,
+                             "this colourant is no longer a counterexample to the tolerance")
+
+        # ...and it stays anyway
+        self.assertIn('Chrome Oxide', _prune_solution(state, problem, 1)['recipe'])
+
+
+class TestPruningChecksBothErrors(unittest.TestCase):
+    """
+    The removal test runs on `error` as well as on the search objective
+
+    With penalize_unlisted > 0 the objective is error plus the damped
+    contamination of the unlisted oxides, so dropping a material that brought
+    unrequested oxides shrinks the second term and can pay for an arbitrary
+    rise in the first - and the first is the number the caller receives. The
+    materials below are built so that exactly that trade is on offer.
+    """
+
+    def setUp(self):
+        self.materials = [
+            {'name': 'Silica', 'formula': {'SiO2': 100.0}},
+            {'name': 'Whiting', 'formula': {'CaO': 56.1}},
+            {'name': 'Kaolin', 'formula': {'Al2O3': 40.0, 'SiO2': 47.0}},
+            # The trap: it carries the requested K2O and a lot of unrequested BaO
+            {'name': 'Dirty Feldspar', 'formula': {'K2O': 14.0, 'SiO2': 40.0, 'BaO': 30.0}},
+            # ...and this one keeps it from being the SOLE carrier of K2O, so the
+            # structural rule stays out of the way and the tolerance has to decide
+            {'name': 'Clean Feldspar', 'formula': {'Al2O3': 19.0, 'SiO2': 68.0, 'K2O': 2.0}},
+        ]
+        self.target = {'SiO2': 3.0, 'Al2O3': 0.5, 'CaO': 0.7, 'K2O': 0.4}
+        self.problem = _build_problem(_usable_target(self.target), self.materials, 1.0)
+        self.state = _solve_material_set(self.materials, self.problem)
+        self.assertIsNotNone(self.state)
+
+    def test_the_two_error_numbers_really_diverge_here(self):
+        """Without this the test below would pass for the wrong reason"""
+        self.assertGreater(self.state['objective_error'], self.state['error'])
+        self.assertNotIn('Dirty Feldspar',
+                         _sole_carriers([m for m in self.materials
+                                         if m['name'] in self.state['recipe']],
+                                        _usable_target(self.target)))
+
+    def test_a_removal_that_only_looks_free_on_the_objective_is_rejected(self):
+        used = [m for m in self.materials if m['name'] in self.state['recipe']]
+        tempting = []
+
+        for dropped in used:
+            reduced = [m for m in used if m['name'] != dropped['name']]
+            candidate = _solve_material_set(reduced, self.problem)
+            if candidate is None:
+                continue
+            cheap_on_objective = (candidate['objective_error']
+                                  <= self.state['objective_error'] + PRUNE_ERROR_TOLERANCE)
+            dear_on_error = candidate['error'] > self.state['error'] + PRUNE_ERROR_TOLERANCE
+            if cheap_on_objective and dear_on_error:
+                tempting.append(dropped['name'])
+
+        self.assertTrue(tempting, "the fixture no longer offers the trade this test is about")
+
+        pruned = _prune_solution(self.state, self.problem, 1)
+        for name in tempting:
+            self.assertIn(name, pruned['recipe'],
+                          f"{name} was removed on the objective while raising the reported error")
+
+    def test_the_reported_error_never_runs_away(self):
+        """The invariant the second gate buys: one tolerance per removal, at most"""
+        pruned = _prune_solution(self.state, self.problem, 1)
+        removals = self.state['materials_count'] - pruned['materials_count']
+
+        self.assertLessEqual(pruned['error'],
+                             self.state['error'] + PRUNE_ERROR_TOLERANCE * removals + 1e-12)
 
 
 if __name__ == '__main__':

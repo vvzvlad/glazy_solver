@@ -141,7 +141,14 @@ class TestIndividualRecipes(unittest.TestCase):
 
         print("\nметрики качества (решение / оригинал):")
         print(f"  количество:   {count['solution']} / {count['original']} (дельта {count['delta']:+d})")
+        # A light component is not junk if it is the only thing bringing an
+        # oxide: 0.5% of cobalt is the whole point of a blue glaze. Both counts
+        # are printed so that neither reading is lost.
+        small = quality["small_components"]
         print(f"  мусор <2%:    {junk['solution']} / {junk['original']}")
+        print(f"  мелких <2%:   {small['solution']} / {small['original']}"
+              f" (несущих оксид: {small['solution'] - junk['solution']}"
+              f" / {small['original'] - junk['original']})")
         print(f"  мин. доля:    {portion['solution']:.2f}% / {portion['original']:.2f}%"
               f" (правило {'применяется' if portion['required'] else 'не применяется'})")
         if conditioning["cond"] is None:
