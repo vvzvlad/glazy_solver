@@ -20,9 +20,10 @@ import numpy as np
 # Fix imports by adding parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common import flux_oxides, load_materials, load_molar_masses
-from feasibility import (DEFAULT_FEASIBILITY_TOL, MAX_CONDITION_NUMBER, OXIDE_SCALE_FLOOR,
-                         achievable_ranges, build_molar_matrix, check_feasibility,
-                         flux_row, matrix_diagnostics, usable_oxides)
+from feasibility import (DEFAULT_FEASIBILITY_TOL, MAX_CONDITION_NUMBER, MIN_FLUX_SHARE,
+                         OXIDE_SCALE_FLOOR, achievable_ranges, build_molar_matrix,
+                         check_feasibility, flux_row, matrix_diagnostics,
+                         projected_range_lps, usable_oxides)
 
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures')
 
@@ -188,14 +189,65 @@ class TestCheckFeasibility(unittest.TestCase):
         self.assertIn('Li2O', result['why']['Li2O'])
         self.assertIn('не содержит', result['why']['Li2O'])
 
-        # CaO comes along, and unavoidably so: lithium is a FLUX, so half of the
-        # unity budget of this target was asked of a material that does not
-        # exist, and whatever fluxes remain have to fill the whole of it. The
-        # non fluxes are not dragged in, which is the part that would be a bug
-        self.assertIn('CaO', result['unreachable_oxides'])
-        self.assertNotIn('SiO2', result['unreachable_oxides'])
-        self.assertNotIn('Al2O3', result['unreachable_oxides'])
-        self.assertNotIn('B2O3', result['unreachable_oxides'])
+        # And nothing else is named. The min-sum point misses CaO here as well -
+        # lithium is a flux, so the fluxes that remain have to cover a unity
+        # budget half of which was asked of a material that does not exist - but
+        # CaO CAN be held inside the tolerance at the same t*, so it is an
+        # artefact of the point and not part of the answer. The LP that decides
+        # this is the whole reason unreachable_oxides is not read off the point
+        self.assertEqual(result['unreachable_oxides'], ['Li2O'])
+
+    def test_the_verdict_list_is_checked_against_the_range_machinery(self):
+        """
+        A named oxide is one no point can hold, cross-checked another way
+
+        achievable_ranges(tol=t*) explores exactly the optimal face of the
+        verdict - every oxide inside t* * s, contamination inside t* * 0.1 - so
+        the interval it reports for an oxide is the full set of values that
+        oxide can take there. An oxide whose interval reaches into its ordinary
+        tolerance band could have been held and must not be named; one whose
+        interval misses the band entirely is genuinely forced. Two different
+        code paths, one answer.
+        """
+        target = dict(recipe_01()['umf'])
+        target['Li2O'] = 0.5
+        result = check_feasibility(target, inventory_materials())
+        t_star = result['max_relative_deviation']
+        on_the_face = achievable_ranges(target, inventory_materials(), tol=t_star)
+
+        for row in result['per_oxide']:
+            oxide = row['oxide']
+            if oxide not in on_the_face['oxide_ranges']:
+                continue
+            low, high = on_the_face['oxide_ranges'][oxide]
+            if high is None:
+                high = float('inf')
+            wanted = row['target']
+            scale = max(wanted, OXIDE_SCALE_FLOOR)
+            band_low = wanted - DEFAULT_FEASIBILITY_TOL * scale
+            band_high = wanted + DEFAULT_FEASIBILITY_TOL * scale
+            holdable = low <= band_high + 1e-9 and high >= band_low - 1e-9
+
+            self.assertEqual(holdable, oxide not in result['unreachable_oxides'],
+                             f"{oxide}: reachable on the t* face = {holdable}, "
+                             f"named unreachable = {oxide in result['unreachable_oxides']}")
+
+    def test_rows_and_the_verdict_list_agree(self):
+        target = dict(recipe_01()['umf'])
+        target['Li2O'] = 0.5
+        result = check_feasibility(target, inventory_materials())
+
+        named = set(result['unreachable_oxides'])
+        for row in result['per_oxide']:
+            self.assertEqual(row['reachable'], row['oxide'] not in named)
+
+    def test_per_oxide_is_sorted_by_relative_deviation(self):
+        target = dict(recipe_01()['umf'])
+        target['Li2O'] = 0.5
+        rows = check_feasibility(target, inventory_materials())['per_oxide']
+
+        self.assertEqual([row['relative'] for row in rows],
+                         sorted((row['relative'] for row in rows), reverse=True))
 
     def test_only_the_guilty_oxide_is_named(self):
         # The minimax alone would report every oxide as unreachable: once t* is
@@ -294,6 +346,51 @@ class TestCheckFeasibility(unittest.TestCase):
 
         self.assertFalse(result['feasible'])
         self.assertEqual(result['closest_recipe'], {})
+        self.assertTrue(any('пассажир' in warning for warning in result['warnings']))
+
+    def test_absurd_targets_are_named_and_never_blamed_on_passengers(self):
+        # Both of these used to reach the infeasible branch with no passenger in
+        # the request and be answered "the passenger ceilings are incompatible
+        # with the unity normalization" - a confident sentence about a
+        # constraint the caller never wrote. They are now refused by name,
+        # before any LP, and the passenger sentence is tied to having any
+        for absurd in ({"CaO": 1.0, "SiO2": 1e20}, {"CaO": 1e-300, "SiO2": 3.0}):
+            result = check_feasibility(absurd, inventory_materials())
+
+            self.assertEqual(result['error'], 'degenerate_target')
+            self.assertFalse(any('пассажир' in warning for warning in result['warnings']))
+
+    def test_a_large_but_workable_target_is_still_answered(self):
+        # The guard is at 1e6 and must not swallow a target that is merely
+        # extreme: a silica of 1e5 per unity is reachable, absurd as it is
+        result = check_feasibility({"CaO": 1.0, "SiO2": 1e5}, inventory_materials())
+
+        self.assertTrue(result['feasible'])
+
+    def test_the_verdict_does_not_hang_on_the_polish_slack(self):
+        # A caller passing tol exactly equal to t* used to be told "unreachable"
+        # by the verdict and "feasible" by the ranges, because the polish spent
+        # its whole absolute slack and pushed the reported worst to t* + 1e-6
+        target = dict(recipe_01()['umf'])
+        target['Li2O'] = 0.5
+        t_star = check_feasibility(target, inventory_materials())['max_relative_deviation']
+
+        verdict = check_feasibility(target, inventory_materials(), tol=t_star)
+        ranges = achievable_ranges(target, inventory_materials(), tol=t_star)
+
+        self.assertTrue(verdict['feasible'])
+        self.assertTrue(ranges['feasible'])
+        self.assertEqual(verdict['max_relative_deviation'], t_star)
+
+    def test_a_negative_content_is_not_reported_as_a_missing_oxide(self):
+        # A hand edited analysis with Li2O: -5 is a carrier as far as the
+        # arithmetic goes, so "no material of the set contains it" is a lie
+        materials = [{"name": "Отрицательный (тест)",
+                      "formula": {"Li2O": -5.0, "SiO2": 50.0, "CaO": 20.0}}, CHALK]
+        result = check_feasibility({"SiO2": 3.0, "CaO": 1.0, "Li2O": 0.2}, materials)
+
+        self.assertIn('Li2O', result['unreachable_oxides'])
+        self.assertNotIn('не содержит', result['why']['Li2O'])
 
 
 class TestPassengers(unittest.TestCase):
@@ -388,6 +485,30 @@ class TestAchievableRanges(unittest.TestCase):
 
         self.assertAlmostEqual(sum(result['example_recipe'].values()), 100.0, delta=0.1)
 
+    def test_the_two_functions_answer_the_same_question(self):
+        """
+        With no material constraints the ranges are exactly the verdict's region
+
+        This is what point 1 of the review was about, stated as a property
+        rather than as a number: an unreachable target has an empty region, so
+        the ranges must say so instead of describing recipes the verdict
+        rejects. Four targets, two of each kind.
+        """
+        materials = inventory_materials()
+        cases = {
+            'reference': recipe_01()['umf'],
+            'reference + Li2O': dict(recipe_01()['umf'], Li2O=0.5),
+            'round numbers': {"SiO2": 3.0, "Al2O3": 0.3, "CaO": 0.7, "K2O": 0.3},
+            'five oxides': {"SiO2": 3.0, "Al2O3": 0.35, "CaO": 0.6, "Na2O": 0.25, "K2O": 0.15},
+        }
+
+        for label, target in cases.items():
+            verdict = check_feasibility(target, materials)
+            ranges = achievable_ranges(target, materials)
+            self.assertEqual(verdict['feasible'], ranges['feasible'],
+                             f"{label}: verdict {verdict['feasible']}, "
+                             f"ranges {ranges['feasible']}")
+
     def test_a_material_range_is_a_real_interval(self):
         result = achievable_ranges(recipe_01()['umf'], inventory_materials())
         low, high = result['material_ranges']['Улексит (Химпэк)']
@@ -397,13 +518,64 @@ class TestAchievableRanges(unittest.TestCase):
         self.assertLessEqual(low, 15.0)
         self.assertGreaterEqual(high, 15.0)
 
+    def test_the_region_is_the_one_the_verdict_accepts(self):
+        """
+        Point 1 of the review, in the numbers that showed it
+
+        An oxide the target does not name is contamination, and the verdict
+        scores it against zero at the scale floor. Leaving it unbounded here
+        answered "up to 19.9% bone ash" for a mixture carrying P2O5 0.198 -
+        forty times the tolerance, rejected by the same module.
+        """
+        result = achievable_ranges(recipe_01()['umf'], inventory_materials())
+        allowance = DEFAULT_FEASIBILITY_TOL * OXIDE_SCALE_FLOOR
+
+        for oxide, (low, high) in result['oxide_ranges'].items():
+            if oxide in recipe_01()['umf']:
+                continue
+            self.assertIsNotNone(high, f"{oxide} is contamination and must be capped")
+            self.assertLessEqual(high, allowance + 1e-9,
+                                 f"{oxide} may reach {high}, the verdict allows {allowance}")
+
+        # Bone ash was the headline case: 19.915% before, under 1% now
+        self.assertLess(result['material_ranges']['Костная зола'][1], 1.0)
+
     def test_an_unbounded_maximum_comes_back_as_none(self):
-        # Pure quartz in the set and nothing capping SiO2: there is no largest SiO2
-        result = achievable_ranges({"CaO": 1.0}, [SILICA, CHALK])
+        # Pure quartz in the set and nothing capping SiO2: there is no largest
+        # SiO2. Since every oxide is now bounded by default, "nothing capping
+        # it" has to be said out loud - and saying it is the only way to get an
+        # unbounded end at all
+        result = achievable_ranges({"CaO": 1.0}, [SILICA, CHALK],
+                                   oxide_constraints={"SiO2": [None, None]})
 
         self.assertTrue(result['feasible'])
         self.assertEqual(result['oxide_ranges']['SiO2'][0], 0.0)
         self.assertIsNone(result['oxide_ranges']['SiO2'][1])
+
+    def test_the_flux_floor_keeps_undefined_mixtures_out(self):
+        # A flux free batch satisfies every UMF constraint as 0 <= 0 and has no
+        # UMF at all. With SiO2 explicitly unbounded, 100% quartz is such a
+        # batch, and without the floor it is reported as an achievable share
+        constraints = {"SiO2": [None, None]}
+        result = achievable_ranges({"CaO": 1.0}, inventory_materials(),
+                                   oxide_constraints=constraints)
+        quartz = result['material_ranges']['Кварцевая мука Кварцверке W12']
+
+        self.assertLess(quartz[1], 100.0)
+        self.assertAlmostEqual(quartz[1], 100.0 * (1.0 - MIN_FLUX_SHARE), delta=1.0)
+
+    def test_a_flux_only_target_says_that_it_constrains_nothing(self):
+        result = achievable_ranges({"CaO": 1.0}, inventory_materials())
+
+        self.assertTrue(any('одних плавней' in warning for warning in result['warnings']))
+        # And the example is a mixture with a UMF, not 100% aluminium powder
+        self.assertNotIn('Алюминиевая пудра', result['example_recipe'])
+
+    def test_an_empty_target_is_refused_like_the_verdict_refuses_it(self):
+        result = achievable_ranges({}, SYNTHETIC)
+
+        self.assertIsNone(result['feasible'])
+        self.assertEqual(result['error'], 'empty_target')
 
     def test_a_ceiling_makes_the_maximum_finite_again(self):
         result = achievable_ranges({"CaO": 1.0}, [SILICA, CHALK],
@@ -491,20 +663,69 @@ class TestFeasibilityEndpoint(unittest.TestCase):
         self.assertEqual(len(implicit.get_json()['achievable_ranges']['material_ranges']),
                          len(inventory_materials()))
 
-    def test_an_unbounded_range_survives_the_json_round_trip(self):
+    def test_every_range_the_endpoint_reports_is_finite(self):
+        # Through the API every oxide is bounded - by the target box, by a
+        # passenger ceiling or by the contamination allowance - so the null end
+        # that the library can return cannot arise here. Worth pinning: the
+        # opposite would mean an oxide escaped the region the verdict accepts
         response = self.client.post('/api/feasibility', json={
-            "umf": {"CaO": 1.0},
-            "inventory": ["Кварцевая мука Кварцверке W12", "Мел, CaCO3"]})
+            "umf": recipe_01()['umf'], "passengers": {"Fe2O3": 0.03}})
         ranges = response.get_json()['achievable_ranges']['oxide_ranges']
 
-        self.assertIsNone(ranges['SiO2'][1])
+        self.assertTrue(all(bound is not None for pair in ranges.values() for bound in pair))
+        self.assertLessEqual(ranges['Fe2O3'][1], 0.03 + 1e-9)
+
+    def test_a_rejected_passenger_is_rejected_in_both_halves(self):
+        # The ranges used to be built from the RAW request while the verdict
+        # cleaned it, so this answered feasible: true next to
+        # achievable_ranges.feasible: false, with one warning between them
+        response = self.client.post('/api/feasibility', json={
+            "umf": recipe_01()['umf'], "passengers": {"Fe2O3": -1.0}})
+        body = response.get_json()
+
+        self.assertTrue(body['feasible'])
+        self.assertTrue(body['achievable_ranges']['feasible'])
+        self.assertEqual(body['passengers'], [])
+        self.assertTrue(any('пассажир' in warning for warning in body['warnings']))
+
+    def test_the_verdict_can_be_asked_for_on_its_own(self):
+        response = self.client.post('/api/feasibility', json={
+            "umf": recipe_01()['umf'], "ranges": False})
+        body = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('achievable_ranges', body)
+        self.assertIn('diagnostics', body)
+        self.assertTrue(body['feasible'])
+
+    def test_an_inventory_too_big_for_the_ranges_is_refused(self):
+        everything = [material['name'] for material
+                      in load_materials(only_inventory=False, priority=False)]
+
+        refused = self.client.post('/api/feasibility',
+                                   json={"umf": recipe_01()['umf'], "inventory": everything})
+        self.assertEqual(refused.status_code, 413)
+        self.assertEqual(refused.get_json()['error'], 'inventory_too_large')
+
+        # ... and the escape hatch named in the message works
+        verdict = self.client.post('/api/feasibility',
+                                   json={"umf": recipe_01()['umf'], "inventory": everything,
+                                         "ranges": False})
+        self.assertEqual(verdict.status_code, 200)
+        self.assertTrue(verdict.get_json()['feasible'])
+
+    def test_the_projection_matches_what_the_ranges_actually_solve(self):
+        materials = inventory_materials()
+        target = recipe_01()['umf']
+
+        self.assertEqual(projected_range_lps(target, materials),
+                         achievable_ranges(target, materials)['lp_count'])
 
     def test_passengers_and_material_constraints_are_accepted(self):
         response = self.client.post('/api/feasibility', json={
-            "umf": {"SiO2": 3.0, "Al2O3": 0.35, "CaO": 0.6, "Na2O": 0.25, "K2O": 0.15},
+            "umf": recipe_01()['umf'],
             "passengers": {"Fe2O3": 0.03},
-            "material_constraints": {"Мел, CaCO3": [0, 10]},
-            "tol": 0.02})
+            "material_constraints": {"Мел, CaCO3": [0, 10]}})
         body = response.get_json()
 
         self.assertEqual(response.status_code, 200)

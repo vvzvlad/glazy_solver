@@ -21,7 +21,7 @@ from common import (weights_to_umf, umf_to_weights, load_materials, make_json_sa
                     resolve_inventory, filter_materials_by_inventory,
                     load_oxide_classification)
 from feasibility import (DEFAULT_FEASIBILITY_TOL, achievable_ranges, check_feasibility,
-                         matrix_diagnostics)
+                         matrix_diagnostics, projected_range_lps)
 from glazy_import import GlazyImportError, parse_recipe_id, fetch_recipe, build_import_result
 from sensitivity import recipe_sensitivity
 
@@ -268,8 +268,21 @@ def solve_recipe():
 # from: no usable oxide in the target, a target with no flux at all (there is no
 # unity to normalize by), or an inventory in which no material carries an oxide
 # analysis. The client can fix all three, so they are 422 and not 500.
-FEASIBILITY_UNPROCESSABLE_ERRORS = ('empty_target', 'no_target_fluxes',
+FEASIBILITY_UNPROCESSABLE_ERRORS = ('empty_target', 'no_target_fluxes', 'degenerate_target',
                                     'no_usable_materials', 'no_fluxes')
+
+# The largest range problem this endpoint will solve, counted in LPs -
+# 1 + 2 * (oxides + materials), which is the thing that actually costs, rather
+# than the number of names in the request. Measured on this machine: the real
+# 19 material inventory is 63 LPs and 47 ms, 60 materials is 167 LPs and 317 ms,
+# and the whole 216 material database is 459 LPs and 4.3 SECONDS on a single
+# threaded Flask - a 90x amplification bought with one extra field in a request.
+# The per-LP cost itself grows with the problem (0.75 ms at inventory size, 10.8
+# ms at database size), so this cap is set by measured latency and not by
+# arithmetic: 180 LPs lands around 350 ms.
+# A caller who wants the verdict over a big inventory asks for "ranges": false
+# and pays 27 ms for the whole database.
+MAX_RANGE_LPS = 180
 
 
 @app.route('/api/feasibility', methods=['POST'])
@@ -296,8 +309,14 @@ def feasibility():
         "inventory": ["Material1", ...],   // optional, null = the default stock
         "passengers": {"Fe2O3": 0.03},     // optional, {oxide: upper bound}
         "material_constraints": {"Улексит (Химпэк)": [0, 20]},  // optional, weight %
-        "tol": 0.05                        // optional, the verdict line
+        "tol": 0.05,                       // optional, the verdict line
+        "ranges": true                     // optional, true by default
     }
+
+    "ranges": false returns the verdict alone. That is the difference between
+    about 2 ms and about 47 ms on the real inventory, and it is what an
+    interface calling this on every keystroke should send: the ranges are worth
+    2 x (oxides + materials) LPs and the verdict is worth two.
 
     "inventory": null means the DEFAULT INVENTORY (the materials flagged
     inInventory), exactly as in /api/solve, and deliberately not what the same
@@ -334,6 +353,7 @@ def feasibility():
         passengers = data.get('passengers', None)
         material_constraints = data.get('material_constraints', None)
         tol = data.get('tol', DEFAULT_FEASIBILITY_TOL)
+        want_ranges = data.get('ranges', True)
 
         if passengers is not None and not isinstance(passengers, dict):
             return jsonify({"error": "invalid_parameter",
@@ -354,8 +374,21 @@ def feasibility():
         materials = filter_materials_by_inventory(
             load_materials(only_inventory=False, priority=False), inventory)
 
+        if want_ranges:
+            projected = projected_range_lps(umf, materials)
+            if projected > MAX_RANGE_LPS:
+                logger.warning(f"feasibility_inventory_too_large: {len(materials)} materials "
+                               f"project to {projected} LPs, cap {MAX_RANGE_LPS}")
+                return jsonify({
+                    "error": "inventory_too_large",
+                    "message": f"the achievable ranges over {len(materials)} materials would "
+                               f"take {projected} linear programs, above the cap of "
+                               f"{MAX_RANGE_LPS}; send a smaller inventory or "
+                               f"\"ranges\": false for the verdict alone"
+                }), 413
+
         logger.info(f"feasibility requested for {len(umf)} oxides over {len(materials)} materials, "
-                    f"tol={tol}, passengers={len(passengers or {})}")
+                    f"tol={tol}, passengers={len(passengers or {})}, ranges={bool(want_ranges)}")
 
         result = check_feasibility(umf, materials, tol=tol, passengers=passengers)
 
@@ -365,17 +398,26 @@ def feasibility():
             return jsonify({"error": result['error'], "message": result.get('message', ''),
                             "warnings": result.get('warnings', [])}), status
 
-        # A passenger is a one sided ceiling in the range problem too, which is
-        # the same statement it makes in the verdict: "keep it under this", not
-        # "aim for this"
-        oxide_constraints = {oxide: [None, bound] for oxide, bound in (passengers or {}).items()}
-
         result['diagnostics'] = matrix_diagnostics(
             materials, sorted({oxide for material in materials
                                for oxide in (material.get('formula') or {})}))
-        result['achievable_ranges'] = achievable_ranges(
-            umf, materials, oxide_constraints=oxide_constraints,
-            material_constraints=material_constraints, tol=tol)
+
+        if want_ranges:
+            # A passenger is a one sided ceiling in the range problem too, which
+            # is the same statement it makes in the verdict: "keep it under
+            # this", not "aim for this".
+            #
+            # The ceilings come from the ANSWER and not from the request:
+            # check_feasibility cleans them (unknown oxide, negative, NaN) and
+            # says so in "warnings", and feeding the raw dictionary here meant a
+            # passenger of -1.0 was dropped by the verdict with a warning and
+            # obeyed by the ranges without one - so the same response carried
+            # "feasible": true next to "achievable_ranges": {"feasible": false}.
+            oxide_constraints = {row['oxide']: [None, row['limit']]
+                                 for row in result.get('passengers', [])}
+            result['achievable_ranges'] = achievable_ranges(
+                umf, materials, oxide_constraints=oxide_constraints,
+                material_constraints=material_constraints, tol=tol)
 
         logger.info(f"feasibility: {result['feasible']}, deviation "
                     f"{result.get('max_relative_deviation')}, "

@@ -89,6 +89,31 @@ MAX_CONDITION_NUMBER = 1e3
 # ceiling must not be reported as having broken it.
 BOUND_EPS = 1e-7
 
+# Slack on a bound that is itself an LP result being fed into the next LP, as a
+# FRACTION of that bound rather than an absolute figure. An absolute 1e-7 here
+# was measurably wrong: the polish spent all of it, so max_relative_deviation
+# came back as t* + 1e-6 and a caller passing tol exactly equal to t* was told
+# "unreachable" by the verdict and "feasible" by the ranges on the same numbers.
+RELATIVE_SLACK = 1e-9
+
+# A UMF value above this is not a formula. The unity basis makes 1 the total of
+# the fluxes, so single digits are the working range and this is six orders
+# beyond it; the guard exists because the normalization DIVIDES by the flux sum,
+# and {"CaO": 1e-300, "SiO2": 3.0} turns into a silica of 3e300 that makes the
+# LP infeasible for reasons no message could honestly explain.
+MAX_UMF_VALUE = 1e6
+
+# The material LPs pin the batch with sum(x) = 100, and a flux free batch -
+# 100% alumina, 100% quartz - satisfies every homogeneous UMF constraint
+# vacuously, because with S_flux(x) = 0 both sides read 0 <= 0. Such a batch has
+# no UMF at all, so the ranges require the flux sum to be at least this fraction
+# of the largest the same constraints allow.
+# TUNABLE POLICY, NOT PHYSICS. It is a floor against a mathematical artefact,
+# not a statement about glazes: it removes the points where the question "what
+# is the UMF of this" has no answer, and on a target that names any non flux
+# oxide it changes nothing at all, because such a target already excludes them.
+MIN_FLUX_SHARE = 0.05
+
 # linprog statuses we know how to read. 0 optimal, 2 infeasible, 3 unbounded -
 # the last two are answers about the problem, not failures of the solve. 1
 # (iteration limit) and 4 (numerical trouble) are failures.
@@ -318,18 +343,36 @@ def _normalized_target(target):
     asked. See TZ_SOLVER_V2.md 10.17.2.
 
     Returns:
-        (target, flux_sum): the rescaled target and the sum it was divided by,
-        or (None, 0.0) when the target carries no flux
+        (target, flux_sum, error): the rescaled target and the sum it was
+        divided by, or (None, flux_sum, error_code) when the target cannot be
+        put on the basis at all - "no_target_fluxes" when nothing in it is a
+        flux, "degenerate_target" when the division produces values that are no
+        longer a formula (a flux sum of 1e-300 against a silica of 3 turns into
+        a silica of 3e300)
     """
     fluxes = set(flux_oxides())
     flux_sum = sum(value for oxide, value in target.items() if oxide in fluxes)
 
     if flux_sum <= 0.0:
-        return None, 0.0
+        return None, 0.0, 'no_target_fluxes'
     if abs(flux_sum - 1.0) <= 1e-9:
-        return dict(target), 1.0
+        scaled = dict(target)
+        flux_sum = 1.0
+    else:
+        scaled = {oxide: value / flux_sum for oxide, value in target.items()}
 
-    return {oxide: value / flux_sum for oxide, value in target.items()}, flux_sum
+    for value in scaled.values():
+        if not math.isfinite(value) or value > MAX_UMF_VALUE:
+            return None, flux_sum, 'degenerate_target'
+
+    return scaled, flux_sum, None
+
+
+_TARGET_ERROR_MESSAGES = {
+    'no_target_fluxes': "target UMF carries no flux, there is no unity to normalize by",
+    'degenerate_target': "target UMF is not a formula once put on the unity basis: "
+                         "some value exceeds 1e6 after dividing by the flux sum",
+}
 
 
 def _usable_passengers(passengers, target_umf):
@@ -444,24 +487,30 @@ def check_feasibility(target_umf, materials, tol=DEFAULT_FEASIBILITY_TOL, passen
     what turns a ratio constraint into a plain linear one, and it is why the
     whole question is an LP and not a search.
 
-    A SECOND LP FOLLOWS, and the answer is unusable without it. A minimax has a
-    large flat optimum: once t* is paid for by the one oxide that cannot be hit,
-    every other oxide may drift anywhere inside t* * s_i for free, and HiGHS
-    returns whichever vertex it lands on. Measured on the reference clear glaze
-    with a ZrO2 of 0.2 added - nothing in the stock carries zirconium - the bare
-    minimax called SEVEN oxides unreachable, six of which are perfectly
-    reachable. The verdict named the wrong oxides. So t is then frozen at t* and
-    a second LP minimizes the SUM of the deviations, sum |(A x)_i - b_i| / s_i,
-    over that optimal face. The verdict itself cannot change (t* is a hard
-    constraint of the second LP), and the per-oxide numbers become the least-bad
-    point instead of an arbitrary one: on that target the list becomes ZrO2 and
-    nothing else.
+    A SECOND LP FOLLOWS, for the numbers. A minimax has a large flat optimum:
+    once t* is paid for by the one oxide that cannot be hit, every other oxide
+    may drift anywhere inside t* * s_i for free, and HiGHS returns whichever
+    vertex it lands on - on the reference glaze with a ZrO2 of 0.2 added, a
+    point missing SEVEN oxides where one was actually unreachable. So t is
+    frozen at t* and a second LP minimizes the SUM of the deviations,
+    sum |(A x)_i - b_i| / s_i, over that optimal face. That point is what
+    "closest", "delta" and "closest_recipe" report.
 
-    What the polish CANNOT do is hide a real coupling, and it should not. Ask
-    the same glaze for Li2O 0.5 and the list is Li2O AND CaO, because lithium is
-    a FLUX: half the unity budget was asked of a material that does not exist,
-    so whatever fluxes remain have to fill the whole of it and the largest of
-    them cannot stay where it was. That second name is part of the answer.
+    A THIRD KIND OF LP DECIDES THE VERDICT LIST, because the polish does not
+    make it invariant - it only makes it better. Measured over 250 plausible
+    targets, 60 of the 132 unreachable answers still named an oxide that could
+    have stayed inside tol without moving t* at all; the reference glaze with
+    Li2O 0.5 is one of them, naming CaO alongside the missing lithium although
+    CaO can be held. "Which oxide is forced to miss" is a question about the
+    PROBLEM, so it is asked of the problem: for each oxide that misses at the
+    reported point, one LP asks whether it could sit inside tol while t stays at
+    t*. Infeasible means forced, and only those reach unreachable_oxides.
+
+    The two therefore describe different things on purpose. per_oxide carries
+    one particular closest formula, where an oxide may be outside tol without
+    being forced - the misses can be shuffled between oxides, and this is the
+    arrangement that minimizes their sum. "reachable" in each row follows
+    unreachable_oxides, not that row's own numbers.
 
     MEASURED OXIDES are the ones the target names plus, with b_i = 0, every
     oxide the materials could bring but the target does not mention - the same
@@ -492,10 +541,10 @@ def check_feasibility(target_umf, materials, tol=DEFAULT_FEASIBILITY_TOL, passen
     Returns:
         {
           "feasible": bool,               # t* <= tol
-          "max_relative_deviation": float,
+          "max_relative_deviation": float,   # t*, the minimax optimum itself
           "per_oxide": [{"oxide", "target", "closest", "delta", "relative",
-                         "reachable"}, ...],   # sorted by |delta| descending
-          "unreachable_oxides": [str, ...],
+                         "reachable"}, ...],  # sorted by "relative" descending
+          "unreachable_oxides": [str, ...],   # forced to miss, LP-decided
           "why": {oxide: "short reason, in Russian"},
           "passengers": [{"oxide", "limit", "closest", "within_limit"}, ...],
           "closest_recipe": {material: percent},  # renormalized to 100
@@ -505,6 +554,11 @@ def check_feasibility(target_umf, materials, tol=DEFAULT_FEASIBILITY_TOL, passen
         per_oxide covers the target oxides always, and a contamination oxide
         only when the closest formula actually carries it - listing the sixty
         oxides of the whole database at 0.0 would bury the answer.
+
+        closest_recipe is the same point as "closest", rounded to 0.01% and
+        stripped of its traces, so recomputing a UMF from it lands within about
+        3e-3 of the "closest" column rather than on it. It is a recipe to weigh
+        out, not a fourth decimal place.
 
         On an LP that did not converge: {"feasible": None, "error": ...}. Same
         shape for the cases where there is nothing to solve at all (no usable
@@ -539,10 +593,10 @@ def _check_feasibility(target_umf, materials, tol, passengers):
         return {"feasible": None, "error": "empty_target",
                 "message": "target UMF has no usable oxide", "warnings": warnings}
 
-    target, flux_sum = _normalized_target(target)
-    if target is None:
-        return {"feasible": None, "error": "no_target_fluxes",
-                "message": "target UMF carries no flux, there is no unity to normalize by",
+    target, flux_sum, target_error = _normalized_target(target)
+    if target_error is not None:
+        return {"feasible": None, "error": target_error,
+                "message": _TARGET_ERROR_MESSAGES[target_error],
                 "warnings": warnings}
     if flux_sum != 1.0:
         warnings.append(f"сумма плавней цели {_fmt(flux_sum)}, а не 1 — "
@@ -617,11 +671,23 @@ def _check_feasibility(target_umf, materials, tol, passengers):
     result = _linprog(c, A_ub, b_ub, A_eq, b_eq, [(0.0, None)] * (n + 1))
 
     if result.status == LP_INFEASIBLE:
-        # Only the passenger ceilings can do this: the two sided rows always
-        # admit a big enough t, and the normalization is satisfiable whenever
-        # some material carries a flux
-        warnings.append("ограничения по пассажирам несовместимы с нормировкой "
-                        "по плавням: ни один допустимый состав не найден")
+        # A passenger ceiling is the only way to ASK for something that makes
+        # this LP infeasible: the two sided rows always admit a big enough t,
+        # and the normalization is satisfiable whenever some material carries a
+        # flux. That is not the same as being the only way to get here, and the
+        # message must not claim it is - {"CaO": 1.0, "SiO2": 1e20} and
+        # {"CaO": 1e-300, "SiO2": 3.0} both used to land in this branch with no
+        # passenger in the request and be told the passengers were at fault.
+        # Both are now refused as degenerate_target before any LP runs, so the
+        # branch below is defensive: no target that passes MAX_UMF_VALUE has
+        # been observed reaching it. It says what it knows either way
+        if ceilings:
+            warnings.append("ограничения по пассажирам несовместимы с нормировкой "
+                            "по плавням: ни один допустимый состав не найден")
+        else:
+            warnings.append("задача оказалась несовместимой без единого ограничения "
+                            "по пассажирам — скорее всего, значения цели выходят за "
+                            "пределы, в которых счёт остаётся устойчивым")
         return {"feasible": False, "max_relative_deviation": None, "per_oxide": [],
                 "unreachable_oxides": sorted(target), "why": {},
                 "passengers": [{"oxide": oxide, "limit": ceiling, "closest": None,
@@ -641,27 +707,36 @@ def _check_feasibility(target_umf, materials, tol, passengers):
                                 np.asarray(result.x[:n]))
     achieved = _matmul(A, x)
 
-    per_oxide = []
-    unreachable = []
-    worst = 0.0
+    # Which oxides miss AT THIS POINT. That is not the verdict yet - it is the
+    # candidate list for the question "and could it have been otherwise"
+    rows = {}
+    candidates = []
     for oxide, value in measured.items():
-        i = index[oxide]
-        closest = float(achieved[i])
+        closest = float(achieved[index[oxide]])
         scale = max(value, OXIDE_SCALE_FLOOR)
         delta = closest - value
         relative = abs(delta) / scale
-        reachable = relative <= tol + BOUND_EPS
-        worst = max(worst, relative)
-        if not reachable:
-            unreachable.append(oxide)
-        if oxide not in target and closest <= 0.0:
+        rows[oxide] = {"oxide": oxide, "target": value, "closest": closest,
+                       "delta": delta, "relative": relative, "reachable": True}
+        if relative > tol + BOUND_EPS:
+            candidates.append(oxide)
+
+    unreachable = _forced_to_miss(A, index, flux_vec, n, measured, ceilings,
+                                  t_star, tol, candidates) if candidates else []
+
+    per_oxide = []
+    for oxide, row in rows.items():
+        row['reachable'] = oxide not in unreachable
+        if oxide not in target and row['closest'] <= 0.0:
             # A contamination oxide the closest formula does not carry at all;
             # reporting "TiO2: asked 0, got 0" sixty times hides the answer
             continue
-        per_oxide.append({"oxide": oxide, "target": value, "closest": closest,
-                          "delta": delta, "relative": relative, "reachable": reachable})
+        per_oxide.append(row)
 
-    per_oxide.sort(key=lambda row: abs(row["delta"]), reverse=True)
+    # Sorted by RELATIVE deviation and not by |delta|: the verdict is drawn in
+    # relative units, so sorting by the absolute one puts SiO2 missing by 1% of
+    # itself above a CoO that is out by a factor of three
+    per_oxide.sort(key=lambda row: row["relative"], reverse=True)
 
     passenger_rows = []
     for oxide, ceiling in ceilings.items():
@@ -672,14 +747,14 @@ def _check_feasibility(target_umf, materials, tol, passengers):
 
     why = _explain_unreachable(unreachable, target, achieved, A, index, flux_vec, n)
 
-    # Read off the reported point rather than taken from the minimax variable,
-    # so that "max_relative_deviation" and the rows of per_oxide can never
-    # disagree. The polish keeps every deviation within t*, so the two differ
-    # only when the polish shaved the worst one - which it can, when several
-    # points share t* and one of them is strictly better everywhere
+    # Both the verdict and the headline number are t* itself, the optimum of the
+    # minimax, and not the worst row of the reported point. The polish cannot
+    # improve on t* - t* IS the smallest possible worst deviation - it can only
+    # add its own numerical slack on top, and a verdict decided on that slack
+    # disagreed with achievable_ranges given the same tol
     return {
-        "feasible": worst <= tol + BOUND_EPS,
-        "max_relative_deviation": worst,
+        "feasible": t_star <= tol + BOUND_EPS,
+        "max_relative_deviation": t_star,
         "per_oxide": per_oxide,
         "unreachable_oxides": unreachable,
         "why": why,
@@ -755,8 +830,12 @@ def _polish_on_optimal_face(A, index, flux_vec, n, measured, ceilings, t_star, f
 
     # A hair of slack on the frozen budget: t* comes back from HiGHS with its
     # own rounding, and re-imposing it to the last bit can make this LP
-    # infeasible for no reason anyone would recognise
-    bounds = [(0.0, None)] * n + [(0.0, t_star * scale + BOUND_EPS) for scale in scales]
+    # infeasible for no reason anyone would recognise. The hair is RELATIVE and
+    # not an absolute 1e-7: the minimizer spends whatever it is given on the
+    # binding oxide, so an absolute slack showed up in the answer as
+    # t* + 1e-6 - visible next to a tol the caller chose to be exactly t*
+    bounds = [(0.0, None)] * n + [
+        (0.0, t_star * scale * (1.0 + RELATIVE_SLACK) + 1e-12) for scale in scales]
 
     result = _linprog(c, A_ub, b_ub, A_eq, b_eq, bounds)
 
@@ -766,6 +845,73 @@ def _polish_on_optimal_face(A, index, flux_vec, n, measured, ceilings, t_star, f
         return fallback
 
     return np.asarray(result.x[:n])
+
+
+def _forced_to_miss(A, index, flux_vec, n, measured, ceilings, t_star, tol, candidates):
+    """
+    Which oxides CANNOT be held inside the tolerance, whatever point is chosen
+
+    The list this replaces was a property of the point the LP happened to
+    return, not of the problem. Even after the min-sum polish it is not
+    invariant: on a fuzz of 250 plausible targets, 60 of the 132 unreachable
+    answers named at least one oxide that could have stayed inside tol without
+    moving t* at all. The reference glaze with Li2O 0.5 is one of them - CaO was
+    named, and CaO can be held.
+
+    So each candidate gets one LP asking exactly the question the module claims
+    to answer: with t frozen at t* - the best worst-case anyone can buy - can
+    THIS oxide sit inside tol? Infeasible means it is genuinely forced to miss;
+    feasible means the miss was an artefact of the chosen point and the oxide
+    does not belong in the verdict.
+
+    Only the oxides that miss at the reported point are candidates: an oxide
+    already inside tol there has that point as its own witness, so it can never
+    be forced, and asking again would just be an LP that says yes.
+
+    An LP that does not solve leaves the candidate in the list. Reporting an
+    oxide the module could not clear is the conservative direction: the verdict
+    already knows the target is out of reach, and dropping a name on a failure
+    would hide a real one.
+
+    Returns:
+        list of the oxides that are forced to miss, in candidate order
+    """
+    forced = []
+
+    for candidate in candidates:
+        A_ub = []
+        b_ub = []
+        for oxide, value in measured.items():
+            i = index[oxide]
+            scale = max(value, OXIDE_SCALE_FLOOR)
+            # The optimal face for everyone else, the tolerance for the one
+            # being asked about. tol < t* whenever this runs, so the second is
+            # strictly the tighter of the two
+            budget = tol * scale if oxide == candidate else t_star * scale
+            budget = budget * (1.0 + RELATIVE_SLACK) + 1e-12
+
+            row = np.zeros(n)
+            row[:] = A[i]
+            A_ub.append(row)
+            b_ub.append(value + budget)
+
+            A_ub.append(-row)
+            b_ub.append(-(value - budget))
+
+        for oxide, ceiling in ceilings.items():
+            A_ub.append(A[index[oxide]] - ceiling * flux_vec)
+            b_ub.append(0.0)
+
+        result = _linprog(np.zeros(n), A_ub, b_ub, [flux_vec], [1.0], [(0.0, None)] * n)
+
+        if result.status == LP_OPTIMAL:
+            continue
+        if result.status != LP_INFEASIBLE:
+            logger.warning(f"feasibility: forced-miss LP for {candidate} did not solve, "
+                           f"status={result.status}; keeping it in the verdict")
+        forced.append(candidate)
+
+    return forced
 
 
 def _as_recipe(x, material_names):
@@ -801,18 +947,23 @@ def _oxide_extreme(A, index, flux_vec, n, oxide, maximize):
     everything else at once".
 
     Returns:
-        the value, or None when it is unbounded (a real answer: with pure quartz
-        in the set and nothing capping SiO2, there is no maximum)
+        (outcome, value) with outcome one of 'optimal', 'unbounded', 'failed'.
+        The three are kept apart on purpose: an unbounded maximum is a real
+        answer ("as much as you like", so this oxide is not what fails), a
+        failed solve is the absence of one, and collapsing both into None had
+        the caller state a reason it had not established
     """
     i = index[oxide]
     c = -A[i] if maximize else A[i]
     result = _linprog(c, [], [], [np.array(flux_vec)], [1.0], [(0.0, None)] * n)
 
     if result.status == LP_UNBOUNDED:
-        return None
+        return 'unbounded', None
     if result.status != LP_OPTIMAL:
-        return None
-    return float(-result.fun if maximize else result.fun)
+        logger.warning(f"feasibility: extreme LP for {oxide} did not solve, "
+                       f"status={result.status}")
+        return 'failed', None
+    return 'optimal', float(-result.fun if maximize else result.fun)
 
 
 def _explain_unreachable(unreachable, target, achieved, A, index, flux_vec, n):
@@ -835,6 +986,11 @@ def _explain_unreachable(unreachable, target, achieved, A, index, flux_vec, n):
          WHICH other oxide it fights with would need the LP duals, and the dual
          of a Chebyshev LP names the binding constraints of the minimax
          solution, not the chemistry.
+
+    A fourth line exists for the case where the extreme LP did not solve. It
+    says so instead of falling into case 3, whose sentence would then be a
+    guess: case 3 asserts the oxide IS individually reachable, and that is
+    exactly what a failed solve did not establish.
     """
     why = {}
 
@@ -843,19 +999,26 @@ def _explain_unreachable(unreachable, target, achieved, A, index, flux_vec, n):
         wanted = float(target.get(oxide, 0.0))
         got = float(achieved[i])
 
-        if not np.any(A[i] > 0):
+        # != 0 and not > 0: a hand-edited analysis carrying a negative content
+        # is a carrier as far as the arithmetic is concerned, and "no material
+        # of the set contains it" would be a confident falsehood about it
+        if not np.any(A[i] != 0):
             why[oxide] = f"ни один материал набора не содержит {oxide}"
             continue
 
-        if got < wanted:
-            extreme = _oxide_extreme(A, index, flux_vec, n, oxide, maximize=True)
-            if extreme is not None and extreme < wanted:
+        outcome, extreme = _oxide_extreme(A, index, flux_vec, n, oxide,
+                                          maximize=got < wanted)
+        if outcome == 'failed':
+            why[oxide] = (f"{oxide} недостижим, а установить причину не удалось: "
+                          f"задача о его пределе не решилась")
+            continue
+
+        if outcome == 'optimal':
+            if got < wanted and extreme < wanted:
                 why[oxide] = (f"{oxide} есть в наборе, но его максимум — "
                               f"{_fmt(extreme)} против нужных {_fmt(wanted)}")
                 continue
-        else:
-            extreme = _oxide_extreme(A, index, flux_vec, n, oxide, maximize=False)
-            if extreme is not None and extreme > wanted:
+            if got >= wanted and extreme > wanted:
                 why[oxide] = (f"{oxide} приезжает с материалами набора: меньше "
                               f"{_fmt(extreme)} не получится, нужно {_fmt(wanted)}")
                 continue
@@ -864,6 +1027,29 @@ def _explain_unreachable(unreachable, target, achieved, A, index, flux_vec, n):
                       f"с остальными оксидами цели")
 
     return why
+
+
+def projected_range_lps(target_umf, materials, oxide_constraints=None):
+    """
+    How many LPs achievable_ranges would solve for this request, before solving any
+
+    The count is 1 + 2 * (oxides + materials) and it is what the work actually
+    costs, so a caller that has to bound the work bounds this rather than the
+    length of the inventory it was handed - two requests naming the same number
+    of materials can differ by a factor of four in oxides.
+
+    Cheap on purpose: it filters the same way the real call does and counts, no
+    matrix is built and no LP is solved.
+    """
+    try:
+        kept = filter_materials_with_formula(materials or [])
+        target, _ = _usable_target(target_umf)
+        oxides = usable_oxides(list(target) + list(oxide_constraints or {})
+                               + _material_oxides(kept))
+        return 1 + 2 * (len(oxides) + len(kept))
+    except Exception as exc:
+        logger.warning(f"feasibility: could not project the LP count: {exc}")
+        return 0
 
 
 def achievable_ranges(target_umf, materials, oxide_constraints=None,
@@ -887,18 +1073,29 @@ def achievable_ranges(target_umf, materials, oxide_constraints=None,
         min/max of oxide i:       f.A.x = 1,     objective +-(A x)_i
         min/max of material j:    sum(x) = 100,  objective +-x_j
 
-    WHICH CONSTRAINTS THE TARGET IMPOSES. Every oxide the target names gets the
-    box check_feasibility(tol) would accept it in: [b - tol*s, b + tol*s] with
-    s = max(b, OXIDE_SCALE_FLOOR), clipped at zero. So "achievable" here means
-    exactly "reachable without breaking the verdict", and the two functions
-    cannot disagree about the same target.
+    WHICH CONSTRAINTS THE TARGET IMPOSES. Every oxide gets a bound, so that the
+    region really is the one the verdict accepts:
 
-    An oxide the target does NOT name is left free, unlike in check_feasibility,
-    where it is measured against zero. That is the passenger rule again: here
-    there is no minimax to protect, so an unnamed oxide is not a goal at all,
-    and its own interval is reported anyway - creeping contamination in numbers.
-    A caller that does want a ceiling on one passes it in oxide_constraints as
-    [None, hi], which is what the API does with its "passengers" parameter.
+      * an oxide the target NAMES gets the box check_feasibility(tol) would
+        accept it in, [b - tol*s, b + tol*s] with s = max(b, OXIDE_SCALE_FLOOR),
+        clipped at zero;
+      * an oxide it does NOT name gets the ceiling the verdict measures it
+        against - tol * OXIDE_SCALE_FLOOR - because there contamination is
+        scored as a deviation from zero at the scale floor.
+
+    The second rule was missing at first, and the omission did not merely make
+    the region wider: it made the headline number wrong. On the real inventory
+    the ranges answered "up to 19.9% bone ash", and at 19.9% bone ash the
+    mixture carries P2O5 0.198 - a relative deviation of 1.98 against a
+    tolerance of 0.05, so the verdict rejects the very recipe the ranges offered
+    as the answer to "how much bone ash fits". A caller who does want an oxide
+    left loose says so in oxide_constraints as [None, hi]; that is exactly what
+    the API does with its "passengers", and it is the one way an oxide gets more
+    room than the verdict allows.
+
+    The intervals still cover every oxide, named or not, so creeping
+    contamination is visible in numbers - what changed is that they are now
+    numbers about recipes the verdict would accept.
 
     Args:
         target_umf: {oxide: value}, the formula the ranges are measured around
@@ -931,15 +1128,20 @@ def achievable_ranges(target_umf, materials, oxide_constraints=None,
         {"feasible": None, "error": ...} when an LP did not converge or there is
         nothing to solve.
 
-    One edge worth knowing about. A flux free mixture - 100% quartz, 100%
-    alumina - satisfies EVERY homogeneous UMF constraint vacuously, because with
-    S_flux(x) = 0 both sides read 0 <= 0. Such a mixture has no UMF at all, so
-    it is not really a member of the region, and it is admitted here anyway. In
-    practice it is excluded the moment the target names one non flux oxide with
-    an upper bound (SiO2 <= 3.3 * 0 = 0 fails for any silica at all), which
-    every real target does; it survives only for a target made of fluxes alone,
-    where it can widen a material range. Fixing it would take a lower bound on
-    the flux sum, and there is no non arbitrary number to put there.
+    THE FLUX FREE POINT. A mixture with no flux at all - 100% quartz, 100%
+    alumina - satisfies every homogeneous UMF constraint vacuously, because with
+    S_flux(x) = 0 both sides read 0 <= 0. It has no UMF, so it is not a member
+    of the region in any useful sense, and on a flux-only target it used to take
+    over the answer: {"CaO": 1.0} on the real inventory returned [0, 100] for
+    every material and offered 100% aluminium powder as the example recipe. The
+    material LPs therefore carry a floor, f.A.x >= MIN_FLUX_SHARE * (the largest
+    flux sum the same constraints allow). The oxide LPs need none: S_flux = 1
+    already excludes the point.
+
+    The floor removes the undefined-UMF points; it does not make a flux-only
+    target informative, because such a target genuinely constrains almost
+    nothing. That fact is said in "warnings" rather than papered over with a
+    stricter floor.
     """
     try:
         return _achievable_ranges(target_umf, materials, oxide_constraints,
@@ -992,15 +1194,24 @@ def _achievable_ranges(target_umf, materials, oxide_constraints, material_constr
     if target:
         # Same rescaling as check_feasibility, and for the same reason: the box
         # below is derived from the target, and the LPs live on S_flux(x) = 1
-        normalized, flux_sum = _normalized_target(target)
-        if normalized is None:
-            return {"feasible": None, "error": "no_target_fluxes",
-                    "message": "target UMF carries no flux, there is no unity to normalize by",
+        normalized, flux_sum, target_error = _normalized_target(target)
+        if target_error is not None:
+            return {"feasible": None, "error": target_error,
+                    "message": _TARGET_ERROR_MESSAGES[target_error],
                     "warnings": warnings}
         target = normalized
         if flux_sum != 1.0:
             warnings.append(f"сумма плавней цели {_fmt(flux_sum)}, а не 1 — "
                             f"формула приведена к единице перед расчётом диапазонов")
+
+    if not target:
+        # Refused rather than answered, exactly as check_feasibility refuses it.
+        # With no target every oxide would be contamination, every flux would be
+        # capped at tol * 0.1, and the fluxes still have to sum to unity - the
+        # region would come back empty and the caller would read that as a fact
+        # about the materials
+        return {"feasible": None, "error": "empty_target",
+                "message": "target UMF has no usable oxide", "warnings": warnings}
 
     kept_materials = filter_materials_with_formula(materials or [])
     if not kept_materials:
@@ -1019,6 +1230,7 @@ def _achievable_ranges(target_umf, materials, oxide_constraints, material_constr
 
     flux = flux_row(oxides)
     flux_vec = _matmul(flux, A)
+    flux_names = {oxide for oxide, is_flux in zip(oxides, flux) if is_flux}
 
     if not np.any(flux_vec > 0):
         return {"feasible": None, "error": "no_fluxes",
@@ -1029,11 +1241,21 @@ def _achievable_ranges(target_umf, materials, oxide_constraints, material_constr
     index = {oxide: i for i, oxide in enumerate(oxides)}
     material_index = {name: j for j, name in enumerate(material_names)}
 
-    # The box the target itself imposes, then the caller's overrides on top
+    # The box the target imposes, oxide by oxide, and it covers ALL of them.
+    # An oxide the target names gets [b - tol*s, b + tol*s]; an oxide it does
+    # not gets the ceiling the verdict measures it against, tol * the scale
+    # floor, because the verdict scores contamination as a deviation from zero.
+    # Leaving those free was measurably wrong and not merely imprecise: on the
+    # real inventory it answered "up to 19.9% bone ash" for a mixture carrying
+    # P2O5 0.198, which the same module rejects at forty times the tolerance.
     bounds_by_oxide = {}
-    for oxide, value in target.items():
-        scale = max(value, OXIDE_SCALE_FLOOR)
-        bounds_by_oxide[oxide] = (max(0.0, value - tol * scale), value + tol * scale)
+    for oxide in oxides:
+        if oxide in target:
+            value = target[oxide]
+            scale = max(value, OXIDE_SCALE_FLOOR)
+            bounds_by_oxide[oxide] = (max(0.0, value - tol * scale), value + tol * scale)
+        else:
+            bounds_by_oxide[oxide] = (None, tol * OXIDE_SCALE_FLOOR)
 
     for oxide, raw in (oxide_constraints or {}).items():
         if oxide not in index:
@@ -1076,14 +1298,15 @@ def _achievable_ranges(target_umf, materials, oxide_constraints, material_constr
             A_ub.append(lo * ones - column)
             b_ub.append(0.0)
 
-    zero_objective = np.zeros(n)
     variable_bounds = [(0.0, None)] * n
     lp_count = 0
 
-    # One probe first, on the sum(x) = 100 normalization: it answers "is the
-    # feasible region empty" once, so that a contradiction costs one LP instead
-    # of seventy. It also hands back the example recipe for free.
-    probe = _linprog(zero_objective, A_ub, b_ub, [ones], [100.0], variable_bounds)
+    # One probe first, on the sum(x) = 100 normalization. It does three jobs at
+    # once: it answers "is the feasible region empty" so that a contradiction
+    # costs one LP instead of seventy, it hands back the example recipe, and its
+    # objective - the largest flux sum the constraints allow - is the scale the
+    # flux floor below is measured against.
+    probe = _linprog(-flux_vec, A_ub, b_ub, [ones], [100.0], variable_bounds)
     lp_count += 1
 
     if probe.status == LP_INFEASIBLE:
@@ -1096,6 +1319,30 @@ def _achievable_ranges(target_umf, materials, oxide_constraints, material_constr
         return {"feasible": None, "error": "lp_not_converged",
                 "message": f"status {probe.status}: {probe.message}",
                 "lp_count": lp_count, "warnings": warnings}
+
+    max_flux_sum = float(-probe.fun)
+    if max_flux_sum <= 0.0:
+        # Every point the constraints allow is flux free, so not one of them has
+        # a UMF. Reporting ranges over such a region would be reporting the
+        # shape of a set of non-glazes
+        warnings.append("ни одна допустимая смесь не содержит плавней — "
+                        "у таких составов нет UMF, диапазоны считать не по чему")
+        return {"feasible": False, "oxide_ranges": {}, "material_ranges": {},
+                "example_recipe": {}, "lp_count": lp_count, "warnings": warnings}
+
+    # The material LPs, and only they, carry the flux floor: they are normalized
+    # by sum(x) = 100, where a flux free batch satisfies every UMF constraint as
+    # 0 <= 0 and would be reported as a legitimate answer. Without it a target
+    # of {"CaO": 1.0} on the real inventory answers [0, 100] for every material
+    # and offers 100% aluminium powder as the example recipe. The oxide LPs need
+    # nothing: S_flux = 1 already excludes the point.
+    material_A_ub = A_ub + [-flux_vec]
+    material_b_ub = b_ub + [-MIN_FLUX_SHARE * max_flux_sum]
+
+    if not any(oxide not in flux_names for oxide in target):
+        warnings.append("цель состоит из одних плавней и почти ничего не ограничивает: "
+                        "диапазоны материалов выйдут широкими не потому, что рецепт "
+                        "свободен, а потому, что в цели нет ни одного не-плавня")
 
     example_recipe = _as_recipe(np.asarray(probe.x), material_names)
 
@@ -1130,7 +1377,8 @@ def _achievable_ranges(target_umf, materials, oxide_constraints, material_constr
         interval = []
         for maximize in (False, True):
             c = -column if maximize else column
-            result = _linprog(c, A_ub, b_ub, [ones], [100.0], variable_bounds)
+            result = _linprog(c, material_A_ub, material_b_ub, [ones], [100.0],
+                              variable_bounds)
             lp_count += 1
             if result.status == LP_INFEASIBLE:
                 return {"feasible": False, "oxide_ranges": {}, "material_ranges": {},

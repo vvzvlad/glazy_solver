@@ -14,11 +14,12 @@ import unittest
 
 # Fix imports by adding parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from validate_database import (CATEGORY_DUPLICATE_NAME, CATEGORY_FORMULA_SUM,
-                               CATEGORY_LOI_KEY, CATEGORY_NON_OXIDE_MATERIAL,
-                               CATEGORY_UNKNOWN_OXIDE, CATEGORY_UNKNOWN_PRIORITY,
-                               LEVEL_ERROR, LEVEL_NOTE, LEVEL_WARNING, by_level,
-                               count_by_category, format_report, validate_database)
+from validate_database import (CATEGORY_BAD_VALUE, CATEGORY_DUPLICATE_NAME,
+                               CATEGORY_FORMULA_SUM, CATEGORY_LOI_KEY,
+                               CATEGORY_NON_OXIDE_MATERIAL, CATEGORY_UNKNOWN_OXIDE,
+                               CATEGORY_UNKNOWN_PRIORITY, LEVEL_ERROR, LEVEL_NOTE,
+                               LEVEL_WARNING, by_level, count_by_category,
+                               format_report, validate_database)
 
 MASSES = {"SiO2": 60.08, "Al2O3": 101.96, "CaO": 56.08, "Fe2O3": 159.69}
 
@@ -158,6 +159,41 @@ class TestRules(unittest.TestCase):
                                     "не объект вовсе"], {}, MASSES)
 
         self.assertEqual(len(by_level(issues, LEVEL_ERROR)), 3)
+
+    def test_every_value_the_code_cannot_use_is_an_error(self):
+        """
+        The four the validator used to pass while the code choked on them
+
+        Each one was checked downstream before being listed here: Infinity makes
+        check_feasibility refuse the whole inventory, NaN makes the material
+        vanish silently because NaN > 0 is False, a negative content has the
+        feasibility "why" announce that no material contains the oxide, and a
+        quoted number makes filter_materials_with_formula raise TypeError.
+        """
+        cases = {
+            'infinity': float('inf'),
+            'nan': float('nan'),
+            'negative': -5.0,
+            'string': "68.0",
+            'boolean': True,
+            'null': None,
+        }
+
+        for label, value in cases.items():
+            issues = validate_database([material("Битый", {"SiO2": value})], {}, MASSES)
+            errors = by_level(issues, LEVEL_ERROR)
+
+            self.assertEqual(len(errors), 1, f"{label} produced {len(errors)} errors")
+            self.assertEqual(errors[0]['category'], CATEGORY_BAD_VALUE)
+            self.assertEqual(errors[0]['material'], "Битый")
+
+    def test_a_legal_zero_is_not_an_unusable_value(self):
+        # 0.0 is a perfectly good analysis cell ("this batch has none of it"),
+        # and an int is as good as a float
+        issues = validate_database([material("Кварц", {"SiO2": 100, "Fe2O3": 0.0})],
+                                   {}, MASSES)
+
+        self.assertEqual(by_level(issues, LEVEL_ERROR), [])
 
     def test_the_report_names_every_level(self):
         issues = validate_database([material("Вода", {}),

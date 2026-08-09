@@ -40,6 +40,7 @@
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 
@@ -63,6 +64,7 @@ CATEGORY_LOI_KEY = 'loss on ignition key'
 CATEGORY_DUPLICATE_NAME = 'duplicate material name'
 CATEGORY_UNKNOWN_PRIORITY = 'priority for a material that does not exist'
 CATEGORY_BAD_RECORD = 'malformed record'
+CATEGORY_BAD_VALUE = 'unusable analysis value'
 
 # Plausible band for the sum of an oxide analysis, in weight percent. The lower
 # end catches a truncated record without condemning a carbonate with a large
@@ -74,6 +76,36 @@ FORMULA_SUM_MAX = 105.0
 
 def issue(level, category, message, material=None):
     return {"level": level, "category": category, "message": message, "material": material}
+
+
+def _unusable_value(value):
+    """
+    Why this analysis cell cannot be used, or None when it can
+
+    The criterion of this file is "a record the code cannot use", and each of
+    these four was found passing the validator while breaking something
+    downstream:
+
+      * "68.0" as a string - json keeps it a string, float() would have
+        swallowed it here, and filter_materials_with_formula() raises TypeError
+        on it at solve time;
+      * Infinity - check_feasibility refuses the WHOLE inventory with
+        nonfinite_analysis because of one cell;
+      * NaN - worse, because nothing complains: NaN > 0 is False, so the
+        material silently drops out of every calculation;
+      * a negative content - the LP subtracts the oxide, and the feasibility
+        "why" then states that no material of the set contains it.
+
+    bool is excluded explicitly: it passes isinstance(value, int) and True would
+    otherwise be read as 1% of an oxide.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return f"not a number ({type(value).__name__})"
+    if not math.isfinite(float(value)):
+        return "not a finite number"
+    if value < 0:
+        return "negative content"
+    return None
 
 
 def load_json(path):
@@ -135,12 +167,12 @@ def validate_materials(materials, molar_masses):
 
         total = 0.0
         for oxide, value in formula.items():
-            try:
-                number = float(value)
-            except (TypeError, ValueError):
-                issues.append(issue(LEVEL_ERROR, CATEGORY_BAD_RECORD,
-                                    f"{oxide} is not a number: {value!r}", name))
+            problem = _unusable_value(value)
+            if problem is not None:
+                issues.append(issue(LEVEL_ERROR, CATEGORY_BAD_VALUE,
+                                    f"{oxide} = {value!r}: {problem}", name))
                 continue
+            number = float(value)
 
             if oxide in NON_OXIDE_KEYS:
                 # Loss on ignition: bookkeeping, not a lost oxide. Out of the
