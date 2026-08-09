@@ -90,12 +90,37 @@ FALLBACK_RELATIVE = 0.05
 # which oxides the material actually carries, none of which the file knows. The
 # renamed material and the override on an oxide the material does not have are
 # the two that survived the last count, and both produce the answer of a missing
-# file bit for bit.
+# file bit for bit. What counts as flat - every applied sigma equal to every
+# OTHER applied sigma, and not to default_relative - is at the check itself, in
+# recipe_sensitivity().
+#
+# The message says the FACT and stops there. Its predecessor went on to name
+# three causes - "the tolerance database is unavailable, does not describe these
+# materials or has drifted from the names in database/materials.json" - and on
+# the shipped file all three are false at once: clay is 0.05 and so is
+# default_relative, so a recipe of clays gets the flat answer out of a file that
+# is present, complete and spelled exactly like materials.json. Whoever went to
+# fix that file found nothing to fix. A cause is named below only where it was
+# observed here, next to the answer it explains.
 FLAT_SIGMA_WARNING = (
-    "ни один материал этого рецепта не получил собственной сигмы: все взяли одно "
-    "значение по умолчанию, ранжирование идёт только по плечу. База допусков "
-    "недоступна, не описывает эти материалы или разошлась с именами в "
-    "database/materials.json")
+    "ранжирование идёт только по плечу: разброс паспортов не различает материалы "
+    "этого рецепта")
+
+# What was observed, appended to the line above. The number is part of the fact
+# and worth naming: "все получили 0.02" is a sentence its reader can check
+# against material_tolerance.json in a second, while "все получили одинаковую"
+# leaves them to work out which one.
+FLAT_SIGMA_OBSERVED = "все они получили одну и ту же сигму {sigma:g}"
+NO_SIGMA_OBSERVED = "ни одна сигма не вошла в расчёт"
+
+# The one cause this module can actually see from here, and it is only said when
+# it was seen: the tolerance file does describe materials, and not one of them is
+# in this recipe. That is the renamed supplier material of the commit before, and
+# it is a statement about these two files together - which is why it cannot be
+# made at load time and is not in "issues".
+FLAT_SIGMA_NO_NAME_MATCHED = (
+    "Ни одно имя из базы допусков не совпало с материалами рецепта: либо она их "
+    "не описывает, либо имена разошлись с database/materials.json")
 
 # Said when the file itself never became a dictionary. It is a fact about the
 # file and NOT a statement about the answer: what that costs the ranking is for
@@ -294,6 +319,15 @@ def _report_dropped_sigmas(classes, materials, path, issues):
     falls back a level (an override to the class, a class to the default) and
     the answer that comes back is a smaller number for that material with
     nothing in it saying why.
+
+    Every line below therefore describes the CONTENT of the file and stops
+    before the calculation. The earlier wording finished each of them with what
+    the materials then took ("эти материалы взяли сигму уровнем выше", "для них
+    взята сигма по умолчанию"), and that half was a guess of exactly the kind
+    the commit before this one removed from the flat check: an unused class with
+    a typo in it, or a broken entry for a material this recipe does not contain,
+    produced "1 value dropped, those materials fell back a level" with no such
+    material anywhere in the request.
     """
     unresolved_classes = 0
     broken_entries = 0
@@ -346,8 +380,8 @@ def _report_dropped_sigmas(classes, materials, path, issues):
     if unresolved_classes:
         logger.warning(f"material_tolerance_unresolved_classes: {path}: "
                        f"{unresolved_classes} entries point at a class without a sigma")
-        issues.append(f"в базе допусков {unresolved_classes} материалов ссылаются на "
-                      f"класс без пригодной сигмы, для них взята сигма по умолчанию")
+        issues.append(f"в базе допусков {unresolved_classes} записей материалов ссылаются "
+                      f"на класс без пригодной сигмы")
 
     if broken_entries:
         issues.append(f"в базе допусков {broken_entries} записей материалов неверного "
@@ -355,17 +389,15 @@ def _report_dropped_sigmas(classes, materials, path, issues):
 
     if broken_oxide_sections:
         issues.append(f"в базе допусков не учтена секция «oxides» неверного типа: таких "
-                      f"записей {broken_oxide_sections}, для них взята сигма класса")
+                      f"записей {broken_oxide_sections}")
 
     if broken_overrides:
         issues.append(f"в базе допусков не учтены непригодные переопределения сигмы по "
-                      f"оксиду: таких значений {broken_overrides}, для них взята сигма "
-                      f"класса")
+                      f"оксиду: таких значений {broken_overrides}")
 
     if oversized:
         issues.append(f"в базе допусков не учтены сигмы больше {MAX_SIGMA:.1f} (100%) — "
-                      f"паспорт не врёт настолько: таких значений {oversized}, эти "
-                      f"материалы взяли сигму уровнем выше")
+                      f"паспорт не врёт настолько: таких значений {oversized}")
 
 
 def _is_usable_sigma(value):
@@ -630,17 +662,25 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
     # Accumulated squared response per result oxide, over every perturbation
     variance = {oxide: 0.0 for oxide in result_oxides}
 
-    # The sigma every material gets when nothing more specific resolves for it,
-    # and whether anything more specific ever did. Not "does the file contain a
-    # sigma" - that question was asked three times and answered wrongly three
-    # times - but "did a sigma other than the flat default enter this
-    # calculation", which is the thing the answer actually rests on and which is
-    # only knowable here. The whole set of applied sigmas is watched and not just
-    # the "sigma_used" of the rows: that field reports the leading oxide of a
+    # Every sigma that actually entered the variance. Not "does the file contain
+    # a sigma" - that question was asked three times and answered wrongly three
+    # times - but "what got used", which is the thing the answer rests on and
+    # which is only knowable here. The whole set is watched and not just the
+    # "sigma_used" of the rows: that field reports the leading oxide of a
     # material alone, so an override on a secondary oxide - a real move away from
     # the flat answer - would not show up in it.
-    default_relative = _positive_float(tolerances.get('default_relative'), FALLBACK_RELATIVE)
-    own_sigma_applied = False
+    #
+    # The plane is "all of them equal to EACH OTHER" and not "all of them equal
+    # to default_relative": what makes a ranking flat is that nothing tells the
+    # materials apart, and which number they all landed on is beside the point.
+    # material_tolerance.json groups materials into classes, so several of them
+    # sharing one number is the ordinary case and not an exotic one - feldspar
+    # and silica are both 0.02 in the shipped file, ash covers both ashes at
+    # 0.20, carbonate both carbonates at 0.01. Swept over all 5016 combinations
+    # of 2-4 of the 19 inventory materials (11 of them refused for having no
+    # fluxes at all), the shipped file answers 103 flat, and the rule this
+    # replaces - equality to default_relative - saw 11 of those 103.
+    applied_sigmas = set()
 
     material_rows = []
     for material_name, material, amount in used:
@@ -672,8 +712,7 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
                 # so perturbing it provably changes nothing
                 continue
 
-            if sigma != default_relative:
-                own_sigma_applied = True
+            applied_sigmas.add(sigma)
 
             # Only one cell of the analysis moves, so only one entry of the
             # weight composition changes: A[i][j] * sigma * (percent / 100).
@@ -706,16 +745,17 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
             "affects": _top_affected(per_result_oxide, total_contribution),
         })
 
-    if not own_sigma_applied:
+    if len(applied_sigmas) <= 1:
         # Everything that reached the calculation was one and the same number, so
-        # this IS the flat answer - whatever the tolerance file says about itself.
-        # A file that never mentions these materials, a name a supplier changed,
-        # an override on an oxide the material does not carry and a missing file
-        # all land here, and they land here for the same reason: what the file
-        # contains was never the question, what got used is.
-        logger.warning(f"sensitivity_flat_sigmas: every material of the recipe fell back "
-                       f"to default_relative={default_relative}")
-        warnings.append(FLAT_SIGMA_WARNING)
+        # this IS the flat answer - whatever the tolerance file says about itself
+        # and whatever level that number came from. A file that never mentions
+        # these materials, a name a supplier changed, an override on an oxide the
+        # material does not carry, a missing file and a recipe whose materials
+        # all share one class all land here, and they land here for the same
+        # reason: what the file contains was never the question, what got used is.
+        logger.warning(f"sensitivity_flat_sigmas: one sigma for the whole recipe: "
+                       f"{sorted(applied_sigmas)}")
+        warnings.append(_flat_sigma_warning(applied_sigmas, tolerances, used))
 
     by_material, share_warning = _material_shares(material_rows)
     if share_warning:
@@ -760,6 +800,34 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
         return _empty_result(warnings, "nonfinite_result", NONFINITE_RESULT_MESSAGE)
 
     return result
+
+
+def _flat_sigma_warning(applied_sigmas, tolerances, used):
+    """
+    The message of a flat ranking: what was observed, and why only when it is known
+
+    Two parts, and the boundary between them is the point of this function. The
+    first is a fact read off the calculation that just happened and is true every
+    time it is said. The second is a cause, and a cause is a claim about two
+    files - it is appended only where this code has just checked it, and stays
+    absent otherwise. The line these two used to share told the reader that the
+    tolerance database was unavailable, silent about these materials, or out of
+    sync with materials.json, on an answer where all three were false.
+    """
+    if applied_sigmas:
+        (sigma,) = applied_sigmas  # a set of one is what brought us here
+        text = f"{FLAT_SIGMA_WARNING} — {FLAT_SIGMA_OBSERVED.format(sigma=sigma)}"
+    else:
+        # No perturbation ran at all: every material of the recipe carries a
+        # formula the resolution found nothing usable in. The shares are zero
+        # anyway and ZERO_CONTRIBUTION_WARNING says that part.
+        text = f"{FLAT_SIGMA_WARNING} — {NO_SIGMA_OBSERVED}"
+
+    named = tolerances.get('materials')
+    if isinstance(named, dict) and named and not any(name in named for name, _m, _a in used):
+        text = f"{text}. {FLAT_SIGMA_NO_NAME_MATCHED}"
+
+    return text
 
 
 def _material_shares(material_rows):
