@@ -463,7 +463,7 @@ def _warn_about_unknown_oxides(unknown_oxides, where):
     logger.warning(f"{where}: no molar mass for {names} - dropped from the conversion")
 
 
-def weights_to_umf(weight_composition, convention=None):
+def weights_to_umf(weight_composition, *, convention=None, round_digits=3):
     """
     Converts weight fractions to UMF (Unity Molecular Formula)
 
@@ -472,6 +472,14 @@ def weights_to_umf(weight_composition, convention=None):
         convention: name of a flux convention from "unity_presets", or None for
             the default basis; see flux_oxides(). Only the set of oxides in the
             unity denominator changes, everything else is untouched
+        round_digits: number of decimals the result is rounded to, 3 by default
+            (the readable form every existing caller expects). Pass None to get
+            the raw values: rounding to 3 decimals quantizes the result with a
+            step of 0.001, which destroys any response smaller than that -
+            sensitivity.py compares formulas that differ by a fraction of a
+            percent and needs the unrounded numbers.
+            Also needed by quality_metrics, to see a trace oxide that is
+            really in the batch and rounds to 0.000 in the formula.
 
     Returns:
         dictionary {oxide: umf_value}
@@ -501,10 +509,11 @@ def weights_to_umf(weight_composition, convention=None):
         unity_factor = 1 / sum_fluxes
     
     umf = {oxide: amount * unity_factor for oxide, amount in molar_amounts.items()}
-    
+
     # Round values for readability
-    umf = {oxide: round(value, 3) for oxide, value in umf.items()}
-    
+    if round_digits is not None:
+        umf = {oxide: round(value, round_digits) for oxide, value in umf.items()}
+
     return umf
 
 def umf_to_weights(umf):

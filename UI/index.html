@@ -29,6 +29,13 @@
                         <div id="calculation_status" class="calculation-status"></div>
                     </div>
 
+                    <div class="glazy-import">
+                        <input type="text" id="glazy_import_input" placeholder="https://glazy.org/recipes/72382 или ID">
+                        <button type="button" id="glazy_import_btn">Импорт с Glazy</button>
+                        <span id="glazy_import_status" class="glazy-import-status"></span>
+                    </div>
+                    <div id="glazy_source" class="glazy-source" hidden></div>
+
                     <div class="composition-grid">
                         <div class="composition-table">
                             <div class="table-header">R<sub>2</sub>O/RO</div>
@@ -81,6 +88,18 @@
                 <div class="settings-card">
                     <div class="table-header">Настройки расчета</div>
                     <div class="settings-content">
+                        <div class="settings-group">
+                            <div class="settings-group-title">Движок расчета</div>
+                            <div class="material-item has-tooltip" title="Точнее подбирает состав и на одинаковый запрос всегда выдает один и тот же рецепт">
+                                <input type="radio" name="solver_engine" id="solver_iterative" value="iterative" checked>
+                                <label for="solver_iterative">Итеративный</label>
+                            </div>
+                            <div class="material-item has-tooltip" title="Старый движок: перебирает случайные наборы материалов, поэтому один и тот же запрос каждый раз дает разные рецепты">
+                                <input type="radio" name="solver_engine" id="solver_classic" value="classic">
+                                <label for="solver_classic">Классический</label>
+                            </div>
+                            <div class="settings-hint">Итеративный точнее и повторяем. Классический перебирает случайные наборы — результат каждый раз разный.</div>
+                        </div>
                         <div class="material-item">
                             <input type="checkbox" id="min_materials_toggle" checked>
                             <label for="min_materials_toggle">Минимизировать материалы</label>
@@ -274,18 +293,20 @@
                 const request_data = {
                     umf: current_umf,
                     max_solutions: 15,
-                    min_materials: true,
-                    error_tolerance: 0.001
+                    solver: get_current_solver()
                 };
 
                 if (selected_materials.length > 0) {
                     request_data.inventory = selected_materials;
                 }
 
-                // Получаем значение параметра min_materials из чекбокса
-                const min_materials_checkbox = document.getElementById('min_materials_toggle');
-                if (min_materials_checkbox) {
-                    request_data.min_materials = min_materials_checkbox.checked;
+                // min_materials and error_tolerance are understood by the classic
+                // engine only - the iterative one ignores them, so they are sent
+                // only when the classic engine is actually selected
+                if (request_data.solver === SOLVER_CLASSIC) {
+                    const min_materials_checkbox = document.getElementById('min_materials_toggle');
+                    request_data.min_materials = min_materials_checkbox ? min_materials_checkbox.checked : true;
+                    request_data.error_tolerance = 0.001;
                 }
 
                 // Отправляем запрос на сервер
@@ -361,7 +382,13 @@
                         
                         // Заново добавляем оксиды
                         add_initial_oxides();
-                        
+
+                        // The formula came from outside, it is no longer the
+                        // imported Glazy recipe
+                        if (typeof window.mark_glazy_source_stale === 'function') {
+                            window.mark_glazy_source_stale();
+                        }
+
                         // Пересчитываем рецепт
                         solve_recipe();
                         

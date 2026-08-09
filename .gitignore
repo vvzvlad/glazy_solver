@@ -5,3 +5,6 @@ comparison_results.md
 
 # Glazy dump and its parsed cache: CC BY-NC-SA, lives in ~/.cache/glazy_solver
 *.yaml.gz
+
+# scratch git worktrees of the assistant
+.claude/worktrees/

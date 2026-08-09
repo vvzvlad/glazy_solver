@@ -19,6 +19,8 @@ from solver_iterative import find_best_recipe
 from common import (weights_to_umf, umf_to_weights, load_materials, make_json_safe,
                     resolve_inventory, filter_materials_by_inventory,
                     load_oxide_classification)
+from glazy_import import GlazyImportError, parse_recipe_id, fetch_recipe, build_import_result
+from sensitivity import recipe_sensitivity
 
 # Logging setup
 logging.basicConfig(
@@ -49,11 +51,26 @@ except Exception as e:
     logger.critical(f"invalid_oxide_classification: {str(e)}")
     raise
 
-# Available solver engines; the classic one stays the default so that the
-# behaviour without the "solver" parameter is unchanged
+# Available solver engines. The iterative one is the default: measured on the 11
+# reference recipes of compare_solvers.py (see REFACTORING.md, section 8) it is
+# more accurate (median sum of per-oxide UMF deviations 0.0020 against 0.0030),
+# more than three times faster, and it reproduces the exact original set of
+# materials in 10 recipes out of 11 against 2 for the classic one.
+# The classic engine stays available through an explicit "solver" parameter.
+#
+# Two corrections from the merge, neither of which overturns the choice. The
+# classic engine is no longer non deterministic: it draws its subsets from a
+# private seeded generator, so two identical requests give the same answer. And
+# the ordering is inventory dependent - on the Glazy corpus, where the inventory
+# is the two to twelve materials of the recipe itself, the classic engine passes
+# the chemistry gate on 100% of targets against 94.67% and runs about thirty
+# times faster, because there its full matrix solution simply is the answer. The
+# iterative engine earns the default on the real 19 material inventory, which is
+# what the server serves.
 SOLVER_CLASSIC = 'classic'
 SOLVER_ITERATIVE = 'iterative'
 AVAILABLE_SOLVERS = (SOLVER_CLASSIC, SOLVER_ITERATIVE)
+DEFAULT_SOLVER = SOLVER_ITERATIVE
 
 # How hard the iterative solver pushes an oxide the request did not mention
 # towards zero. 1.0 ("not listed = must be zero") is both the library default of
@@ -140,10 +157,12 @@ def solve_recipe():
     {
         "umf": {"SiO2": 4, "Al2O3": 1, "Na2O": 0.5, "K2O": 0.5},
         "max_solutions": 3,  // optional, 3 by default
-        "min_materials": true,  // optional, true by default, classic solver only
-        "error_tolerance": 0.01,  // optional, 0.01 by default, classic solver only
+        "min_materials": true,  // optional, true by default, classic solver only:
+                                // the iterative solver ignores it
+        "error_tolerance": 0.01,  // optional, 0.01 by default, classic solver only:
+                                  // the iterative solver ignores it
         "inventory": ["Material1", "Material2", ...],  // optional, list of available materials
-        "solver": "classic",  // optional, "classic" (default) or "iterative"
+        "solver": "iterative",  // optional, "iterative" (default) or "classic"
         "penalize_unlisted": 1.0  // optional, 1.0 by default, iterative solver only:
                                   // how hard an oxide missing from "umf" is pushed to
                                   // zero. 1.0/true = not listed means "must be zero"
@@ -164,7 +183,8 @@ def solve_recipe():
             "weight_composition": {"SiO2": 65.2, "Al2O3": 18.1, ...},
             "materials_count": 2,
             "recipe_umf": {"SiO2": 3.98, "Al2O3": 1.02, ...},  // UMF of this particular recipe
-            // iterative solver only, see iterative_solutions_to_classic_format:
+            // iterative solver only (so, by default), see
+            // iterative_solutions_to_classic_format:
             "objective_error": 0.0123,
             "unlisted_weight": 1.0,
             "unity_scale": 1.0
@@ -184,7 +204,7 @@ def solve_recipe():
         min_materials = data.get('min_materials', True)
         error_tolerance = data.get('error_tolerance', 0.01)
         inventory_data = data.get('inventory', None)
-        solver_name = data.get('solver', SOLVER_CLASSIC)
+        solver_name = data.get('solver', DEFAULT_SOLVER)
         penalize_unlisted = data.get('penalize_unlisted', DEFAULT_PENALIZE_UNLISTED)
 
         if solver_name not in AVAILABLE_SOLVERS:
@@ -240,6 +260,100 @@ def solve_recipe():
     except Exception as e:
         logger.exception(f"server_error: {str(e)}")
         return jsonify({"error": "server_error", "message": str(e)}), 500
+
+# HTTP status for a recipe that is syntactically fine but cannot be analysed -
+# the same code /api/glazy_import already uses for a recipe without an analysis.
+# 'empty_recipe' and 'empty_umf' are guards of sensitivity.py that no request can
+# reach through this endpoint (an empty recipe is answered with missing_recipe
+# above, and a recipe that passes the flux check always has a UMF); they are
+# listed so that a future path to them lands on 422 and not on the 400 default.
+SENSITIVITY_UNPROCESSABLE_ERRORS = ('no_fluxes', 'no_known_materials', 'empty_composition',
+                                    'empty_recipe', 'empty_umf', 'nonfinite_result')
+
+# The endpoint used to accept an "inventory" and the parameter was removed, not
+# renamed: the request that carries it is now answered with different numbers
+# than before. Ignoring it without a word is the one outcome an old client cannot
+# notice, so the answer says it out loud.
+IGNORED_INVENTORY_WARNING = (
+    "параметр «inventory» больше не поддерживается и проигнорирован: "
+    "чувствительность всегда считается по всей базе материалов")
+
+
+@app.route('/api/sensitivity', methods=['POST'])
+def sensitivity():
+    """
+    API endpoint that reports what a recipe rests on: how much the uncertainty
+    of the material analyses moves its UMF, and which material moves it most
+
+    This is a separate endpoint and not a block of /api/solve on purpose: the
+    computation is optional and costs a full UMF recalculation per (material,
+    oxide) pair, so a caller that does not need it should not pay for it.
+
+    POST JSON parameters:
+    {
+        "recipe": {"Нефелин-сиенит VR13": 30.2, ...}  // required, weight percent
+    }
+
+    There is no "inventory" parameter here, unlike /api/solve: the names are
+    always resolved against the WHOLE database. A recipe names its own materials
+    exactly, so there is nothing to search for, and dropping one of them for
+    being out of stock would silently analyse a different formula than the one
+    reported in "umf". A request that still sends one is answered anyway, with
+    IGNORED_INVENTORY_WARNING in "warnings".
+
+    Returns:
+    {
+        "umf": {"SiO2": 3.151, ...},          // base formula of the recipe
+        "per_oxide": [                        // sorted by relative spread, desc
+            {"oxide": "B2O3", "value": 0.266, "sigma": 0.02779, "relative": 0.1044},
+            ...
+        ],
+        "by_material": [                      // sorted by share, desc
+            {"material": "Улексит (Химпэк)", "share": 0.7004, "via_oxide": "B2O3",
+             "sigma_used": 0.1, "affects": ["B2O3", "MgO"]},
+            ...
+        ],
+        "warnings": ["..."],
+        "error": null
+    }
+    """
+    try:
+        data = request.get_json(silent=True)
+
+        recipe = data.get('recipe') if isinstance(data, dict) else None
+
+        if not isinstance(recipe, dict) or not recipe:
+            logger.warning("sensitivity_missing_recipe parameter in request")
+            return jsonify({
+                "error": "missing_recipe",
+                "message": "recipe parameter is required and must be a non-empty object"
+            }), 400
+
+        request_warnings = []
+        if 'inventory' in data:
+            logger.warning("sensitivity_inventory_ignored: the parameter was removed")
+            request_warnings.append(IGNORED_INVENTORY_WARNING)
+
+        materials = load_materials(only_inventory=False, priority=True)
+
+        logger.info(f"sensitivity requested for {len(recipe)} materials")
+
+        result = recipe_sensitivity(recipe, materials)
+        result['warnings'] = request_warnings + result.get('warnings', [])
+
+        if result.get('error'):
+            logger.warning(f"sensitivity_failed: {result['error']}: {result.get('message')}")
+            status = 422 if result['error'] in SENSITIVITY_UNPROCESSABLE_ERRORS else 400
+            return jsonify({"error": result['error'], "message": result.get('message', ''),
+                            "warnings": result['warnings']}), status
+
+        logger.info(f"sensitivity done: {len(result['by_material'])} materials, {len(result['per_oxide'])} oxides, warnings={len(result['warnings'])}")
+        return jsonify(make_json_safe(result))
+
+    except Exception as e:
+        logger.exception(f"sensitivity_error: {str(e)}")
+        return jsonify({"error": "server_error", "message": str(e)}), 500
+
 
 @app.route('/api/molar_masses', methods=['GET'])
 def get_molar_masses():
@@ -416,6 +530,90 @@ def get_materials():
     
     except Exception as e:
         logger.exception(f"materials_error: {str(e)}")
+        return jsonify({"error": "server_error", "message": str(e)}), 500
+
+@app.route('/api/glazy_import', methods=['POST'])
+def glazy_import():
+    """
+    API endpoint that imports a public recipe from glazy.org
+
+    Only the target formula and the original recipe are imported: the materials
+    of Glazy are NOT mapped onto the local database, the solver picks its own.
+
+    POST JSON parameters:
+    {
+        "recipe": "https://glazy.org/recipes/72382"  // recipe URL or id, as typed
+        // "recipe_id": 72382                        // accepted as well
+    }
+
+    Returns:
+    {
+        "id": 72382,
+        "name": "OVO Perfect Matte (40-25-10)",
+        "url": "https://glazy.org/recipes/72382",
+        "umf": {"SiO2": 2.583, "Al2O3": 0.577, ...},  // target for /api/solve
+        "umf_source": "weights",  // "weights" = recomputed from the weight
+                                  // analysis in our flux basis (the normal case),
+                                  // "glazy_umf" = taken from Glazy as is, in its
+                                  // own basis, because there was nothing to
+                                  // recompute from
+        "umf_glazy": {"SiO2": 2.5824, ...},   // the UMF of Glazy, for display
+        "umf_basis_diff": 0.0006, // largest per-oxide difference between "umf"
+                                  // and "umf_glazy"; null when Glazy gave no
+                                  // UMF to compare against. A large value means
+                                  // the two flux bases differ (a lead recipe)
+        "weight_percent": {"SiO2": 48.5952, ...},
+        "components": [
+            {"name": "...", "percentage": 40.0, "is_additional": false, "glazy_material_id": 20668}
+        ],
+        "cone_from": "5½",     // null when absent
+        "cone_to": "7",        // null when absent
+        "thermal_expansion": 7.934  // null when absent
+    }
+    """
+    try:
+        # silent=True: a body that is not JSON at all is a missing parameter for
+        # this endpoint, not the HTML 400 page Flask would raise on its own
+        data = request.get_json(silent=True)
+
+        raw_recipe = None
+        if isinstance(data, dict):
+            # An explicit "recipe": null must fall back to recipe_id as well, so
+            # the fallback is on the VALUE and not on the presence of the key
+            raw_recipe = data.get('recipe')
+            if raw_recipe is None:
+                raw_recipe = data.get('recipe_id')
+
+        if raw_recipe is None or (isinstance(raw_recipe, str) and not raw_recipe.strip()):
+            logger.warning("glazy_import_missing_recipe parameter in request")
+            return jsonify({
+                "error": "missing_recipe",
+                "message": "recipe or recipe_id parameter is required"
+            }), 400
+
+        recipe_id = parse_recipe_id(raw_recipe)
+        if recipe_id is None:
+            # repr + a length cap: the raw value is user input and the log format
+            # is one line per record, so a newline in it would forge records
+            logger.warning(f"glazy_import_invalid_recipe_id: {repr(raw_recipe)[:200]}")
+            return jsonify({
+                "error": "invalid_recipe_id",
+                "message": "expected a glazy.org recipe url or a numeric recipe id"
+            }), 400
+
+        logger.info(f"glazy_import_requested: recipe_id={recipe_id}")
+
+        result = build_import_result(fetch_recipe(recipe_id), recipe_id)
+
+        logger.info(f"glazy_import_done: recipe_id={recipe_id}, umf_source={result['umf_source']}, oxides={len(result['umf'])}, components={len(result['components'])}")
+        return jsonify(make_json_safe(result))
+
+    except GlazyImportError as e:
+        logger.warning(f"glazy_import_failed: {e.code}: {e.message}")
+        return jsonify({"error": e.code, "message": e.message}), e.http_status
+
+    except Exception as e:
+        logger.exception(f"glazy_import_error: {str(e)}")
         return jsonify({"error": "server_error", "message": str(e)}), 500
 
 # Serving of the static UI files
