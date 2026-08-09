@@ -18,12 +18,12 @@ import os
 
 # Fix imports by adding parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common import load_materials, weights_to_umf
+from common import load_materials, load_molar_masses, weights_to_umf
 from solver_classic import calculate_recipe_composition
 from sensitivity import (FALLBACK_RELATIVE, FLAT_SIGMA_WARNING, MAX_PERCENTAGE, MAX_SIGMA,
                          NONFINITE_CONTRIBUTION_WARNING, UNREADABLE_TOLERANCES_ISSUE,
-                         ZERO_CONTRIBUTION_WARNING, _all_finite, _first_nonfinite,
-                         _material_shares, _top_affected,
+                         ZERO_CONTRIBUTION_WARNING, ZERO_FLUX_MOLES, _all_finite,
+                         _first_nonfinite, _material_shares, _top_affected,
                          load_tolerances, material_sigma, recipe_sensitivity)
 
 # A path that cannot exist, to stand in for an unreadable tolerance database
@@ -66,6 +66,33 @@ def shares(result):
 def shipped_tolerances_file():
     with open(SHIPPED_TOLERANCES_PATH, 'r', encoding='utf-8') as f:
         return json.load(f)
+
+
+def flat_warning(result):
+    """
+    The flat ranking warning of an answer, None when it carries none
+
+    FLAT_SIGMA_WARNING is the stem of that message and not the whole of it: the
+    fact it states is the same every time, and what follows is what was observed
+    here - the sigma every material got, and a cause only where this run of the
+    calculation could check one.
+    """
+    return next((warning for warning in result["warnings"]
+                 if warning.startswith(FLAT_SIGMA_WARNING)), None)
+
+
+def numbers_in(payload):
+    """Every number written anywhere in a tolerance file, whatever section it sits in"""
+    if isinstance(payload, dict):
+        return {number for value in payload.values() for number in numbers_in(value)}
+
+    if isinstance(payload, list):
+        return {number for value in payload for number in numbers_in(value)}
+
+    if isinstance(payload, bool) or not isinstance(payload, (int, float)):
+        return set()
+
+    return {float(payload)}
 
 
 class TestMaterialSigma(unittest.TestCase):
@@ -213,20 +240,40 @@ class TestToleranceFilesThatDoNotWork(unittest.TestCase):
             json.dump(payload, handle)
         return handle.name
 
-    def flat_shares(self, default_relative):
+    def flat_shares(self, recipe, sigma):
         """
         The answer of a file that says nothing but "every material is this sigma"
 
-        Taken at the default_relative of the file under test and not at a fixed
-        0.05, because the shares are NOT invariant to scaling every sigma by the
-        same factor: the UMF renormalizes onto its unity basis, so the response
-        is not linear in sigma. Wollastonite moves 0.327 -> 0.204 between a flat
-        0.05 and a flat 0.9, which is what made the fixed comparison a false
-        statement rather than a strict one.
+        Taken at a given sigma and not at a fixed 0.05, because the shares are
+        NOT invariant to scaling every sigma by the same factor: the UMF
+        renormalizes onto its unity basis, so the response is not linear in
+        sigma. Wollastonite moves 0.327 -> 0.204 between a flat 0.05 and a flat
+        0.9, which is what made the fixed comparison a false statement rather
+        than a strict one.
         """
         return shares(recipe_sensitivity(
-            TRANSPARENT_RECIPE, self.materials,
-            {"default_relative": default_relative, "classes": {}, "materials": {}}))
+            recipe, self.materials,
+            {"default_relative": sigma, "classes": {}, "materials": {}}))
+
+    def matching_flat_sigma(self, recipe, result, payload):
+        """
+        The sigma of the flat file this answer is the answer of, None when none is
+
+        The candidates are every number written anywhere in the file under test
+        plus the fallback it can drop to, so the search never has to know HOW a
+        sigma resolves - only that a resolved one came from somewhere in the
+        file. That independence is the point: the previous form of this test
+        compared against one fixed answer, the one at "default_relative", and a
+        file whose materials all landed on 0.02 while its default said 0.05 was
+        called a working file by it.
+        """
+        for sigma in sorted(numbers_in(payload) | {FALLBACK_RELATIVE}):
+            if not 0 < sigma <= MAX_SIGMA:
+                continue
+            if shares(result) == self.flat_shares(recipe, sigma):
+                return sigma
+
+        return None
 
     def unusable_files(self):
         """(name, payload) - the table of the review, as a fixture"""
@@ -248,6 +295,34 @@ class TestToleranceFilesThatDoNotWork(unittest.TestCase):
               "materials": self.shipped["materials"]}),
         ]
 
+    def answers_that_may_come_out_flat(self):
+        """
+        (name, recipe, payload) - every input the invariant below is checked on
+
+        The four at the end are answered by the SHIPPED file, in perfect order,
+        and they are the half no previous form of the test could see: their
+        materials resolve to a class each and the classes land on one and the
+        same number. That is not an exotic file, that is what grouping materials
+        into classes is FOR - feldspar and silica are both 0.02, both ashes are
+        0.20, both carbonates are 0.01. Over the 2-4 material combinations of the
+        19 inventory materials the shipped file answers 103 of them flat, and
+        equality to "default_relative" saw 11 of those.
+        """
+        by_the_file = [(name, TRANSPARENT_RECIPE, payload)
+                       for name, payload in self.unusable_files()]
+
+        return by_the_file + [
+            ("the shipped file on a feldspar recipe, every sigma 0.02",
+             {"Нефелин-сиенит VR13": 40, "Полевой шпат FFF": 30,
+              "Кварцевая мука Кварцверке W12": 30}, self.shipped),
+            ("the shipped file on two ashes, both 0.20",
+             {"Древесная зола": 60, "Костная зола": 40}, self.shipped),
+            ("the shipped file on two carbonates, both 0.01",
+             {"Мел, CaCO3": 50, "Доломит МИДОЛ": 50}, self.shipped),
+            ("the shipped file on a recipe of a single material",
+             {"Нефелин-сиенит VR13": 100}, self.shipped),
+        ]
+
     def test_none_of_them_is_answered_in_silence(self):
         """
         The invariant, and not a list of specific checks: a warning is owed
@@ -263,25 +338,35 @@ class TestToleranceFilesThatDoNotWork(unittest.TestCase):
                 self.assertTrue(result["warnings"],
                                 f"{name}: answered with no warning at all")
 
-    def test_an_answer_equal_to_the_flat_one_always_carries_the_flat_warning(self):
+    def test_an_answer_equal_to_a_flat_one_always_carries_the_flat_warning(self):
         """
-        Where the line is drawn: not "the file was readable" but "these numbers
-        are the numbers of a file that distinguishes nothing". Those two answers
-        are indistinguishable to a caller, so they must not differ in what they
-        say - in both directions.
-        """
-        for name, payload in self.unusable_files():
-            with self.subTest(name):
-                with self.assertLogs('sensitivity', level='WARNING'):
-                    tolerances = load_tolerances(self.write_tolerances(payload))
-                    result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
+        Where the line is drawn: not "the file was readable", not "some material
+        got a sigma of its own", but "these numbers are the numbers of a file
+        that distinguishes nothing". Those two answers are indistinguishable to a
+        caller, so they must not differ in what they say - in both directions.
 
-                if shares(result) == self.flat_shares(tolerances["default_relative"]):
-                    self.assertIn(FLAT_SIGMA_WARNING, result["warnings"],
-                                  f"{name}: the flat ranking without the flat warning")
+        The comparison is against the flat answer at the sigma that was actually
+        applied and not at the "default_relative" of the file. The two are not
+        the same question: a file whose materials all resolve to 0.02 while its
+        default says 0.05 ranks nothing at all, and its answer is bit for bit the
+        answer of {"default_relative": 0.02} - umf, per_oxide and by_material
+        alike. The previous form of the test compared against the default and
+        called that file a working one.
+        """
+        for name, recipe, payload in self.answers_that_may_come_out_flat():
+            with self.subTest(name):
+                path = self.write_tolerances(payload)
+                with self.assertLogs('sensitivity', level='WARNING'):
+                    tolerances = load_tolerances(path)
+                    result = recipe_sensitivity(recipe, self.materials, tolerances)
+                    flat_sigma = self.matching_flat_sigma(recipe, result, payload)
+
+                if flat_sigma is None:
+                    self.assertIsNone(flat_warning(result), f"{name}: a working file called flat")
                 else:
-                    self.assertNotIn(FLAT_SIGMA_WARNING, result["warnings"],
-                                     f"{name}: a working file called flat")
+                    self.assertIsNotNone(
+                        flat_warning(result),
+                        f"{name}: the ranking of a flat {flat_sigma} without the flat warning")
 
     def test_a_default_relative_of_its_own_is_still_a_flat_answer(self):
         """
@@ -295,11 +380,13 @@ class TestToleranceFilesThatDoNotWork(unittest.TestCase):
         with self.assertLogs('sensitivity', level='WARNING'):
             tolerances = load_tolerances(self.write_tolerances({"default_relative": 0.02}))
             result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
+            at_the_fallback = self.flat_shares(TRANSPARENT_RECIPE, FALLBACK_RELATIVE)
+            at_its_own = self.flat_shares(TRANSPARENT_RECIPE, 0.02)
 
-        self.assertIn(FLAT_SIGMA_WARNING, result["warnings"])
+        self.assertIsNotNone(flat_warning(result))
         self.assertAlmostEqual(share_of(result, "Волластонит МИВОЛЛ"), 0.332833969, places=6)
-        self.assertNotEqual(shares(result), self.flat_shares(FALLBACK_RELATIVE))
-        self.assertEqual(shares(result), self.flat_shares(0.02))
+        self.assertNotEqual(shares(result), at_the_fallback)
+        self.assertEqual(shares(result), at_its_own)
 
     def test_a_partly_usable_file_keeps_working_and_still_reports_the_damage(self):
         """
@@ -311,12 +398,13 @@ class TestToleranceFilesThatDoNotWork(unittest.TestCase):
             tolerances = load_tolerances(self.write_tolerances(
                 {"default_relative": 0.05, "classes": [],
                  "materials": self.shipped["materials"]}))
+            flat = self.flat_shares(TRANSPARENT_RECIPE, 0.05)
 
         result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
 
-        self.assertNotIn(FLAT_SIGMA_WARNING, result["warnings"])
+        self.assertIsNone(flat_warning(result))
         self.assertEqual(result["by_material"][0]["material"], "Улексит (Химпэк)")
-        self.assertNotEqual(shares(result), self.flat_shares(0.05))
+        self.assertNotEqual(shares(result), flat)
         self.assertNotEqual(share_of(result, "Улексит (Химпэк)"),
                             share_of(recipe_sensitivity(TRANSPARENT_RECIPE, self.materials),
                                      "Улексит (Химпэк)"))
@@ -353,7 +441,7 @@ class TestToleranceFilesThatDoNotWork(unittest.TestCase):
 
         result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
 
-        self.assertNotIn(FLAT_SIGMA_WARNING, result["warnings"])
+        self.assertIsNone(flat_warning(result))
         self.assertEqual(result["by_material"][0]["material"], "Улексит (Химпэк)")
         self.assertTrue(any('material_tolerance_entry_ignored' in line for line in logs.output))
         self.assertTrue(result["warnings"], "the dropped entry was not reported")
@@ -408,11 +496,17 @@ class TestAHealthyFileThatNeverReachesTheRecipe(unittest.TestCase):
         with self.assertLogs('sensitivity', level='WARNING') as logs:
             result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
 
-        self.assertIn(FLAT_SIGMA_WARNING, result["warnings"])
+        warning = flat_warning(result)
+        self.assertIsNotNone(warning)
         self.assertEqual(shares(result), self.missing_file,
                          "the same numbers a missing file gives, so the same warning")
         self.assertEqual(result["by_material"][0]["material"], "Волластонит МИВОЛЛ")
         self.assertTrue(any('sensitivity_flat_sigmas' in line for line in logs.output))
+
+        # And here the cause IS observed - the file names 19 materials and not
+        # one of them is in this recipe - so here it is named
+        self.assertIn("Ни одно имя", warning,
+                      f"the names did not match and nothing said so: {warning}")
 
     def test_an_override_on_an_oxide_the_material_does_not_carry_is_not_a_sigma(self):
         """
@@ -428,7 +522,7 @@ class TestAHealthyFileThatNeverReachesTheRecipe(unittest.TestCase):
         with self.assertLogs('sensitivity', level='WARNING'):
             result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
 
-        self.assertIn(FLAT_SIGMA_WARNING, result["warnings"])
+        self.assertIsNotNone(flat_warning(result))
         self.assertEqual(shares(result), self.missing_file)
 
     def test_a_recipe_of_materials_the_file_does_not_describe_is_flat_too(self):
@@ -449,7 +543,7 @@ class TestAHealthyFileThatNeverReachesTheRecipe(unittest.TestCase):
             result = recipe_sensitivity(recipe, self.materials, tolerances)
 
         self.assertIsNone(result["error"])
-        self.assertIn(FLAT_SIGMA_WARNING, result["warnings"])
+        self.assertIsNotNone(flat_warning(result))
 
     def test_one_material_of_the_recipe_with_a_sigma_of_its_own_is_enough(self):
         """The complement: the warning is about the recipe, not about the file"""
@@ -475,8 +569,86 @@ class TestAHealthyFileThatNeverReachesTheRecipe(unittest.TestCase):
         with self.assertLogs('sensitivity', level='WARNING'):
             result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
 
-        self.assertIn(FLAT_SIGMA_WARNING, result["warnings"])
+        self.assertIsNotNone(flat_warning(result))
         self.assertEqual(shares(result), self.missing_file)
+
+    def test_classes_that_land_on_one_number_do_not_distinguish_anything_either(self):
+        """
+        And the default has nothing to do with it
+
+        Every material here resolves to a class of its own, none of them to
+        default_relative, the file is the shipped one and it is in perfect order.
+        feldspar and silica are simply both 0.02, so the ranking is by lever
+        alone and the answer is bit for bit the answer of a file that says
+        nothing but {"default_relative": 0.02}.
+        """
+        recipe = {"Нефелин-сиенит VR13": 40, "Полевой шпат FFF": 30,
+                  "Кварцевая мука Кварцверке W12": 30}
+
+        with self.assertLogs('sensitivity', level='WARNING'):
+            result = recipe_sensitivity(recipe, self.materials)
+            flat = recipe_sensitivity(recipe, self.materials,
+                                      {"default_relative": 0.02, "classes": {}, "materials": {}})
+
+        self.assertIsNotNone(flat_warning(result))
+        self.assertEqual(result["by_material"], flat["by_material"])
+        self.assertEqual(result["per_oxide"], flat["per_oxide"])
+        self.assertEqual(result["umf"], flat["umf"])
+        self.assertEqual([round(row["share"], 9) for row in result["by_material"]],
+                         [0.606560622, 0.31383887, 0.079600508])
+
+    def test_the_warning_names_the_sigma_that_was_applied(self):
+        """
+        The checkable half of the message
+
+        "все получили 0.2" is a sentence its reader can hold against
+        material_tolerance.json and see both ashes sitting in one class. "все
+        получили одинаковую" leaves them to work out which one, and the answer
+        carries no other place to look it up: sigma_used is per material and
+        only names the leading oxide of each.
+        """
+        cases = [("0.02", {"Нефелин-сиенит VR13": 40, "Полевой шпат FFF": 30,
+                           "Кварцевая мука Кварцверке W12": 30}),
+                 ("0.2", {"Древесная зола": 60, "Костная зола": 40}),
+                 ("0.01", {"Мел, CaCO3": 50, "Доломит МИДОЛ": 50}),
+                 ("0.02", {"Нефелин-сиенит VR13": 100})]
+
+        for sigma, recipe in cases:
+            with self.subTest(sigma):
+                with self.assertLogs('sensitivity', level='WARNING'):
+                    result = recipe_sensitivity(recipe, self.materials)
+
+                warning = flat_warning(result)
+                self.assertIsNotNone(warning)
+                self.assertIn(sigma, warning, f"the sigma is not in the message: {warning}")
+
+    def test_the_flat_warning_does_not_diagnose_a_file_that_is_in_order(self):
+        """
+        The half of the message that was a guess, and a wrong one
+
+        A recipe of clays gets the flat answer out of the SHIPPED file: clay is
+        0.05 for all four of them. The file is present, complete, and every name
+        in it matches database/materials.json exactly - a separate test asserts
+        that. The message used to finish with "the tolerance database is
+        unavailable, does not describe these materials or has drifted from the
+        names in database/materials.json", all three false at once, and sent
+        whoever read it to fix a file with nothing wrong in it.
+        """
+        recipe = {"Каолин КЖФ-1": 40, "Бентонит": 20, "Тальк Онотский": 20,
+                  "Волластонит МИВОЛЛ": 20}
+
+        with self.assertLogs('sensitivity', level='WARNING'):
+            result = recipe_sensitivity(recipe, self.materials)
+
+        warning = flat_warning(result)
+        self.assertIsNotNone(warning)
+        self.assertEqual(result["warnings"], [warning],
+                         "the shipped file lost nothing, so nothing else is owed")
+        self.assertIn("0.05", warning)
+
+        for claim in ("недоступн", "не описывает", "разошл", "не прочитан"):
+            self.assertNotIn(claim, warning,
+                             f"a healthy file diagnosed as broken: {warning}")
 
 
 class TestDroppedSigmasAreReported(unittest.TestCase):
@@ -617,8 +789,8 @@ class TestDroppedSigmasAreReported(unittest.TestCase):
         self.assertIsNone(result["error"])
         self.assertTrue(_all_finite(result))
         self.assertTrue(any("100%" in warning for warning in result["warnings"]))
-        self.assertIn(FLAT_SIGMA_WARNING, result["warnings"],
-                      "with silica dropped nothing is left but the default, and that is said")
+        self.assertIsNotNone(flat_warning(result),
+                             "with silica dropped nothing is left but the default, and that is said")
         self.assertEqual(material_sigma(
             next(m for m in self.materials if m["name"] == "Кварцевая мука Кварцверке W12"),
             tolerances), {"SiO2": 0.05})
@@ -637,7 +809,7 @@ class TestFlatSigmaAnswer(unittest.TestCase):
             result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, self.no_file)
 
         self.assertIsNone(result["error"])
-        self.assertIn(FLAT_SIGMA_WARNING, result["warnings"])
+        self.assertIsNotNone(flat_warning(result))
         self.assertIn(UNREADABLE_TOLERANCES_ISSUE, result["warnings"],
                       "the unreadable file is a fact of its own and is said as well")
 
@@ -752,12 +924,16 @@ class TestRecipeSensitivity(unittest.TestCase):
                                share_of(baseline, "Улексит (Химпэк)"), places=6)
 
     def test_single_material_recipe(self):
-        result = recipe_sensitivity({"Нефелин-сиенит VR13": 100}, self.materials)
+        # One material is the flat ranking by definition - there is nothing for
+        # the tolerances to tell apart - so the answer says so
+        with self.assertLogs('sensitivity', level='WARNING'):
+            result = recipe_sensitivity({"Нефелин-сиенит VR13": 100}, self.materials)
 
         self.assertIsNone(result["error"])
         self.assertEqual(len(result["by_material"]), 1)
         self.assertAlmostEqual(result["by_material"][0]["share"], 1.0, delta=1e-6)
         self.assertTrue(result["per_oxide"])
+        self.assertIsNotNone(flat_warning(result))
 
     def assert_nonfinite_share_is_skipped(self, amount):
         recipe = dict(TRANSPARENT_RECIPE)
@@ -796,7 +972,8 @@ class TestRecipeSensitivity(unittest.TestCase):
         oxide of the recipe IS the unity basis. Every share is then honestly
         zero, and a consumer normalizing by their sum divides by zero.
         """
-        result = recipe_sensitivity({"Мел, CaCO3": 100}, self.materials)
+        with self.assertLogs('sensitivity', level='WARNING'):
+            result = recipe_sensitivity({"Мел, CaCO3": 100}, self.materials)
 
         self.assertIsNone(result["error"])
         self.assertEqual([row["share"] for row in result["by_material"]], [0.0])
@@ -805,8 +982,9 @@ class TestRecipeSensitivity(unittest.TestCase):
                         f"expected a zero contribution warning, got {result['warnings']}")
 
     def test_unknown_material_is_skipped_with_a_warning(self):
-        result = recipe_sensitivity({"Нефелин-сиенит VR13": 70, "Философский камень": 30},
-                                    self.materials)
+        with self.assertLogs('sensitivity', level='WARNING'):
+            result = recipe_sensitivity({"Нефелин-сиенит VR13": 70, "Философский камень": 30},
+                                        self.materials)
 
         self.assertIsNone(result["error"])
         self.assertEqual([row["material"] for row in result["by_material"]], ["Нефелин-сиенит VR13"])
@@ -826,6 +1004,52 @@ class TestRecipeSensitivity(unittest.TestCase):
         self.assertEqual(result["per_oxide"], [])
         self.assertEqual(result["umf"], {})
         self.assertTrue(result["message"])
+
+    def with_flux_moles(self, moles):
+        """
+        A one material recipe carrying exactly this many moles of flux per 100 g
+
+        Built rather than looked up, because both no_fluxes tests above hand the
+        module a recipe with no fluxes AT ALL - quartz and alumina - and a recipe
+        of zero passes any threshold whatsoever. Nothing was checking where the
+        line actually sits, so moving ZERO_FLUX_MOLES by ten orders of magnitude
+        left the suite green.
+        """
+        molar_masses = load_molar_masses()
+        content = moles * molar_masses["CaO"]
+
+        # The share is 100, so the weight composition carries `content` of CaO
+        # exactly and _flux_moles divides it by the same molar mass it was built
+        # from. The round trip is checked and not assumed.
+        self.assertEqual(content / molar_masses["CaO"], moles, "the fixture is not exact")
+
+        return {"Проба": 100}, [{"name": "Проба", "formula": {"SiO2": 60.0, "CaO": content}}]
+
+    def test_a_flux_sum_at_the_threshold_is_refused(self):
+        """The comparison is "<=", so the threshold itself is on the refused side"""
+        recipe, materials = self.with_flux_moles(ZERO_FLUX_MOLES)
+
+        with self.assertLogs('sensitivity', level='WARNING'):
+            result = recipe_sensitivity(recipe, materials)
+
+        self.assertEqual(result["error"], "no_fluxes")
+
+    def test_a_flux_sum_of_one_ulp_above_the_threshold_is_answered(self):
+        """
+        And the other side of it, as close as a float can get: the recipe is
+        absurd and the answer says so - the UMF stands on traces and is inflated
+        by nine orders of magnitude - but it IS an answer, on a unity basis that
+        exists. That is the whole difference the threshold draws.
+        """
+        recipe, materials = self.with_flux_moles(math.nextafter(ZERO_FLUX_MOLES, math.inf))
+
+        with self.assertLogs('sensitivity', level='WARNING'):
+            result = recipe_sensitivity(recipe, materials)
+
+        self.assertIsNone(result["error"])
+        self.assertTrue(_all_finite(result))
+        self.assertTrue(any("флюс" in warning for warning in result["warnings"]),
+                        f"expected a low flux warning, got {result['warnings']}")
 
     def test_empty_recipe_is_refused(self):
         self.assertEqual(recipe_sensitivity({}, self.materials)["error"], "empty_recipe")
@@ -860,7 +1084,8 @@ class TestRecipeSensitivity(unittest.TestCase):
         """
         recipe = {"Каолин КЖФ-1": 60, "Кварцевая мука Кварцверке W12": 40}
 
-        result = recipe_sensitivity(recipe, self.materials)
+        with self.assertLogs('sensitivity', level='WARNING'):
+            result = recipe_sensitivity(recipe, self.materials)
 
         self.assertIsNone(result["error"])
         self.assertTrue(result["by_material"])
@@ -917,8 +1142,9 @@ class TestFiniteResult(unittest.TestCase):
 
     def test_a_share_beyond_the_percent_scale_is_skipped(self):
         """1e156 still squares into a number, 1e160 does not - and both are shares in percent"""
-        result = recipe_sensitivity({"Кварцевая мука Кварцверке W12": 1e160, "Мел, CaCO3": 10},
-                                    self.materials)
+        with self.assertLogs('sensitivity', level='WARNING'):
+            result = recipe_sensitivity({"Кварцевая мука Кварцверке W12": 1e160, "Мел, CaCO3": 10},
+                                        self.materials)
 
         self.assertIsNone(result["error"])
         self.assert_every_number_is_finite(result)
