@@ -20,6 +20,7 @@ is measured as a diff against that snapshot.
     python bench/diff_baseline.py                 # run and print the diff
     python bench/diff_baseline.py --check         # ... and exit 1 on a regression
     python bench/diff_baseline.py --rebaseline    # overwrite the snapshot
+    python bench/diff_baseline.py --record "note" # log the run without moving it
 
 The snapshot stores RAW COMPONENTS per case - umf_error, count, cost_abs,
 assembly_score, min_portion, junk_count, rounding_drift, conditioning.cond - and
@@ -47,6 +48,12 @@ improve the median while wrecking a handful of cases, and only p90 / p99 / max
 show it. --check gates the tail alongside the centre, on the p90 as well as on
 the median.
 
+The snapshot is a single point, and moving it is a deliberate act, so it can
+never answer "was the solver getting better or worse over the last month". That
+question belongs to bench/history.jsonl, the append only log described in
+bench/history.py: --rebaseline always appends a line to it, --record appends one
+without moving the baseline, and a plain diff run appends nothing.
+
 This script is deliberately NOT part of `unittest discover`: it is a manual gate
 to run before merging a solver change.
 """
@@ -59,11 +66,10 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-import numpy as np
-
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bench import corpus as bench_corpus
+from bench import history as bench_history
 
 
 BASELINE_FORMAT_VERSION = 1
@@ -100,26 +106,29 @@ GATED_AGGREGATES = ('median', 'p90')
 # percentile over five numbers is noise, not a distribution.
 MIN_TRACKED_CASES = 10
 
-# Raw components and the direction that counts as better. Everything here is
-# "smaller is better" except the smallest portion of a recipe, where a larger
-# value means the recipe is easier to weigh out.
-METRICS: Tuple[Tuple[str, str], ...] = (
-    ('umf_error', 'lower'),
-    ('count', 'lower'),
-    ('cost_abs', 'lower'),
-    ('assembly_score', 'lower'),
-    ('min_portion', 'higher'),
-    ('junk_count', 'lower'),
-    ('rounding_drift', 'lower'),
-    ('cond', 'lower'),
-)
+# Raw components and the direction that counts as better. The list lives in
+# bench/corpus.py, because bench/history.py rolls the same numbers up for one
+# run and the two must not drift apart; it is re-exported here under its old
+# name so that nothing importing diff_baseline.METRICS has to care.
+METRICS: Tuple[Tuple[str, str], ...] = bench_corpus.METRICS
 
 # Components stored per case. Kept explicit so that a field added to run_case()
 # does not silently enter the snapshot and change its meaning.
+#
+# chemistry_ok and quality_ok are the two-level verdict of 7.1 and were added
+# when bench/history.jsonl started recording the pass shares. quality_ok in
+# particular cannot be recomputed from the components: it compares the solution
+# against the ORIGINAL recipe, which the snapshot does not store. The format
+# version is deliberately NOT bumped for them - they are additive, every reader
+# takes fields by name, and bumping it would make the committed baseline
+# unreadable and force a rebaseline, which is exactly the deliberate act this
+# file exists to keep rare. Snapshots written before them simply have no
+# quality verdict, and bench/corpus.engine_profile() reports that as None
+# rather than as zero.
 CASE_FIELDS = (
     'glazy_id', 'scenario', 'engine', 'status', 'bucket', 'size',
     'umf_error', 'count', 'cost_abs', 'assembly_score', 'min_portion',
-    'junk_count', 'rounding_drift', 'cond',
+    'junk_count', 'rounding_drift', 'cond', 'chemistry_ok', 'quality_ok',
 )
 
 # Below this the two values are the same number and the case is "unchanged".
@@ -193,21 +202,10 @@ def run_corpus(seed: int, sample_size: int, classic_size: int,
 # statistics
 # --------------------------------------------------------------------------
 
-def _profile(values: Sequence[float]) -> Optional[Dict[str, float]]:
-    """min / p10 / median / mean / p90 / p99 / max of a sample"""
-    if not values:
-        return None
-    array = np.asarray(list(values), dtype=float)
-    return {
-        'n': int(array.size),
-        'min': float(array.min()),
-        'p10': float(np.percentile(array, 10)),
-        'median': float(np.percentile(array, 50)),
-        'mean': float(array.mean()),
-        'p90': float(np.percentile(array, 90)),
-        'p99': float(np.percentile(array, 99)),
-        'max': float(array.max()),
-    }
+# min / p10 / median / mean / p90 / p99 / max of a sample. Shared with
+# bench/history.py through bench/corpus.py: one implementation, so a history
+# line and a diff line of the same run cannot disagree about what a median is.
+_profile = bench_corpus.profile
 
 
 def _index(cases: Sequence[Dict[str, Any]], engine: str) -> Dict[int, Dict[str, Any]]:
@@ -351,16 +349,16 @@ def _profile_lines(name: str, entry: Dict[str, Any]) -> List[str]:
         lines.append(f"      undefined on {entry['undefined_before']} baseline / "
                      f"{entry['undefined_after']} current cases of the intersection")
 
-    header = f"      {'':<8}" + ''.join(f'{key:>13}' for key in ('min', 'p10', 'median', 'mean', 'p90', 'p99', 'max'))
+    header = f"      {'':<8}" + ''.join(f'{key:>13}' for key in bench_corpus.PROFILE_KEYS)
     lines.append(header)
     for label, profile in (('before', before), ('after', after)):
         row = f'      {label:<8}' + ''.join(
-            f'{_format_number(profile[key]):>13}' for key in ('min', 'p10', 'median', 'mean', 'p90', 'p99', 'max'))
+            f'{_format_number(profile[key]):>13}' for key in bench_corpus.PROFILE_KEYS)
         lines.append(row)
 
     deltas = f"      {'delta':<8}" + ''.join(
         f'{_format_number(after[key] - before[key]):>13}'
-        for key in ('min', 'p10', 'median', 'mean', 'p90', 'p99', 'max'))
+        for key in bench_corpus.PROFILE_KEYS)
     lines.append(deltas)
 
     return lines
@@ -570,7 +568,24 @@ def write_baseline(path: str, snapshot: Dict[str, Any]) -> None:
         f.write('\n')
 
 
-def main() -> int:
+def record_run(log_path: str, snapshot: Dict[str, Any], recorded_at: str,
+               kind: str, note: str) -> None:
+    """
+    Append one line to bench/history.jsonl and say so
+
+    The timestamp is an argument all the way down: main() reads the clock once,
+    at the CLI boundary, and nothing below it ever asks what time it is.
+    """
+    record = bench_history.build_record(snapshot, recorded_at=recorded_at, kind=kind, note=note)
+    sealed = bench_history.append_record(log_path, record)
+    if sealed:
+        print(f'{log_path}: the previous append had been left unterminated; '
+              f'sealed that line before appending')
+    print(f'run recorded in {log_path} as a "{kind}" line'
+          f"{' with the note ' + repr(note) if note else ' with no note'}")
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description='Diff the current solver against the committed quality baseline')
     parser.add_argument('--baseline', default=bench_corpus.BASELINE_PATH,
@@ -580,6 +595,13 @@ def main() -> int:
                              'chemistry error regressed')
     parser.add_argument('--rebaseline', action='store_true',
                         help='overwrite the snapshot with the current run; the only way to move it')
+    parser.add_argument('--record', nargs='?', const='', default=None, metavar='NOTE',
+                        help='append this run to bench/history.jsonl with an optional note '
+                             'saying what it was testing. --rebaseline always appends a line; '
+                             'this flag appends one without moving the baseline, and supplies '
+                             'the note in both cases. A plain diff run appends nothing')
+    parser.add_argument('--history-log', default=bench_corpus.HISTORY_PATH,
+                        help='path of the run history (default: bench/history.jsonl)')
     parser.add_argument('--seed', type=int, default=None,
                         help='sampling seed; defaults to the one recorded in the baseline')
     parser.add_argument('--sample-size', type=int, default=None,
@@ -590,7 +612,7 @@ def main() -> int:
                         help='also write the current run to this path, for offline comparison')
     parser.add_argument('--current', default=None,
                         help='compare a previously saved run instead of solving again')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     existing = None
     if os.path.exists(args.baseline):
@@ -623,6 +645,11 @@ def main() -> int:
         write_baseline(args.save_current, current)
         print(f'current run written to {args.save_current}')
 
+    # The clock is read exactly here, at the CLI boundary, and handed down as a
+    # value: nothing under bench/ asks the time by itself, so a test can pin the
+    # whole record by pinning this one string.
+    recorded_at = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
+
     if args.rebaseline:
         if existing is not None:
             lines, _comparison = build_report(existing, current)
@@ -631,7 +658,15 @@ def main() -> int:
         write_baseline(args.baseline, current)
         print(f'baseline written to {args.baseline}')
         print('Commit it separately, with the reason the level moved in the commit message.')
+        # A new reference point is by definition a run worth keeping, so the
+        # history line is not optional here - only its note is.
+        record_run(args.history_log, current, recorded_at,
+                   bench_history.KIND_REBASELINE, args.record or '')
         return 0
+
+    if args.record is not None:
+        record_run(args.history_log, current, recorded_at,
+                   bench_history.KIND_RECORD, args.record)
 
     if existing is None:
         raise SystemExit(f'{args.baseline} does not exist; create it with --rebaseline')

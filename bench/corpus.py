@@ -18,6 +18,11 @@ drift apart:
 
     tests/test_inverse_corpus.py   the pass/fail gate of scenario A
     bench/diff_baseline.py         the baseline snapshot and its regression diff
+    bench/history.py               the append only log of the runs worth keeping
+
+The last two also share the roll-up itself - METRICS, profile() and
+engine_profile() live here so that the diff and the history cannot end up
+computing "the median" two different ways.
 
 The dump itself is CC BY-NC-SA licensed data and is never written into the
 repository: it lives in ~/.cache/glazy_solver/ (a location outside any git work
@@ -50,6 +55,8 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common import flux_oxides, weights_to_umf
@@ -66,6 +73,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BENCH_DIR = os.path.dirname(os.path.abspath(__file__))
 BASELINE_PATH = os.path.join(BENCH_DIR, 'quality_baseline.json')
+HISTORY_PATH = os.path.join(BENCH_DIR, 'history.jsonl')
 
 # The dump lives on the "master" branch of the repository. "main" answers 404,
 # and with the wrong URL the corpus test would skip itself forever - the most
@@ -110,6 +118,30 @@ CLASSIC_SEED = 42
 
 # Level 1 of the two-level criterion of 7.1: the chemistry has to match.
 MAX_UMF_ERROR = 0.1
+
+# The raw components a run is measured by, and the direction that counts as
+# better. Everything is "smaller is better" except the smallest portion of a
+# recipe, where a larger value means the recipe is easier to weigh out.
+#
+# This list lives here rather than in bench/diff_baseline.py because two
+# consumers roll the same numbers up and must not drift apart: the regression
+# diff, which profiles them over the intersection of two runs, and the run
+# history (bench/history.py), which profiles them over one run.
+METRICS: Tuple[Tuple[str, str], ...] = (
+    ('umf_error', 'lower'),
+    ('count', 'lower'),
+    ('cost_abs', 'lower'),
+    ('assembly_score', 'lower'),
+    ('min_portion', 'higher'),
+    ('junk_count', 'lower'),
+    ('rounding_drift', 'lower'),
+    ('cond', 'lower'),
+)
+
+# The aggregates of a distribution profile, in the order they are printed. The
+# whole distribution rather than a mean: a change can improve the median while
+# wrecking a handful of cases, and only p90 / p99 / max show it.
+PROFILE_KEYS = ('min', 'p10', 'median', 'mean', 'p90', 'p99', 'max')
 
 # Data files whose content decides what the solver can answer. Their hashes go
 # into the baseline so that "the solver changed" can be told apart from "the
@@ -751,6 +783,105 @@ def run_sample(sample: Sequence[Dict[str, Any]], engine: str = ENGINE_ITERATIVE,
         if progress is not None and index % 25 == 0:
             progress(index, len(sample))
     return results
+
+
+# --------------------------------------------------------------------------
+# aggregation
+# --------------------------------------------------------------------------
+
+def profile(values: Sequence[float]) -> Optional[Dict[str, float]]:
+    """
+    min / p10 / median / mean / p90 / p99 / max of a sample, plus its size
+
+    None for an empty sample - a metric that is defined on no case has no
+    distribution, and returning zeros would invent one.
+    """
+    if not values:
+        return None
+    array = np.asarray(list(values), dtype=float)
+    return {
+        'n': int(array.size),
+        'min': float(array.min()),
+        'p10': float(np.percentile(array, 10)),
+        'median': float(np.percentile(array, 50)),
+        'mean': float(array.mean()),
+        'p90': float(np.percentile(array, 90)),
+        'p99': float(np.percentile(array, 99)),
+        'max': float(array.max()),
+    }
+
+
+def chemistry_ok(row: Dict[str, Any]) -> bool:
+    """
+    Whether one snapshot row passed level 1 of the two-level criterion
+
+    run_case() records the verdict as "chemistry_ok". Snapshots written before
+    that field entered the baseline carry only the error, so the verdict is
+    re-derived from it with TODAY's MAX_UMF_ERROR - which is the honest thing to
+    do and also the reason the threshold is written into every history record:
+    move it and the re-derived shares of the old runs move with it.
+    """
+    recorded = row.get('chemistry_ok')
+    if recorded is not None:
+        return bool(recorded)
+    error = row.get('umf_error')
+    if error is None:
+        return False
+    return float(error) <= MAX_UMF_ERROR
+
+
+def engine_profile(cases: Sequence[Dict[str, Any]], engine: str) -> Dict[str, Any]:
+    """
+    Roll the rows of ONE engine of one snapshot up into a single run's numbers
+
+    This is the single-run twin of diff_baseline.compare_engine(), and the two
+    differ in one way that matters when the numbers are read side by side: the
+    diff profiles a metric over the cases solved by BOTH runs, because a case
+    flipping between solved and failed would otherwise shift every aggregate
+    silently. A single run has no counterpart to intersect with, so the profile
+    here covers every case this run solved and for which the metric is defined.
+    A history line and a diff line of the same run therefore need not carry the
+    same median, and the per-metric "n" is what says how many cases each spoke
+    for.
+
+    The three shares are all taken over the FULL case count of the engine, not
+    over the solved ones - an unsolved case is a failed case at both levels,
+    exactly as tests/test_inverse_corpus.py counts it.
+
+    "both_levels_share" is None rather than 0.0 when the rows do not carry
+    quality_ok: the quality verdict is not derivable from the stored components
+    (it compares the solution against the original recipe, which the snapshot
+    does not keep), so a snapshot written before that field existed cannot
+    answer the question and must not pretend to.
+    """
+    rows = [row for row in cases if row.get('engine') == engine]
+    total = len(rows)
+
+    solved = [row for row in rows if row.get('status') == 'solved']
+    chemistry = [row for row in rows if chemistry_ok(row)]
+    quality_known = all(row.get('quality_ok') is not None for row in solved)
+    both = [row for row in chemistry if row.get('quality_ok')] if quality_known else None
+
+    metrics: Dict[str, Optional[Dict[str, float]]] = {}
+    for name, _direction in METRICS:
+        values = [float(row[name]) for row in solved if row.get(name) is not None]
+        metrics[name] = profile(values)
+
+    return {
+        'cases': total,
+        'solved': len(solved),
+        'solved_share': (len(solved) / total) if total else None,
+        'chemistry': len(chemistry),
+        'chemistry_share': (len(chemistry) / total) if total else None,
+        'both_levels': len(both) if both is not None else None,
+        'both_levels_share': (len(both) / total) if (both is not None and total) else None,
+        'metrics': metrics,
+    }
+
+
+def snapshot_engines(cases: Sequence[Dict[str, Any]]) -> List[str]:
+    """Engine names present in a snapshot, in a stable order"""
+    return sorted({row.get('engine') for row in cases if row.get('engine')})
 
 
 # --------------------------------------------------------------------------
