@@ -149,7 +149,17 @@ KIND_RECORD = 'record'
 # median would hide the very changes the metric exists to catch. Its mean does
 # not: the load-bearing-component rule moved it 0.53 -> 0.20 while the median
 # sat at 0 on both sides. Everything else is shown at the median.
+#
+# Six columns rather than five since 10.18, and nothing was dropped to make
+# room. max_relative is the metric the chemistry verdict in the "chem" column
+# is now drawn with, and a table that shows the verdict without the number
+# behind it is the thing this log exists to avoid. umf_error cannot go in its
+# place: it is the only chemistry column the lines written before 10.18 have,
+# and dropping it would blank the whole early series. The width is affordable -
+# the row grows 125 -> 136 characters, and the feasibility annotation under
+# every scenario B row has been 166 since it was added.
 HEADLINE = (
+    ('max_relative', 'median'),
     ('umf_error', 'median'),
     ('count', 'median'),
     ('junk_count', 'mean'),
@@ -160,6 +170,7 @@ HEADLINE = (
 # Short labels for the table header, kept apart from the metric names so the
 # names in the record stay the long explicit ones.
 HEADLINE_LABELS = {
+    'max_relative': 'rel',
     'umf_error': 'umf',
     'count': 'count',
     'junk_count': 'junk',
@@ -179,9 +190,19 @@ FIXED_COLUMNS = (
     ('solved', 7, '>'),
     ('chem', 7, '>'),
     ('both', 7, '>'),
-    # Scenario B's own gate: "solved OR honestly unreachable". A dash in
-    # scenario A, which never asks the question.
-    ('acct', 7, '>'),
+    # Scenario B's own gate: the share of the targets the LP proved REACHABLE
+    # that the search actually reached. A dash in scenario A, which never asks
+    # the question.
+    #
+    # This column used to be "acct", the accounted share, and that is exactly
+    # the swap 10.18 made in tests/test_inverse_corpus.py: the accounted share
+    # is dominated by the unreachable bucket - 90 of 100 targets on this
+    # corpus - so it barely moves when the search does, while one lost
+    # reachable target costs this one 10 points. The accounted share is still
+    # printed, in the annotation line under the row, where its two components
+    # are spelled out next to it. Old records carry both numbers, so the whole
+    # series stays readable.
+    ('sar', 7, '>'),
 )
 METRIC_WIDTH = 10
 
@@ -252,6 +273,8 @@ def build_record(snapshot: Dict[str, Any], recorded_at: str, kind: str = KIND_RE
                bench_corpus.engine_profile(cases, engine, scenario)
                for scenario, engine in bench_corpus.snapshot_groups(cases)}
 
+    gate_metric, gate_tol = bench_corpus.read_chemistry_gate(run.get('chemistry_gate'))
+
     return {
         'schema': SCHEMA_VERSION,
         'recorded_at': recorded_at,
@@ -261,8 +284,26 @@ def build_record(snapshot: Dict[str, Any], recorded_at: str, kind: str = KIND_RE
         'seeded_from': seeded_from,
         'git_commit': run.get('git_commit'),
         'git_dirty': run.get('git_dirty'),
+        # WHICH RULE THIS RUN WAS SCORED BY. A run gated on the relative
+        # deviation and a run gated on the absolute L2 norm are not comparable,
+        # and this file is append only, so the old lines cannot be corrected
+        # after the fact: the record itself has to carry its own rule.
+        # "max_umf_error" stays for the lines and the readers that predate
+        # 10.18 - it is still a real threshold, the one chemistry_ok() falls
+        # back to for a snapshot with no relative deviation stored.
+        #
+        # Read out of THE SNAPSHOT, never out of today's constant. The
+        # difference only shows on the path this function's own docstring
+        # advertises - loading an old baseline and back-filling it into the log,
+        # which is how lines #1 and #2 got here - and there it is the whole
+        # ballgame: stamping a pre-10.18 snapshot with today's gate would put a
+        # chemistry share computed by the absolute norm on a line that claims
+        # the relative one, changed_gate() would see no change, and the reader
+        # would compare 94.67% against 83.67% as one measurement. A missing
+        # marker is honest; a wrong one is not.
         'thresholds': {
             'max_umf_error': bench_corpus.MAX_UMF_ERROR,
+            'chemistry_gate': {'metric': gate_metric, 'tol': gate_tol},
         },
         'run': {
             'seed': run.get('seed'),
@@ -441,6 +482,38 @@ def changed_data(previous: Dict[str, Any], current: Dict[str, Any]) -> List[str]
             if before.get(name) != after.get(name)]
 
 
+def chemistry_gate(record: Dict[str, Any]) -> Tuple[str, Optional[float]]:
+    """
+    The rule one record's chemistry share was scored by, as (metric, tolerance)
+
+    A line written before 10.18 carries no "chemistry_gate" block, and that
+    absence is itself the answer: it was scored by the retired absolute L2 norm
+    at thresholds.max_umf_error. Reading it that way is what lets the printer
+    tell the reader that two lines are not the same measurement.
+    """
+    thresholds = record.get('thresholds') or {}
+    return bench_corpus.read_chemistry_gate(thresholds.get('chemistry_gate'),
+                                            fallback_tol=thresholds.get('max_umf_error'))
+
+
+def changed_gate(previous: Dict[str, Any], current: Dict[str, Any]) -> Optional[str]:
+    """
+    How the chemistry gate moved between two records, or None if it did not
+
+    EVERYTHING DERIVED FROM chemistry_ok is incomparable across the move, and
+    that is more than the obvious two columns: "chem" and "both", but also
+    "sar" (solved among reachable, where "solved" is the gate), and, in the
+    annotation line under the row rather than in a column of its own, the
+    accounted share (solved OR unreachable, likewise) together with the
+    misclassified counts. What is unaffected is the metric columns - those are
+    distributions, not verdicts.
+    """
+    before, after = chemistry_gate(previous), chemistry_gate(current)
+    if before == after:
+        return None
+    return (f'{before[0]}<={before[1]} -> {after[0]}<={after[1]}')
+
+
 def changed_run(previous: Dict[str, Any], current: Dict[str, Any]) -> List[str]:
     """
     Run parameters that differ between two records
@@ -495,9 +568,25 @@ def _table_header() -> Tuple[str, str]:
 
 
 def _accounted_share(entry: Dict[str, Any]) -> Optional[float]:
-    """Scenario B's accounted share, or None for a series that never asks"""
+    """
+    Scenario B's accounted share, or None for a series that never asks
+
+    It lost its column to "sar" when the gated number changed and is read by
+    the annotation line instead - see _annotation_lines, which prints it next
+    to the unreachable count that explains why it is so high.
+    """
     reachability = (entry or {}).get('reachability')
     return None if not reachability else reachability.get('accounted_share')
+
+
+def _solved_among_reachable(entry: Dict[str, Any]) -> Optional[float]:
+    """
+    Scenario B's gated share: of the targets the LP proved reachable, how many
+    the search reached. None for a series that never asks, and None for a run
+    where the LP proved nothing reachable - a share over an empty set is not 0.
+    """
+    reachability = (entry or {}).get('reachability')
+    return None if not reachability else reachability.get('solved_among_reachable_share')
 
 
 def _row(index: int, record: Dict[str, Any], entry: Dict[str, Any]) -> str:
@@ -512,7 +601,7 @@ def _row(index: int, record: Dict[str, Any], entry: Dict[str, Any]) -> str:
             f"{entry.get('solved', 0)}/{entry.get('cases', 0)}",
             _format_share(entry.get('chemistry_share')),
             _format_share(entry.get('both_levels_share')),
-            _format_share(_accounted_share(entry)),
+            _format_share(_solved_among_reachable(entry)),
         ],
         [_format_number(value) for value in _headline_values(entry)],
     )
@@ -529,7 +618,8 @@ def _delta_row(label: str, before: Dict[str, Any], after: Dict[str, Any]) -> str
             f"{after.get('solved', 0) - before.get('solved', 0):+d}",
             _format_share_delta(before.get('chemistry_share'), after.get('chemistry_share')),
             _format_share_delta(before.get('both_levels_share'), after.get('both_levels_share')),
-            _format_share_delta(_accounted_share(before), _accounted_share(after)),
+            _format_share_delta(_solved_among_reachable(before),
+                                _solved_among_reachable(after)),
         ],
         [('-' if old is None or new is None else _format_number(new - old, signed=True))
          for old, new in zip(_headline_values(before), _headline_values(after))],
@@ -556,6 +646,20 @@ def _annotation_lines(entry: Dict[str, Any]) -> List[str]:
             f"misclassified {reachability.get('misclassified')} "
             f"(LP said reachable, solver missed: {reachability.get('reachable_unsolved')}; "
             f"LP said unreachable, solver hit it: {reachability.get('unreachable_solved')})")
+        # The accounted share lost its column to "sar" and lives here instead,
+        # next to the unreachable count that explains why it is so high.
+        # The denominator comes from the ENTRY, not from the reachability block:
+        # every line ever written carries entry['cases'], while the block only
+        # started carrying its own copy once the two shapes were unified, and
+        # reading it there printed "100/None" on all six scenario B lines of the
+        # committed log for as long as the annotation existed.
+        lines.append(
+            f"      accounted (solved OR unreachable) "
+            f"{reachability.get('accounted')}/{entry.get('cases')} "
+            f"({_format_share(_accounted_share(entry))}), of which "
+            f"{reachability.get('unreachable')} are the unreachable bucket, which is why "
+            f"the gated column is sar and not this - see MIN_SOLVED_AMONG_REACHABLE in "
+            f"tests/test_inverse_corpus.py")
 
     if entry.get('priced'):
         lines.append(
@@ -661,6 +765,13 @@ def render(records: Sequence[Dict[str, Any]], problems: Sequence[str],
                 if moved:
                     lines.append(f'      !! RUN CHANGED vs #{index - 1} ({", ".join(moved)}) '
                                  f'- the two runs are different corpora')
+                regated = changed_gate(previous, record)
+                if regated:
+                    lines.append(f'      !! CHEMISTRY GATE CHANGED vs #{index - 1} ({regated}) '
+                                 f'- every verdict share (the chem, both and sar columns, '
+                                 f'and the accounted share in the annotation) and the '
+                                 f'misclassified counts are not the same measurement; the '
+                                 f'metric columns are')
                 lines.append(_delta_row(f'delta vs #{index - 1}',
                                         previous['engines'][engine], entry))
 
@@ -676,6 +787,11 @@ def render(records: Sequence[Dict[str, Any]], problems: Sequence[str],
             if changed_data(first, current):
                 lines.append(f'      !! the input data of run #1 and run #{len(series)} differ; '
                              f'the total above is not a solver measurement')
+            total_regated = changed_gate(first, current)
+            if total_regated:
+                lines.append(f'      !! run #1 and run #{len(series)} were scored by different '
+                             f'chemistry gates ({total_regated}); every verdict total above '
+                             f'(the chem, both and sar columns) is not one measurement')
 
     return lines
 

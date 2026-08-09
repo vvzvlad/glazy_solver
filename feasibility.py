@@ -53,25 +53,25 @@ import math
 import numpy as np
 from scipy.optimize import linprog
 
-from common import (NON_OXIDE_KEYS, filter_materials_with_formula, flux_oxides,
+from common import (NON_OXIDE_KEYS, OXIDE_SCALE_FLOOR,
+                    filter_materials_with_formula, flux_oxides,
                     load_molar_masses)
 
 logger = logging.getLogger(__name__)
 
 # How far the closest reachable formula may sit from the target before the
-# target is declared unreachable, as a fraction of the oxide scale below.
+# target is declared unreachable, as a fraction of common.OXIDE_SCALE_FLOOR
+# (see the note under this constant).
 # TUNABLE POLICY, NOT PHYSICS: nothing in the chemistry says 5% is the line
 # between "reachable" and "not". It is the number the verdict in the interface
 # is drawn with, and moving it moves the verdict, not the chemistry.
 DEFAULT_FEASIBILITY_TOL = 0.05
 
-# The scale an oxide's deviation is measured against: max(target, this). Without
-# a floor the relative deviation of a trace oxide dominates everything - missing
-# MgO 0.05 by 0.04 would read as 80% while missing SiO2 3.0 by 0.04 reads as 1%,
-# and the minimax LP would spend the whole material budget chasing the trace.
-# TUNABLE POLICY, NOT PHYSICS, and deliberately the same value as the floor in
-# sensitivity.py, which ranks contributions on the same footing.
-OXIDE_SCALE_FLOOR = 0.1
+# The scale an oxide's deviation is measured against, common.OXIDE_SCALE_FLOOR,
+# imported above rather than restated here. Without a floor the relative
+# deviation of a trace oxide dominates everything: missing MgO 0.05 by 0.04
+# would read as 80% while missing SiO2 3.0 by 0.04 reads as 1%, and the minimax
+# LP below would spend the whole material budget chasing the trace.
 
 # Materials below this share are dropped from "closest_recipe": the LP happily
 # returns a vertex with a 0.004% column, which is not something anyone can weigh

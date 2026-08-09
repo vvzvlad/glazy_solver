@@ -22,10 +22,11 @@ is measured as a diff against that snapshot.
     python bench/diff_baseline.py --rebaseline    # overwrite the snapshot
     python bench/diff_baseline.py --record "note" # log the run without moving it
 
-The snapshot stores RAW COMPONENTS per case - umf_error, count, cost_abs,
-assembly_score, min_portion, junk_count, rounding_drift, conditioning.cond - and
-never a rolled up score. The roll-up happens here, at diff time, so changing the
-score formula does not invalidate a baseline that took ten minutes to produce.
+The snapshot stores RAW COMPONENTS per case - max_relative, umf_error, count,
+cost_abs, assembly_score, min_portion, junk_count, rounding_drift,
+conditioning.cond - and never a rolled up score. The roll-up happens here, at
+diff time, so changing the score formula does not invalidate a baseline that
+took ten minutes to produce.
 
 Four rules keep the comparison honest, and each of them exists because the naive
 version lies:
@@ -144,9 +145,31 @@ METRICS: Tuple[Tuple[str, str], ...] = bench_corpus.METRICS
 # the list itself rather than a count because that list IS the bug report: "no
 # lithium source" and "the flux ratio is 20% out on MgO" are different findings
 # and a number cannot tell them apart.
+# max_relative, worst_oxide and dropped_oxides (10.18) go in on the same
+# additive terms. Their absence in an old snapshot is not neutral - max_relative
+# is the metric the chemistry verdict is now drawn with, so a baseline written
+# before 10.18 has nothing to compare against and every diff of it reads
+# "undefined before" - but that is correct, and it is visible in the report,
+# which is what the additive policy asks for.
+#
+# 10.18 hit a case the policy did not have, and the policy is amended below
+# rather than pretending it always covered it. The rule was "bump the format
+# version when a stored field changes MEANING", and chemistry_ok did exactly
+# that: it used to say "L2 of the absolute deviations
+# <= 0.1" and now says "no oxide is off by more than 5% of its scale". The
+# version is still NOT bumped, and the reason is that bumping would be strictly
+# worse: it makes the old snapshot unreadable IN FULL, destroying the comparison
+# of the raw components - count, cost_abs, min_portion, cond and the rest - which
+# did not change meaning and stay perfectly comparable. What the reader needs is
+# to know which rule the verdict was drawn by, and run.chemistry_gate says
+# exactly that, per snapshot, while leaving everything else readable. So the
+# rule is AMENDED to: bump when a field changes meaning AND the old file cannot
+# be salvaged; when it can be salvaged by a marker, write the marker instead.
+# This is a new clause, not a reading of the old one.
 CASE_FIELDS = (
     'glazy_id', 'scenario', 'engine', 'status', 'bucket', 'size',
-    'umf_error', 'count', 'cost_abs', 'assembly_score', 'min_portion',
+    'umf_error', 'max_relative', 'worst_oxide', 'dropped_oxides',
+    'count', 'cost_abs', 'assembly_score', 'min_portion',
     'junk_count', 'rounding_drift', 'cond', 'chemistry_ok', 'quality_ok',
     'feasible', 'max_relative_deviation', 'unreachable_oxides',
 )
@@ -242,6 +265,15 @@ def run_corpus(seed: int, sample_size: int, classic_size: int,
                 'candidate_search': 'exhaustive',
                 'feasibility_tol': bench_corpus.FEASIBILITY_TOL,
             },
+            # WHICH RULE THE STORED chemistry_ok WAS DRAWN BY. That field is
+            # the one thing in the snapshot that CHANGED MEANING in 10.18 - it
+            # used to say "L2 of the absolute deviations <= 0.1" and now says
+            # "no oxide is off by more than 5% of its scale" - and
+            # bench_corpus.chemistry_ok() takes it at face value, so without
+            # this marker two snapshots written under different rules compare
+            # as one measurement. bench/history.py carries the same block for
+            # the same reason.
+            'chemistry_gate': dict(bench_corpus.CHEMISTRY_GATE),
             'seconds': time.perf_counter() - started,
         },
         'cases': rows,
@@ -307,28 +339,38 @@ def _reachability(index: Dict[int, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
     None when no row carries a feasibility verdict, which is what scenario A
     looks like - an absent verdict is not "everything was reachable".
+
+    The counts come from bench_corpus.reachability_counts(), the one place the
+    rule lives; this adds the ID SETS a diff needs and a log line does not.
+
+    "reachable_ids" is here because the gate cannot use the bare share: the
+    denominator of that share belongs to the LP, so a run in which feasibility
+    reclassified one target reads as a search that got worse. The gate compares
+    the two runs over the targets BOTH called reachable, and it can only do that
+    if each side says WHICH ones they were. The "_ids" suffix is not decoration
+    either - bench_corpus._reachability_profile() carries "reachable_unsolved"
+    as a COUNT, and one name meaning two things across two blocks of the same
+    subject is how this whole family of bugs started.
     """
-    judged = [row for row in index.values() if row.get('feasible') is not None]
-    if not judged:
+    rows = list(index.values())
+    counts = bench_corpus.reachability_counts(rows)
+    if counts is None:
         return None
 
-    rows = list(index.values())
-    accounted = [row for row in rows if bench_corpus.accounted_ok(row)]
+    def _ids(selection):
+        return sorted(row['glazy_id'] for row in selection)
 
-    return {
-        'cases': len(rows),
-        'reachable': sum(1 for row in judged if row.get('feasible') is True),
-        'unreachable': sum(1 for row in judged if row.get('feasible') is False),
-        'undecided': len(rows) - len(judged),
-        'accounted': len(accounted),
-        'accounted_share': len(accounted) / len(rows) if rows else 0.0,
-        'reachable_unsolved': sorted(
-            row['glazy_id'] for row in rows
+    counts.update({
+        'reachable_ids': _ids(bench_corpus.reachable_rows(rows)),
+        'solved_among_reachable_ids': _ids(bench_corpus.solved_reachable_rows(rows)),
+        'reachable_unsolved_ids': _ids(
+            row for row in rows
             if bench_corpus.misclassification(row) == 'reachable_unsolved'),
-        'unreachable_solved': sorted(
-            row['glazy_id'] for row in rows
+        'unreachable_solved_ids': _ids(
+            row for row in rows
             if bench_corpus.misclassification(row) == 'unreachable_solved'),
-    }
+    })
+    return counts
 
 
 def compare_engine(baseline_index: Dict[int, Dict[str, Any]],
@@ -380,7 +422,18 @@ def compare_engine(baseline_index: Dict[int, Dict[str, Any]],
             )[:10],
         }
 
+    # Cases whose formula could not be compared in full, because an oxide
+    # carried a non-finite value. They are a hard failure of the chemistry gate
+    # (bench/corpus.chemistry_ok) and their metrics are None, so they leave no
+    # trace anywhere else in this report - which is exactly why the count is
+    # carried out explicitly.
+    def _dropped(index):
+        return sorted(glazy_id for glazy_id, row in index.items()
+                      if row.get('dropped_oxides'))
+
     return {
+        'baseline_dropped': _dropped(baseline_index),
+        'current_dropped': _dropped(current_index),
         'baseline_cases': len(baseline_index),
         'current_cases': len(current_index),
         'missing_from_current': sorted(set(baseline_index) - set(current_index)),
@@ -430,6 +483,11 @@ def _format_number(value: Optional[float]) -> str:
     return f'{value:.4f}'
 
 
+def _format_share(value: Optional[float]) -> str:
+    """A share as a percentage, or a dash when the run does not define one"""
+    return '-' if value is None else f'{value:.2%}'
+
+
 def _profile_lines(name: str, entry: Dict[str, Any]) -> List[str]:
     before, after = entry['before'], entry['after']
     if before is None or after is None:
@@ -459,13 +517,20 @@ def _profile_lines(name: str, entry: Dict[str, Any]) -> List[str]:
 
 def _reachability_lines(result: Dict[str, Any]) -> List[str]:
     """
-    The scenario B block: the verdict split, the accounted share, the disputes
+    The scenario B block: the verdict split, the gated share, the disputes
 
     Silent for a series that carries no feasibility verdict. The two
     misclassification sets are printed as ID LISTS and diffed against the
     baseline's, because they are the output of the scenario, not a statistic
     about it: a case joining or leaving either set is a bug appearing or being
     fixed, and a count would hide which.
+
+    Solved-among-reachable is printed here because it is the number --check
+    gates on, and a report that shows only the accounted share leaves the
+    reader with a percentage in the problem line that appears nowhere above it.
+    A move of the DENOMINATOR gets its own line for the same reason: it is a
+    change of what feasibility believes, the gate deliberately looks past it,
+    and a reader who cannot see it cannot tell why the gate stayed quiet.
     """
     before = result.get('baseline_reachability')
     after = result.get('current_reachability')
@@ -473,21 +538,56 @@ def _reachability_lines(result: Dict[str, Any]) -> List[str]:
         return []
 
     lines: List[str] = []
+    one_sided = not (before and after)
+    # Every key the lines below read, so that a series present on one side only
+    # prints zeros instead of raising. The two shares are None rather than 0.0:
+    # a run that does not exist did not score 0%, and _format_share says so.
     empty: Dict[str, Any] = {'reachable': 0, 'unreachable': 0, 'undecided': 0,
-                             'accounted': 0, 'accounted_share': 0.0, 'cases': 0,
-                             'reachable_unsolved': [], 'unreachable_solved': []}
+                             'accounted': 0, 'accounted_share': None, 'cases': 0,
+                             'solved_among_reachable': 0,
+                             'solved_among_reachable_share': None,
+                             'reachable_ids': [], 'solved_among_reachable_ids': [],
+                             'reachable_unsolved_ids': [], 'unreachable_solved_ids': []}
     before = before or empty
     after = after or empty
 
     lines.append(f"  feasibility: reachable {before['reachable']} -> {after['reachable']}, "
                  f"unreachable {before['unreachable']} -> {after['unreachable']}, "
                  f"undecided {before['undecided']} -> {after['undecided']}")
+    lines.append(f"  solved among reachable (THE GATED NUMBER): "
+                 f"{before['solved_among_reachable']}/{before['reachable']} "
+                 f"({_format_share(before['solved_among_reachable_share'])}) -> "
+                 f"{after['solved_among_reachable']}/{after['reachable']} "
+                 f"({_format_share(after['solved_among_reachable_share'])})")
     lines.append(f"  accounted (solved OR honestly unreachable): "
-                 f"{before['accounted']}/{before['cases']} ({before['accounted_share']:.2%}) -> "
-                 f"{after['accounted']}/{after['cases']} ({after['accounted_share']:.2%})")
+                 f"{before['accounted']}/{before['cases']} "
+                 f"({_format_share(before['accounted_share'])}) -> "
+                 f"{after['accounted']}/{after['cases']} "
+                 f"({_format_share(after['accounted_share'])})")
 
-    for key, label in (('reachable_unsolved', 'LP said reachable, solver missed'),
-                       ('unreachable_solved', 'LP said unreachable, solver hit it')):
+    was_reachable = set(before['reachable_ids'])
+    now_reachable = set(after['reachable_ids'])
+    if one_sided:
+        # The placeholder's empty ID list would otherwise read as a
+        # reclassification of every target: "LP MOVED: reachable 0 -> 4, newly
+        # reachable [11, 12, 13, 14]", word for word what a real feasibility
+        # change prints. It is the same mistake the shares above avoid by being
+        # None - a run that never asked the question did not answer "none" - and
+        # the likeliest way to get here is the ordinary one: diffing a baseline
+        # written before scenario B existed.
+        missing = 'the baseline' if not result.get('baseline_reachability') else 'the current run'
+        lines.append(f"  {missing} carries no feasibility verdict, so there is no "
+                     f"reachable set to compare and nothing above is a delta")
+    elif was_reachable != now_reachable:
+        lines.append(f"  LP MOVED: reachable {len(was_reachable)} -> {len(now_reachable)}, "
+                     f"no longer reachable {sorted(was_reachable - now_reachable)}, "
+                     f"newly reachable {sorted(now_reachable - was_reachable)}")
+        lines.append(f"      the gate compares the {len(was_reachable & now_reachable)} "
+                     f"targets BOTH runs call reachable; the rest is a feasibility "
+                     f"change and says nothing about the search")
+
+    for key, label in (('reachable_unsolved_ids', 'LP said reachable, solver missed'),
+                       ('unreachable_solved_ids', 'LP said unreachable, solver hit it')):
         was, now = set(before[key]), set(after[key])
         lines.append(f"  {label}: {len(was)} -> {len(now)}  {sorted(now)}")
         if was - now:
@@ -496,6 +596,11 @@ def _reachability_lines(result: Dict[str, Any]) -> List[str]:
             lines.append(f"      newly disputed:     {sorted(now - was)}")
 
     return lines
+
+
+def snapshot_chemistry_gate(snapshot: Dict[str, Any]) -> Tuple[str, Optional[float]]:
+    """The rule one snapshot's stored chemistry_ok was drawn by, as (metric, tol)"""
+    return bench_corpus.read_chemistry_gate((snapshot.get('run') or {}).get('chemistry_gate'))
 
 
 def build_report(baseline: Dict[str, Any], current: Dict[str, Any]) -> Tuple[List[str], Dict[str, Any]]:
@@ -526,6 +631,26 @@ def build_report(baseline: Dict[str, Any], current: Dict[str, Any]) -> Tuple[Lis
                         f"the two runs are different corpora and the numbers below are not comparable")
     if baseline['run'].get('dump') != current['run'].get('dump'):
         findings.append(f"DUMP CHANGED: {baseline['run'].get('dump')} -> {current['run'].get('dump')}")
+
+    # The one stored field that changed MEANING rather than value in 10.18.
+    # Everything derived from chemistry_ok - the chemistry share, the accounted
+    # share, both misclassification sets - is incomparable across it, while the
+    # raw components are not affected at all, so this is a finding and not a
+    # blanket "nothing below is comparable".
+    baseline_gate = snapshot_chemistry_gate(baseline)
+    current_gate = snapshot_chemistry_gate(current)
+    comparison['provenance']['chemistry_gate'] = {
+        'baseline': list(baseline_gate),
+        'current': list(current_gate),
+        'changed': baseline_gate != current_gate,
+    }
+    if baseline_gate != current_gate:
+        findings.append(
+            f"CHEMISTRY GATE CHANGED: {baseline_gate[0]}<={baseline_gate[1]} -> "
+            f"{current_gate[0]}<={current_gate[1]}; the chemistry verdict of the two runs "
+            f"is not the same measurement, so the chemistry share, the accounted share and "
+            f"the two dispute lists below describe different questions. The raw components "
+            f"are unaffected and stay comparable")
 
     for series, ids in (baseline['run'].get('sampled_ids') or {}).items():
         current_ids = (current['run'].get('sampled_ids') or {}).get(series)
@@ -572,6 +697,11 @@ def build_report(baseline: Dict[str, Any], current: Dict[str, Any]) -> Tuple[Lis
         lines.append(f'--- engine: {series} ' + '-' * max(0, 78 - 13 - len(series)))
         lines.append(f"  scenario {scenario}, engine {engine}")
         lines.append(f"  cases: baseline {result['baseline_cases']}, current {result['current_cases']}")
+        if result['baseline_dropped'] or result['current_dropped']:
+            lines.append(f"  oxides dropped from the comparison (non-finite value, "
+                         f"the case cannot pass): {len(result['baseline_dropped'])} -> "
+                         f"{len(result['current_dropped'])} cases "
+                         f"{result['current_dropped']}")
         if result['missing_from_current'] or result['new_in_current']:
             lines.append(f"  case set changed: {len(result['missing_from_current'])} gone, "
                          f"{len(result['new_in_current'])} new")
@@ -625,19 +755,44 @@ def check_regressions(comparison: Dict[str, Any]) -> List[str]:
     """
     Everything --check considers a regression
 
-    Four gates, per series:
+    Five gates, per series:
       * the median OR the p90 of a tracked score worsens by more than
         REGRESSION_TOLERANCE - the tail is gated alongside the centre, because a
         tweak that improves the median while wrecking ten cases is not an
         improvement;
       * the share of solved cases drops;
-      * the maximum chemistry error grows;
-      * scenario B only: the accounted share drops. "Solved OR honestly
-        unreachable" is that scenario's own criterion, and it can fall while the
-        solved share does not - a case can keep returning a recipe and stop
-        passing the chemistry gate. A rising unreachable count does not trip
-        this gate by itself, and must not: declining a target our stock cannot
-        reach is a correct answer, not a lost case.
+      * the maximum chemistry error grows - on BOTH scales, max_relative and
+        umf_error;
+      * more cases have an oxide dropped from the comparison than before;
+      * scenario B only: the search reaches fewer of the targets BOTH runs' LP
+        proved reachable. Over the INTERSECTION of the two reachable sets, never
+        over each run's own: the denominator is feasibility's answer, so a
+        target one run reclassified is a different question rather than a harder
+        search, and dividing by a moved denominator reports a change in
+        feasibility.py as a regression of the solver. A rising unreachable count
+        therefore cannot trip this gate, and must not: declining a target our
+        stock cannot reach is a correct answer, not a lost case.
+        THIS GATE IS SKIPPED WHEN THE TWO RUNS WERE SCORED BY DIFFERENT
+        CHEMISTRY GATES. The share is derived from chemistry_ok, so across 10.18
+        it compares two different questions and moves with no solver change at
+        all; firing there would train the reader to ignore the one gate that
+        catches a real loss of coverage.
+
+    THE ACCOUNTED SHARE IS NOT GATED HERE, although it is printed on every
+    scenario B block and used to be this gate. "Solved OR honestly unreachable"
+    is dominated by the unreachable bucket - 90 of the 100 targets - so losing a
+    reachable target moves it 96% -> 95% while it moves the gated share
+    60% -> 50%: ten times the signal for the same event, which is why the swap
+    happened (the same argument as MIN_SOLVED_AMONG_REACHABLE in
+    tests/test_inverse_corpus.py). What the swap gives up is the one thing the
+    accounted share sees and this gate cannot: an LP that stops ANSWERING. Seven
+    undecided verdicts take seven cases out of both the numerator and the
+    denominator of the gated share, which barely twitches, while the accounted
+    share falls 96% -> 89%. That case is guarded by
+    tests/test_inverse_corpus.py, which asserts the undecided list is empty
+    case by case - and that test is NOT part of --check, so a run that only
+    passes --check has not been asked the question. Read the accounted line in
+    the report, or run the corpus test.
 
     A measured warning about the reach of the first gate. Percentiles only move
     when enough cases move: a degradation confined to 4% of the sample slips
@@ -651,6 +806,16 @@ def check_regressions(comparison: Dict[str, Any]) -> List[str]:
     printed above the gate are the more sensitive instrument. Read them.
     """
     problems: List[str] = []
+    provenance = comparison.setdefault('provenance', {})
+    gate_changed = bool(provenance.get('chemistry_gate', {}).get('changed'))
+    # Gates that were deliberately not run, reported to the caller through the
+    # comparison rather than as problems: "this was not checked" must be
+    # visible, and must not be an exit code.
+    # Rebuilt, not appended to: check_regressions() is a pure report over the
+    # comparison and calling it twice must say the same thing twice, not twice
+    # as much.
+    skipped: List[str] = []
+    provenance['ungated'] = skipped
 
     for engine, result in sorted(comparison['engines'].items()):
         metrics = result['metrics']
@@ -660,22 +825,143 @@ def check_regressions(comparison: Dict[str, Any]) -> List[str]:
                             f"{result['baseline_solved_share']:.2%} -> {result['current_solved_share']:.2%} "
                             f"(lost: {result['lost']})")
 
-        error = metrics.get('umf_error')
-        if error and error['before'] and error['after']:
-            before_max, after_max = error['before']['max'], error['after']['max']
-            if after_max > before_max + MAX_CHEMISTRY_ERROR_EPSILON:
-                problems.append(f"{engine}: the maximum chemistry error grew "
-                                f"{before_max:.6f} -> {after_max:.6f}")
+        # Both chemistry scales are gated, and neither replaces the other.
+        # max_relative is the one the verdict is drawn with (10.18), so it is
+        # the one that has to hold. umf_error stays gated because it is the only
+        # thing that catches a wholesale collapse in ABSOLUTE terms: a recipe
+        # that misses SiO2 by 1.5 while keeping every oxide inside 5% of its own
+        # scale is inside the relative gate and is still not the target. Whether
+        # that case exists on this corpus has NOT been measured - the argument
+        # is that the two norms are not orderable, not that the second one has
+        # ever fired alone. Dropping it is cheap to reverse; missing a collapse
+        # because it was dropped is not.
+        # A baseline written before 10.18 carries no max_relative, so its
+        # profile is None and that gate simply does not run until the next
+        # rebaseline. It fails open on purpose: inventing a "before" out of
+        # umf_error would compare two different measurements.
+        for name, label in (('max_relative', 'the maximum relative chemistry deviation'),
+                            ('umf_error', 'the maximum chemistry error')):
+            error = metrics.get(name)
+            if error and error['before'] and error['after']:
+                before_max, after_max = error['before']['max'], error['after']['max']
+                if after_max > before_max + MAX_CHEMISTRY_ERROR_EPSILON:
+                    problems.append(f"{engine}: {label} grew "
+                                    f"{before_max:.6f} -> {after_max:.6f}")
+            elif not (error and error['before']):
+                # Say so. A gate that quietly does not run is worse than one
+                # that fails, because the report looks exactly like a pass.
+                skipped.append(f"{engine}: {label} was not gated - the baseline "
+                               f"defines {name} on no shared case, which is what a "
+                               f"baseline written before 10.18 looks like; the next "
+                               f"rebaseline arms it")
 
+        # A case whose formula could not be compared in full is a new hole in
+        # the measurement, not a slow metric: gate on the COUNT growing at all,
+        # with no tolerance band, because one is already one too many.
+        before_dropped = result.get('baseline_dropped') or []
+        after_dropped = result.get('current_dropped') or []
+        if len(after_dropped) > len(before_dropped):
+            problems.append(
+                f"{engine}: more cases have oxides dropped from the comparison, "
+                f"{len(before_dropped)} -> {len(after_dropped)} "
+                f"(new: {sorted(set(after_dropped) - set(before_dropped))}); a non-finite "
+                f"value reached the formula and those cases can no longer be scored")
+
+        # The scenario B coverage gate, on the share of the REACHABLE targets
+        # the search reached rather than on the accounted share. Same swap, and
+        # the same reason, as MIN_SOLVED_AMONG_REACHABLE in
+        # tests/test_inverse_corpus.py: the accounted share is dominated by the
+        # unreachable bucket (90 of 100 targets here), so losing one reachable
+        # target moves it 96% -> 95% while it moves this one 60% -> 50%. Ten
+        # times the signal for the same event.
+        # OVER THE TARGETS BOTH RUNS CALL REACHABLE, never over each run's own
+        # denominator. That denominator is the LP's answer, not the search's, so
+        # dividing by it turns a feasibility change into a verdict about the
+        # search: with the search byte for byte identical and one target
+        # reclassified as unreachable, the raw shares read 3/4 -> 2/3, the gate
+        # fires at 75% -> 66.67% and names a search that did not move. The
+        # mirror image is worse, because it is silent: an LP that finds four new
+        # reachable targets lets 3/4 -> 6/8 hide a target that was genuinely
+        # lost. Intersecting is the same rule the metric distributions above
+        # already use on the solved sets, applied to the question "was this the
+        # same question in both runs". What the LP did instead is reported by
+        # _reachability_lines as its own line.
+        # WHAT THIS GATE DOES NOT SEE, on purpose: a SWAP inside the shared set.
+        # Lose target 11, gain target 14, and 3/4 -> 3/4 passes in silence. That
+        # is what gating a share means - it is equally true of the solved share
+        # gate above - and the trade is accepted here rather than overlooked:
+        # the alternative, gating the per-case set, fires on every case that
+        # crosses the tolerance in either direction and would be red on most
+        # runs. The event is not invisible, it is just not an exit code: the two
+        # dispute lists print with their ids right above, and a swap shows up
+        # there as one id leaving and another arriving.
         before_reach = result.get('baseline_reachability')
         after_reach = result.get('current_reachability')
         if before_reach and after_reach:
-            if after_reach['accounted_share'] < before_reach['accounted_share'] - EQUAL_EPSILON:
+            shared_reachable = (set(before_reach.get('reachable_ids') or [])
+                                & set(after_reach.get('reachable_ids') or []))
+            before_hit = shared_reachable & set(
+                before_reach.get('solved_among_reachable_ids') or [])
+            after_hit = shared_reachable & set(
+                after_reach.get('solved_among_reachable_ids') or [])
+            before_share = (len(before_hit) / len(shared_reachable)
+                            if shared_reachable else None)
+            after_share = (len(after_hit) / len(shared_reachable)
+                           if shared_reachable else None)
+            # The targets that were reached and are not any more. Not the
+            # difference of the two dispute lists: a target the LP dropped out
+            # of the reachable set leaves that list too, and would be named
+            # here as if the search had lost it.
+            lost_reachable = sorted(before_hit - after_hit)
+            counted = (f"{len(before_hit)}/{len(shared_reachable)} "
+                       f"({_format_share(before_share)}) -> "
+                       f"{len(after_hit)}/{len(shared_reachable)} "
+                       f"({_format_share(after_share)})")
+
+            if gate_changed:
+                skipped.append(
+                    f"{engine}: solved-among-reachable went {counted} and the accounted "
+                    f"share {_format_share(before_reach.get('accounted_share'))} -> "
+                    f"{_format_share(after_reach.get('accounted_share'))}, NOT GATED - the "
+                    f"two runs were scored by different chemistry gates and both shares "
+                    f"are derived from that verdict, so neither is a comparison")
+            elif not shared_reachable:
+                # Two different causes, and the message has to tell them apart
+                # rather than assert the likelier one: a run whose LP proved
+                # nothing reachable, and two runs whose reachable sets simply do
+                # not overlap. Both leave the gate without a denominator the two
+                # runs agree on; only the first is "there was nothing to ask".
+                barren = [name for name, reach
+                          in (('the baseline', before_reach),
+                              ('the current run', after_reach))
+                          if not (reach.get('reachable_ids') or [])]
+                if barren:
+                    cause = (f"{' and '.join(barren)} "
+                             f"{'have' if len(barren) > 1 else 'has'} no reachable target "
+                             f"at all")
+                else:
+                    cause = (f"the LP called {sorted(before_reach['reachable_ids'])} "
+                             f"reachable before and {sorted(after_reach['reachable_ids'])} "
+                             f"now, and the two sets do not overlap")
+                skipped.append(
+                    f"{engine}: solved-among-reachable was not gated - {cause}, so there "
+                    f"is no set of targets both runs were asked the same question about")
+            elif after_share < before_share - EQUAL_EPSILON:
                 problems.append(
-                    f"{engine}: the accounted share dropped "
-                    f"{before_reach['accounted_share']:.2%} -> {after_reach['accounted_share']:.2%} "
-                    f"(newly disputed: "
-                    f"{sorted(set(after_reach['reachable_unsolved']) - set(before_reach['reachable_unsolved']))})")
+                    f"{engine}: the search reached fewer of the targets BOTH runs' LP "
+                    f"proved reachable, {counted} "
+                    f"(no longer reached: {lost_reachable})")
+        elif before_reach or after_reach:
+            # Exactly one side carries a feasibility verdict. Silence would be
+            # the same failure this whole block exists to undo - see the note
+            # above the dropped-oxides gate: a gate that quietly does not run
+            # reads exactly like a gate that passed.
+            present, missing = (('the baseline', 'the current run') if before_reach
+                                else ('the current run', 'the baseline'))
+            skipped.append(
+                f"{engine}: solved-among-reachable was not gated - only {present} carries "
+                f"a feasibility verdict, so {missing} has no reachable set to compare "
+                f"against; a scenario B series is supposed to have one on both sides")
 
         names = tracked_scores(metrics)
         if not names:
@@ -843,6 +1129,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print('\n'.join(lines))
 
     problems = check_regressions(comparison)
+
+    ungated = (comparison.get('provenance') or {}).get('ungated') or []
+    if ungated:
+        print('NOT GATED')
+        for note in ungated:
+            print(f'  - {note}')
 
     if problems:
         print('REGRESSIONS')

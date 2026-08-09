@@ -9,6 +9,7 @@
 # pylance: disable=reportMissingImports, reportMissingModuleSource
 
 import json
+import math
 import unittest
 import sys
 import os
@@ -19,8 +20,10 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_DIR)
 import common
 from common import (
+    OXIDE_SCALE_FLOOR,
     weights_to_umf,
     umf_to_weights,
+    umf_deviation,
     calc_ratios_umf,
     calculate_umf_from_recipe,
     flux_oxides,
@@ -32,6 +35,7 @@ from common import (
     filter_materials_by_inventory,
     filter_materials_with_formula,
 )
+from solver_classic import calculate_recipe_composition, calculate_umf_error
 from solver_iterative import _flux_sum
 
 # The classification the code is supposed to be reading; the tests below load it
@@ -762,6 +766,231 @@ class TestMaterialPriorities(unittest.TestCase):
         self.assertEqual(materials["Нефелин-сиенит VR13"], 2)
         self.assertGreater(materials["Бентонит"], materials["Нефелин-сиенит VR13"])
         self.assertGreater(materials["Карбонат цинка, ZnCO3"], materials["Нефелин-сиенит VR13"])
+
+
+class TestUmfDeviation(unittest.TestCase):
+    """
+    The one scale the whole system judges a formula on (TZ_SOLVER_V2.md 10.18)
+
+    The cases below are the ones that decide the definition, not a sample of it:
+    each pins a property that the retired absolute norm got wrong or that a
+    plausible simplification of the code would break.
+    """
+
+    def test_a_dropped_colourant_is_a_fifth_of_its_scale_and_a_fiftieth_of_the_norm(self):
+        """
+        The case the whole change exists for: a trace oxide the answer forgot
+
+        A target asking for CoO 0.02 answered by a recipe with no cobalt in it
+        is 20% out on the one oxide that decides what the glaze looks like, and
+        0.02 in a norm whose retired limit was 0.1. The relative reading fails
+        it and the absolute one waves it through.
+        """
+        deviation = umf_deviation({'SiO2': 3.0, 'Al2O3': 0.4, 'CoO': 0.02},
+                                  {'SiO2': 3.0, 'Al2O3': 0.4})
+
+        self.assertAlmostEqual(0.2, deviation['max_relative'], places=12)
+        self.assertEqual('CoO', deviation['worst_oxide'])
+        self.assertAlmostEqual(0.02, deviation['l2_absolute'], places=12)
+        self.assertLess(deviation['l2_absolute'], 0.1)
+
+    def test_contamination_the_target_never_asked_for_is_a_deviation(self):
+        """An oxide only the answer carries is scored against 0.0, at the floor"""
+        deviation = umf_deviation({'SiO2': 3.0}, {'SiO2': 3.0, 'BaO': 0.03})
+
+        self.assertEqual('BaO', deviation['worst_oxide'])
+        self.assertAlmostEqual(0.03 / OXIDE_SCALE_FLOOR, deviation['max_relative'], places=12)
+        self.assertEqual({'target': 0.0, 'actual': 0.03, 'delta': 0.03,
+                          'relative': 0.03 / OXIDE_SCALE_FLOOR},
+                         deviation['per_oxide']['BaO'])
+
+        # ... and it stays out of the retired norm, which only ever looked at
+        # the target's own oxides. That asymmetry is deliberate: it is what
+        # keeps a stored umf_error comparable with the runs before 10.18.
+        self.assertEqual(0.0, deviation['l2_absolute'])
+
+    def test_the_delta_is_signed_and_says_which_way_the_answer_missed(self):
+        """
+        Same field name as feasibility's per_oxide row, so the same convention
+
+        delta = actual - target: positive is too much of the oxide, negative is
+        too little. Which of the two it is is the one thing a reader wants out
+        of this record, and a magnitude cannot say. check_feasibility() fills a
+        row of the same shape under the same name with closest - target, and two
+        blocks that disagree about the direction while agreeing about everything
+        else are worse than either of them alone. The headline numbers do not
+        move with the sign - "relative" is the magnitude.
+        """
+        under = umf_deviation({'SiO2': 3.0}, {'SiO2': 2.9})
+        over = umf_deviation({'SiO2': 3.0}, {'SiO2': 3.1})
+
+        self.assertAlmostEqual(-0.1, under['per_oxide']['SiO2']['delta'], places=12)
+        self.assertAlmostEqual(0.1, over['per_oxide']['SiO2']['delta'], places=12)
+
+        # ... and the two miss by the same amount, on every number that gates
+        self.assertAlmostEqual(under['per_oxide']['SiO2']['relative'],
+                               over['per_oxide']['SiO2']['relative'], places=12)
+        self.assertAlmostEqual(under['max_relative'], over['max_relative'], places=12)
+        self.assertAlmostEqual(under['l2_absolute'], over['l2_absolute'], places=12)
+
+    def test_the_floor_binds_below_it_and_gets_out_of_the_way_above_it(self):
+        """max(target, floor) - the same absolute miss, two different readings"""
+        below = umf_deviation({'MgO': 0.05}, {'MgO': 0.09})
+        above = umf_deviation({'SiO2': 3.0}, {'SiO2': 3.04})
+
+        # 0.04 against the floor, not against the 0.05 that was asked for
+        self.assertAlmostEqual(0.4, below['max_relative'], places=12)
+        # 0.04 against 3.0, because the target is well clear of the floor
+        self.assertAlmostEqual(0.04 / 3.0, above['max_relative'], places=12)
+
+        # And the floor is a parameter, not a constant baked into the formula
+        self.assertAlmostEqual(0.8, umf_deviation({'MgO': 0.05}, {'MgO': 0.09},
+                                                  floor=0.05)['max_relative'],
+                               places=12)
+
+    def test_loss_on_ignition_never_enters_a_formula_comparison(self):
+        """Loi is bookkeeping; a UMF that carries one must not be judged on it"""
+        deviation = umf_deviation({'SiO2': 3.0, 'Loi': 8.0},
+                                  {'SiO2': 3.0, 'LOI': 0.0})
+
+        self.assertEqual(0.0, deviation['max_relative'])
+        self.assertEqual(0.0, deviation['l2_absolute'])
+        self.assertEqual(['SiO2'], sorted(deviation['per_oxide']))
+        self.assertEqual([], deviation['dropped'])
+
+    def test_a_non_finite_value_is_reported_rather_than_swallowed(self):
+        """
+        A NaN must not read as "everything is fine"
+
+        Every comparison against a NaN is false, so an oxide carrying one would
+        silently never be the worst. Naming it in "dropped" is the only honest
+        answer - and the numbers go to None with it, because a maximum taken
+        over the oxides that survived is a lower bound, and a lower bound in a
+        distribution of honest values reads as the best case in it.
+        """
+        deviation = umf_deviation(
+            {'SiO2': 3.0, 'Al2O3': 0.4, 'CaO': 0.7, 'MgO': 0.1},
+            {'SiO2': float('nan'), 'Al2O3': float('inf'), 'CaO': None, 'MgO': 0.12})
+
+        self.assertEqual(['Al2O3', 'CaO', 'SiO2'], sorted(deviation['dropped']))
+        self.assertIsNone(deviation['max_relative'])
+        self.assertIsNone(deviation['l2_absolute'])
+        self.assertIsNone(deviation['worst_oxide'])
+
+        # ... and what WAS computed is still there for the reader
+        self.assertEqual(['MgO'], sorted(deviation['per_oxide']))
+        self.assertAlmostEqual(0.2, deviation['per_oxide']['MgO']['relative'], places=12)
+
+    def test_a_formula_that_could_not_be_read_is_not_a_perfect_score(self):
+        """
+        This is the regression that motivates the None: 0.0 is the BEST value
+
+        max_relative and l2_absolute are both "lower is better" metrics whose
+        distributions the benchmark tracks and whose maxima --check gates. A
+        case that could not be compared at all, scored 0.0, would enter every
+        one of those as the best case in the sample and would pull the gated
+        maximum down - it would read as an improvement.
+        """
+        unreadable = umf_deviation({'SiO2': 3.0}, {'SiO2': float('nan')})
+        self.assertIsNone(unreadable['max_relative'])
+        self.assertIsNone(unreadable['l2_absolute'])
+        self.assertEqual(['SiO2'], unreadable['dropped'])
+
+        # A perfect answer, for contrast: same 0.0-shaped result, but real
+        perfect = umf_deviation({'SiO2': 3.0}, {'SiO2': 3.0})
+        self.assertEqual(0.0, perfect['max_relative'])
+        self.assertEqual(0.0, perfect['l2_absolute'])
+        self.assertEqual([], perfect['dropped'])
+        # Nothing deviates, so there is no worst oxide to name
+        self.assertIsNone(perfect['worst_oxide'])
+
+    def test_nothing_to_compare_is_none_and_no_worst_oxide(self):
+        """
+        Two empty formulas are not a match, they are an absence of a comparison
+
+        Same None as the unreadable case above, and "dropped" is what tells the
+        two apart: empty here, populated there.
+        """
+        deviation = umf_deviation({}, {})
+
+        self.assertIsNone(deviation['max_relative'])
+        self.assertIsNone(deviation['worst_oxide'])
+        self.assertIsNone(deviation['l2_absolute'])
+        self.assertEqual({}, deviation['per_oxide'])
+        self.assertEqual([], deviation['dropped'])
+
+    # A target and an answer taken verbatim off the corpus (glazy_id 423584),
+    # kept here because they are the cheapest proof that the SUMMATION ORDER of
+    # l2_absolute is load bearing. The keys are in the order the forward
+    # calculation produced them, which is not alphabetical, and summing the
+    # squares alphabetically instead lands one ulp away:
+    #   target key order -> 0.005385164807134405
+    #   sorted           -> 0.005385164807134406
+    # 27 of the 300 corpus cases behave like this, and they rewrote 55 of the
+    # 450 rows of bench/quality_baseline.json when the order was wrong.
+    ORDER_SENSITIVE_TARGET = {
+        'SiO2': 2.733, 'Al2O3': 0.599, 'Na2O': 0.096, 'K2O': 0.204, 'CaO': 0.403,
+        'Fe2O3': 0.009, 'MgO': 0.297, 'P2O5': 0.001, 'TiO2': 0.003,
+    }
+    ORDER_SENSITIVE_ACTUAL = {
+        'CaO': 0.402, 'SiO2': 2.728, 'Al2O3': 0.598, 'Na2O': 0.096, 'K2O': 0.205,
+        'MgO': 0.296, 'P2O5': 0.001, 'TiO2': 0.003, 'Fe2O3': 0.009,
+    }
+
+    def test_l2_absolute_keeps_the_retired_metric_summation_order(self):
+        """
+        The diagnostic field is the OLD number, to the last bit
+
+        bench/quality_baseline.json and every line of bench/history.jsonl store
+        umf_error, and it only stays comparable across 10.18 if the new code
+        computes exactly what solver_classic.calculate_umf_error computed -
+        which sums over the target's keys in the TARGET's own order. Float
+        addition is not associative, so this test is written on a case where
+        the alphabetical order gives a different double; the fixtures of
+        reference_recipes.json cannot catch it, because their UMF keys happen
+        to be sorted already and there is nothing left to reorder.
+        """
+        target, actual = self.ORDER_SENSITIVE_TARGET, self.ORDER_SENSITIVE_ACTUAL
+        self.assertNotEqual(list(target), sorted(target),
+                            'the fixture stopped being order sensitive')
+
+        expected = float(calculate_umf_error(target, actual))
+        self.assertEqual(expected, umf_deviation(target, actual)['l2_absolute'])
+
+        # ... and the sorted order really is a different number, so the
+        # assertion above is not passing by luck
+        alphabetical = math.sqrt(sum((target[ox] - actual.get(ox, 0.0)) ** 2
+                                     for ox in sorted(target)))
+        self.assertNotEqual(alphabetical, expected)
+
+    def test_l2_absolute_reproduces_the_retired_metric_on_real_recipes(self):
+        """The same equality over the 11 committed fixtures, end to end"""
+        with open(os.path.join(PROJECT_DIR, 'tests', 'fixtures',
+                               'reference_recipes.json'), encoding='utf-8') as f:
+            fixtures = json.load(f)
+
+        materials = load_materials(only_inventory=True, priority=True)
+
+        checked = 0
+        for entry in fixtures:
+            target = entry['umf']
+            actual = weights_to_umf(calculate_recipe_composition(materials, entry['recipe']))
+
+            self.assertEqual(float(calculate_umf_error(target, actual)),
+                             umf_deviation(target, actual)['l2_absolute'],
+                             f"{entry['id']}: the diagnostic drifted from the retired metric")
+            # The same equality on a reordered target. This does NOT
+            # discriminate between the two summation orders - on these eleven
+            # fixtures the reference itself gives an identical double either
+            # way, and eight of them have an error of exactly 0.0 - so it is a
+            # consistency check and nothing more; the test above is the guard.
+            reversed_target = dict(reversed(list(target.items())))
+            self.assertEqual(float(calculate_umf_error(reversed_target, actual)),
+                             umf_deviation(reversed_target, actual)['l2_absolute'],
+                             f"{entry['id']}: the diagnostic drifted on a reordered target")
+            checked += 1
+
+        self.assertGreaterEqual(checked, 10)
 
 
 if __name__ == "__main__":

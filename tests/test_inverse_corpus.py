@@ -26,7 +26,10 @@ to remove an excuse:
 
 Its verdict is two-level:
 
-  1. chemistry - calculate_umf_error <= 0.1;
+  1. chemistry - no oxide is off by more than bench_corpus.CHEMISTRY_TOL of its
+     own scale, max(target, common.OXIDE_SCALE_FLOOR). That is the feasibility
+     LP's own measurement at the LP's own tolerance (TZ_SOLVER_V2.md 10.18),
+     not a second opinion invented for the benchmark;
   2. quality   - quality_metrics.solution_quality(...).failures == [].
 
 Both shares are reported, and so is the GAP between them: that gap is the share
@@ -43,8 +46,12 @@ answer and not a failure.
 
 Its verdict is single-level and deliberately so:
 
-  * chemistry only - calculate_umf_error <= 0.1 - and the share of "solved OR
-    honestly unreachable" over the whole subsample;
+  * chemistry only - the same relative gate as scenario A - and the gated
+    number is the share of the LP-REACHABLE targets the search reached, not the
+    "solved OR honestly unreachable" share it replaced. That one is still
+    printed, and it is explicitly NOT GATED: 90 of the 100 targets are in the
+    unreachable bucket, so it cannot fall below 90% however badly the search
+    does - see MIN_SOLVED_AMONG_REACHABLE below for the numbers;
   * quality is NOT gated. There is no comparable original: the dump recipe lives
     in another supply reality, so "is our answer worse than it" is not a
     question with an answer. The quality components are recorded in
@@ -92,39 +99,77 @@ CORPUS_ENV = 'GLAZY_CORPUS'
 # Share of the sample that has to pass BOTH levels. TZ_SOLVER_V2.md 7.6 names
 # 90% as a starting point "to be fixed after the first run"; the first run gave
 # 93.00% for the iterative engine over 300 cases and 96% for the classic engine
-# over its 50 case subsample, so 90% is kept, with a margin of 3.00 points
-# (9 cases) and 6 points (3 cases) respectively.
+# over its 50 case subsample, so 90% was kept, with a margin of 3.00 points
+# (9 cases) and 6 points (3 cases) respectively. By the baseline of 3101b1f the
+# shares had moved with the solver to 93.33% and 98.00%.
 #
-# The margin has to absorb sampling luck, and it does: over five seeds the
-# iterative share ranged 93.00 - 95.67% and the classic one 94 - 100%, the
-# pinned seed being the least lucky of the five. It does NOT have to absorb
-# solver changes - those are what bench/diff_baseline.py measures, case by case,
-# against a committed snapshot.
+# THE THRESHOLD MOVED 0.90 -> 0.78 IN 10.18, AND THE SOLVER DID NOT MOVE WITH
+# IT. What changed is the instrument: level 1 stopped being "the L2 norm of the
+# absolute deviations over the target's oxides is at most 0.1" and became "no
+# oxide is off by more than 5% of its own scale", which is the feasibility LP's
+# measurement. The same run, re-scored, gives 82.67% both-levels on the
+# iterative engine (94.67% -> 83.67% on chemistry alone, 251 of 300) and an
+# unchanged 98.00% on the classic one - the classic subsample never leaves 0.02
+# relative deviation, so the new gate does not touch it. Nothing in the solver
+# was touched: bench/diff_baseline.py reports 0 cases moved on every metric of
+# every series across the change.
 #
-# Those two numbers are the FIRST run's and are kept as written; the shares have
-# since moved with the solver, to 93.33% and 98.00% as of the baseline of
-# 3101b1f. The margin the threshold actually has today is therefore 3.33 points
-# (10 cases) and 8 points (4 cases). Whether it has grown or shrunk is a
-# question for bench/history.jsonl, which is where the series lives.
-MIN_BOTH_LEVELS_SHARE = 0.90
+# The margin still has to absorb sampling luck, and it was re-measured under the
+# new gate rather than assumed. Over five seeds (20260531, 1, 42, 999, 20260101)
+# the iterative both-levels share ranged 82.67 - 88.00% and the classic one
+# 98.00 - 100%, the pinned seed being the least lucky of the five again. 0.78
+# therefore clears the whole spread, and clears the pinned seed by 4.67 points
+# (14 cases) - a slightly wider margin than the 3.33 points it had before.
+# It does NOT have to absorb solver changes: those are what
+# bench/diff_baseline.py measures, case by case, against a committed snapshot.
+MIN_BOTH_LEVELS_SHARE = 0.78
 
-# Scenario B's own gate: the share of the subsample that was either solved
-# within the chemistry limit or honestly declared out of reach of our stock.
-# 7.6 names 90% as the starting point, and the first run gave 100.00% over the
-# 100 case subsample - every case was answered one way or the other - so 90% is
-# kept with a margin of 10.00 points, which is ten whole cases.
+# Scenario B's gate is the share of the REACHABLE targets the search actually
+# reached. It replaced the accounted share in 10.18, and the reason is
+# sensitivity, not that the old gate was fake. "Solved OR honestly unreachable"
+# is dominated by the unreachable bucket - 90 of the 100 targets on this corpus
+# - so losing a reachable case moves it by ONE point while it moves this one by
+# TEN. On the pinned seed the search reaches 6 of 10.
 #
-# The margin absorbs sampling luck the same way scenario A's does: over five
-# seeds the accounted share was 100, 100, 100, 100 and 99% (seed 999, where one
-# reachable target went unsolved), the pinned seed being the luckiest of the
-# five. The floor of that spread still clears the threshold by 9 points.
+# What the old gate actually was. Its floor is |unreachable| / 100, not a
+# constant 0.90: an UNDECIDED case, one where the LP failed to answer at all,
+# leaves the unreachable bucket and takes a point of the accounted share with
+# it. At 7 undecided the share is 83 + 6 = 89% and the old 0.90 fires. So the
+# accounted share was a detector of the LP falling over en masse, and a poor
+# detector of anything else. That job is now done directly and unambiguously,
+# by the assertion on the undecided count in the test below - which is strictly
+# sharper: it fires on the FIRST unanswered case, not on the seventh.
 #
-# READ THE MISCLASSIFICATION LOG, NOT ONLY THIS NUMBER. The gate is weak by
-# construction on this corpus, and the first run says exactly how weak: 90 of
-# the 100 targets are declared unreachable, so 90% of the sample is accounted
-# for before the solver says anything at all. What the run is actually worth is
-# in the two dispute lists printed below it.
-MIN_ACCOUNTED_SHARE = 0.90
+# THE THRESHOLD IS SET FROM THE PINNED SEED, and cross-seed spread is not the
+# argument. The seed is hard-wired: tests/test_inverse_corpus._shared_corpus
+# builds the sample with bench_corpus.DEFAULT_SEED and there is no override, so
+# the only run this assertion will ever judge is the one with 10 reachable
+# targets and 6 reached. At n=10 the metric is quantized at 10 points, so the
+# threshold is set two cases below the measured value: 0.40 demands 4 of 10.
+# One or two lost cases is what a real regression looks like, and 0.40 sees the
+# third; the 0.15 this replaced only woke up after five of the six were gone.
+#
+# For reference only, the same five seeds the threshold above uses:
+#
+#     seed       reachable   solved among them
+#     20260531       10          6   (60.00%)   <- pinned, the only one gated
+#     1              10          5   (50.00%)
+#     42             11          4   (36.36%)
+#     999            15          3   (20.00%)
+#     20260101       11          3   (27.27%)
+#
+# THIS NUMBER MUST RISE WITH THE SEARCH. It is pinned to today's strength, and
+# 6 of 10 is not a target anybody should be content with - the LP has PROVEN a
+# recipe exists for all ten. Stage 3 (the relative NNLS residual) is expected to
+# take this to 10/10, and on that day 0.40 becomes exactly the catastrophe gate
+# this comment was written to complain about. Raise it in the same commit.
+#
+# READ THE MISCLASSIFICATION LOG, NOT ONLY THIS NUMBER. What the run is actually
+# worth is in the two dispute lists printed below it, and since 10.18 those
+# lists mean something sharper: "reachable_unsolved" is a bug report against the
+# search (4 of 100 on the pinned seed), and "unreachable_solved" is a soundness
+# check on the LP, modulo the rounding quantum - see bench/corpus.py.
+MIN_SOLVED_AMONG_REACHABLE = 0.40
 
 # How many failing cases are printed in full. All of them are counted; the log
 # would otherwise be unreadable on a bad run.
@@ -302,8 +347,10 @@ class GlazyCorpusScenarioA(unittest.TestCase):
             print(f"  no failures for {engine}")
             return
 
-        # Worst chemistry first; a case that produced no recipe at all leads
-        failures.sort(key=lambda row: -(row['umf_error'] if row['umf_error'] is not None else 1e9))
+        # Worst chemistry first, on the metric the gate is drawn with; a case
+        # that produced no recipe at all leads
+        failures.sort(key=lambda row: -(row['max_relative']
+                                        if row['max_relative'] is not None else 1e9))
 
         print(f"  {len(failures)} failing cases for {engine}:")
         for row in failures[:MAX_LOGGED_FAILURES]:
@@ -313,9 +360,18 @@ class GlazyCorpusScenarioA(unittest.TestCase):
                 continue
 
             if not row['chemistry_ok']:
-                print(f"    id={row['glazy_id']:<8} level=chemistry metric=calculate_umf_error "
-                      f"value={row['umf_error']:.4f} limit={bench_corpus.MAX_UMF_ERROR} "
-                      f"size={row['size']} used={row['count']} {row['name'][:48]}")
+                # max_relative is None when the formula could not be compared
+                # in full - a non-finite oxide - and then dropped_oxides is the
+                # whole story, so print that instead of a number nobody has.
+                if row['max_relative'] is None:
+                    print(f"    id={row['glazy_id']:<8} level=chemistry metric=max_relative "
+                          f"value=UNCOMPARABLE dropped={row.get('dropped_oxides')} "
+                          f"size={row['size']} used={row['count']} {row['name'][:48]}")
+                else:
+                    print(f"    id={row['glazy_id']:<8} level=chemistry metric=max_relative "
+                          f"value={row['max_relative']:.4f} limit={bench_corpus.CHEMISTRY_TOL} "
+                          f"on={row['worst_oxide']} (l2={row['umf_error']:.4f}) "
+                          f"size={row['size']} used={row['count']} {row['name'][:48]}")
 
             for metric in row['failures']:
                 detail = row.get('detail', {}).get(metric, {})
@@ -396,13 +452,16 @@ class GlazyCorpusScenarioB(unittest.TestCase):
 
     def test_scenario_b_iterative(self):
         """
-        Every target is either reproduced from our stock or honestly declined
+        Every target the LP says we CAN make is made, or the search has a bug
 
-        The gate is the accounted share and nothing else. Quality has no
-        threshold here - see the module docstring - and the misclassifications
-        are logged rather than gated, because which of the two sides is wrong
-        has to be read case by case and a red test would only say that they
-        disagree, which is already known.
+        The gate is the solved share among the reachable targets and nothing
+        else. The accounted share it replaced is still printed, but it cannot
+        fall below the unreachable bucket's own 90 points and so could never
+        fail - see MIN_SOLVED_AMONG_REACHABLE. Quality has no threshold here -
+        see the module docstring - and the misclassifications are logged rather
+        than gated, because which of the two sides is wrong has to be read case
+        by case and a red test would only say that they disagree, which is
+        already known.
         """
         engine = bench_corpus.ENGINE_ITERATIVE
         start = time.perf_counter()
@@ -414,12 +473,16 @@ class GlazyCorpusScenarioB(unittest.TestCase):
         self.assertGreater(total, 0, 'the scenario B subsample is empty')
 
         solved = [row for row in results if row['status'] == 'solved']
-        chemistry = [row for row in results if row['chemistry_ok']]
-        reachable = [row for row in results if row['feasible'] is True]
+        chemistry = [row for row in results if bench_corpus.chemistry_ok(row)]
+        # The gate's two sets come from bench/corpus.py, which is also where
+        # the diff and the history log get them. This test used to build them
+        # itself off the raw "chemistry_ok" field - the same rule spelled a
+        # fourth way, next to three others that had already drifted apart.
+        reachable = bench_corpus.reachable_rows(results)
         unreachable = [row for row in results if row['feasible'] is False]
         undecided = [row for row in results if row['feasible'] is None]
         accounted = [row for row in results if bench_corpus.accounted_ok(row)]
-        solved_reachable = [row for row in reachable if row['chemistry_ok']]
+        solved_reachable = bench_corpus.solved_reachable_rows(results)
 
         accounted_share = len(accounted) / total
 
@@ -430,10 +493,14 @@ class GlazyCorpusScenarioB(unittest.TestCase):
               f"{len(unreachable)}, undecided {len(undecided)}")
         print(f"  chemistry ok:        {len(chemistry)}/{total} "
               f"({len(chemistry) / total:.2%})")
-        print(f"  solved among reachable: {len(solved_reachable)}/{len(reachable)}"
-              + (f" ({len(solved_reachable) / len(reachable):.2%})" if reachable else ""))
-        print(f"  ACCOUNTED (solved OR honestly unreachable): {len(accounted)}/{total} "
-              f"({accounted_share:.2%}), threshold {MIN_ACCOUNTED_SHARE:.0%}")
+        print(f"  SOLVED AMONG REACHABLE: {len(solved_reachable)}/{len(reachable)}"
+              + (f" ({len(solved_reachable) / len(reachable):.2%})" if reachable else "")
+              + f", threshold {MIN_SOLVED_AMONG_REACHABLE:.0%}")
+        print(f"  accounted (solved OR honestly unreachable): {len(accounted)}/{total} "
+              f"({accounted_share:.2%}), NOT GATED - {len(unreachable)} of it is the "
+              f"unreachable bucket, so it barely moves when the search does; it only "
+              f"falls when the LP stops answering, which the undecided assertion "
+              f"catches directly")
 
         # An LP that could not answer is neither a reachable nor an unreachable
         # target: it is a case nobody judged, and it costs the accounted share
@@ -448,7 +515,7 @@ class GlazyCorpusScenarioB(unittest.TestCase):
             entry = by_bucket.setdefault(row['bucket'], [0, 0, 0, 0])
             entry[0] += 1
             entry[1] += 1 if row['feasible'] else 0
-            entry[2] += 1 if row['chemistry_ok'] else 0
+            entry[2] += 1 if bench_corpus.chemistry_ok(row) else 0
             entry[3] += 1 if bench_corpus.accounted_ok(row) else 0
         for bucket in sorted(by_bucket):
             count, reach, chem, acct = by_bucket[bucket]
@@ -464,11 +531,31 @@ class GlazyCorpusScenarioB(unittest.TestCase):
             [], [(row['glazy_id'], row['status']) for row in crashed],
             f'{engine}: the engine raised on some cases')
 
+        # An LP that could not answer judged nothing, so the case is neither
+        # reachable nor unreachable and simply leaves the denominator of the
+        # gate below - which means the gate cannot see it. The accounted share
+        # used to catch this indirectly and only in bulk (see
+        # MIN_SOLVED_AMONG_REACHABLE); this catches the first one. Measured 0
+        # of 100 on the pinned seed and on four others, so any nonzero value is
+        # a change of behaviour and worth a red test.
+        self.assertEqual(
+            [], [(row['glazy_id'], row.get('feasibility_error')) for row in undecided],
+            f'{engine}: feasibility failed to answer on some targets, so nothing '
+            f'judged whether our stock can reach them')
+
+        # The gate is the reachable half. A target the LP declares out of reach
+        # of our stock is correctly declined and says nothing about the search;
+        # a target the LP proves reachable and the search does not reach is the
+        # only thing in this scenario that can be a regression.
+        self.assertTrue(reachable, 'the LP declared no target reachable at all, '
+                                   'so nothing here measures the search')
+        solved_reachable_share = len(solved_reachable) / len(reachable)
         self.assertGreaterEqual(
-            accounted_share, MIN_ACCOUNTED_SHARE,
-            f'{engine}: only {accounted_share:.2%} of {total} scenario B cases were either '
-            f'solved or honestly declared unreachable, the threshold is '
-            f'{MIN_ACCOUNTED_SHARE:.0%}')
+            solved_reachable_share, MIN_SOLVED_AMONG_REACHABLE,
+            f'{engine}: the search reached only {len(solved_reachable)} of the '
+            f'{len(reachable)} targets the LP proved reachable '
+            f'({solved_reachable_share:.2%}), the threshold is '
+            f'{MIN_SOLVED_AMONG_REACHABLE:.0%}')
 
     @staticmethod
     def _log_misclassifications(results):
@@ -489,12 +576,16 @@ class GlazyCorpusScenarioB(unittest.TestCase):
 
         headings = {
             'reachable_unsolved':
-                'LP said REACHABLE and the solver did not get there '
-                '(the LP over-promised, or the search missed it)',
+                'LP said REACHABLE and the solver did not get there. Since 10.18 '
+                'this is a bug report against the SEARCH and nothing else: the LP '
+                'proved a point inside the tolerance on every oxide exists',
             'unreachable_solved':
-                'LP said UNREACHABLE and the solver passed the chemistry gate anyway '
-                '(the two are measured on different scales: the LP bounds the worst '
-                'RELATIVE deviation per oxide, the gate is an RMS of ABSOLUTE ones)',
+                'LP said UNREACHABLE and the solver passed the chemistry gate anyway. '
+                'Since 10.18 the two are the same measurement at the same tolerance, '
+                'so a case here is either an unsound LP or a target sitting on the '
+                'boundary within the rounding quantum - weights_to_umf rounds to 0.001, '
+                'which is 20% of the tolerance at the scale floor - and which one it is '
+                'has to be read off the numbers on the line',
         }
 
         for key, rows in disputes.items():
@@ -502,11 +593,14 @@ class GlazyCorpusScenarioB(unittest.TestCase):
             if not rows:
                 print('    none')
                 continue
-            rows.sort(key=lambda row: -(row['umf_error'] if row['umf_error'] is not None else 1e9))
+            rows.sort(key=lambda row: -(row['max_relative']
+                                        if row['max_relative'] is not None else 1e9))
             for row in rows:
+                achieved = '-' if row['max_relative'] is None else f"{row['max_relative']:.4f}"
                 error = '-' if row['umf_error'] is None else f"{row['umf_error']:.4f}"
-                print(f"    id={row['glazy_id']:<8} deviation={row['max_relative_deviation']:.4f} "
-                      f"umf_error={error:<8} status={row['status']:<20} size={row['size']:<3} "
+                print(f"    id={row['glazy_id']:<8} LP={row['max_relative_deviation']:.4f} "
+                      f"achieved={achieved:<8} l2={error:<8} status={row['status']:<20} "
+                      f"size={row['size']:<3} "
                       f"unreachable={row['unreachable_oxides']} {row['name'][:40]}")
 
     @staticmethod

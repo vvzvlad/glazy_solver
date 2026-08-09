@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 # it must not be reported as one.
 NON_OXIDE_KEYS = frozenset({"Loi", "LOI"})
 
+# The scale one oxide's deviation is measured against: max(its target, this).
+# TUNABLE POLICY, NOT PHYSICS. Nothing in the chemistry picks 0.1; it is the
+# footing on which SiO2 ~ 3 and MgO ~ 0.05 are compared, so that a trace oxide
+# missed by 0.04 reads as 40% rather than 80% and does not take over every
+# verdict, while an oxide the target does not name at all is still scored
+# against a scale instead of against zero. Moving it moves every verdict in the
+# system at once: the feasibility LP's reachability answer (feasibility.py), the
+# ranking of material contributions (sensitivity.py) and the chemistry gate of
+# the corpus benchmark (bench/corpus.py) all measure on this scale.
+OXIDE_SCALE_FLOOR = 0.1
+
 # Structural oxide groups of the classification, in the order the UMF columns
 # are printed. "unity" is a meta key (it names the groups that form the unity
 # basis), not a group of oxides, and therefore never leaves this module as one.
@@ -407,42 +418,165 @@ def format_weight_composition(weight_composition):
     """
     return "\n".join([f"{oxide}: {value:.2f}%" for oxide, value in weight_composition.items()])
 
-def calc_error(umf, target_umf):
+def umf_deviation(target_umf, actual_umf, *, floor=OXIDE_SCALE_FLOOR):
     """
-    Calculate error between UMF and target UMF
-    
+    How far one UMF sits from another, on the scale the whole system judges by
+
+    The headline number is "max_relative": the worst |actual - target| / s over
+    the oxides, with s = max(target, floor). That is the quantity the
+    feasibility LP minimizes, so a verdict drawn with it here and a verdict
+    drawn with it there are the same statement about the same recipe. One
+    exception, unreachable from the benchmark but real: with declared passengers
+    the LP drops the capped oxides out of its two-sided set and bounds them from
+    above only (feasibility.py, "passenger" bounds), so on such a call the LP
+    optimum is a bound on a SUBSET of what is measured here.
+
+    Oxides compared: set(target) | set(actual), minus NON_OXIDE_KEYS. The union
+    is the point - an oxide only the answer carries is a deviation from 0.0 and
+    is scored at the floor, exactly as the LP scores contamination, and an oxide
+    only the target names is a deviation from 0.0 in the other direction. Loss
+    on ignition is not an oxide and never enters a formula comparison.
+
+    "l2_absolute" is the RETIRED metric of solver_classic.calculate_umf_error,
+    kept as a diagnostic so that the number recorded next to a run keeps its
+    meaning across the change of gate. Reproducing it is the whole reason it is
+    here, so it is computed the way that function computes it and not the
+    convenient way:
+
+      * over the TARGET's oxides only, never the union. Do not "fix" that into
+        the union or every stored series becomes incomparable with itself;
+      * in the TARGET's own key order. Float addition is not associative, and
+        summing the same squares in sorted order instead moved umf_error in the
+        last bit on 27 of 300 corpus cases and rewrote 55 of 450 rows of
+        bench/quality_baseline.json. The order is load bearing.
+
+    Two documented departures from calculate_umf_error. A Loi/LOI key in the
+    target is counted by that function and ignored here, which weights_to_umf
+    cannot produce and only a hand-built formula can. The other one IS
+    reachable in production: an oxide whose value is not a finite number poisons
+    calculate_umf_error into returning NaN, while here it is left out and named
+    in "dropped". A single NaN in a material analysis reaches every oxide of the
+    result, because weights_to_umf divides by a flux sum that the NaN has
+    already contaminated - feasibility.py carries a "nonfinite_analysis" branch
+    for exactly that input - so "dropped" is a live path, not a defensive one.
+
+    NOTHING TO COMPARE IS NOT A PERFECT MATCH. When no oxide survives to be
+    compared, all three numbers are None rather than 0.0: a zero would be the
+    best possible value in every distribution the benchmark keeps, so a formula
+    that could not be read would rank ahead of one that was read and was right.
+    The same applies to a PARTIAL loss - any non-empty "dropped" makes the three
+    numbers None, because a maximum taken over some of the oxides is a lower
+    bound and belongs in no distribution with the honest ones. "per_oxide" still
+    holds whatever was computed, for the reader. Two different causes, told
+    apart by "dropped": empty means the two formulas had no oxides between them,
+    non-empty names what was thrown out.
+
     Args:
-        umf: Dictionary of UMF values
-        target_umf: Dictionary of target UMF values
-    
+        target_umf: the wanted formula, {oxide: value}
+        actual_umf: the formula that came back, {oxide: value}
+        floor: the scale floor; OXIDE_SCALE_FLOOR unless a caller is
+            deliberately measuring on another footing
+
     Returns:
-        UMF data: [{"oxide": umf_value, "target_umf_value": target_umf_value, "abs_error": abs_error}, ...]
-        Stats: {total_error, max_error}
+        {
+          'max_relative': worst relative deviation, None when nothing was
+              compared,
+          'worst_oxide': which oxide that was; None when nothing was compared
+              AND when nothing deviates, because naming an oxide that matched
+              exactly would read as a complaint about it,
+          'l2_absolute': the retired norm over the target's oxides, None when
+              nothing was compared,
+          'per_oxide': {oxide: {'target', 'actual', 'delta', 'relative'}},
+          'dropped': names skipped because a value was not a finite number,
+        }
+
+    "delta" IS SIGNED, and that is the point of it: delta = actual - target, so
+    positive means the formula holds MORE of the oxide than was asked for and
+    negative means less. "relative" is the magnitude, |delta| / max(target,
+    floor), so max_relative and worst_oxide are unaffected by the sign.
+    The convention is the one feasibility.check_feasibility() uses for the row
+    of the same name in ITS "per_oxide" (closest - value, positive when the
+    reachable point overshoots). The two blocks are NOT the same shape - that
+    one is a list of rows carrying "closest" and "reachable", this one is a
+    dictionary keyed by oxide carrying "actual" - and that is exactly why the
+    agreement matters rather than why it is easy: two blocks that name a field
+    the same way must not disagree about which way "too much" points, because a
+    reader holding one of them cannot tell from the field which one it is.
     """
-    all_oxides = set(list(umf.keys()) + list(target_umf.keys()))
-    data = []
-    total_error = 0
-    max_error = 0
-    
-    for oxide in all_oxides:
-        umf_value = umf.get(oxide, 0)
-        target_umf_value = target_umf.get(oxide, 0)
-        abs_error = abs(umf_value - target_umf_value)
-        
-        total_error += abs_error
-        max_error = max(max_error, abs_error)
-        
-        data.append({
-            "oxide": oxide,
-            "umf_value": umf_value,
-            "target_umf_value": target_umf_value,
-            "abs_error": abs_error
-        })
-    
-    data.sort(key=lambda x: x["abs_error"], reverse=True)
-    stats = {"total_error": total_error, "max_error": max_error}
-    
-    return data, stats
+    target_umf = target_umf or {}
+    actual_umf = actual_umf or {}
+
+    oxides = (set(target_umf) | set(actual_umf)) - set(NON_OXIDE_KEYS)
+
+    per_oxide = {}
+    dropped = []
+    max_relative = 0.0
+    worst_oxide = None
+
+    for oxide in sorted(oxides):
+        target_value = target_umf.get(oxide, 0.0)
+        actual_value = actual_umf.get(oxide, 0.0)
+
+        # A NaN or an infinity anywhere would make every comparison below false
+        # and the verdict silently "fine". Naming the oxide is the only honest
+        # answer: the caller can then decide whether a formula with a hole in it
+        # is a bug in the data or a bug upstream.
+        try:
+            target_value = float(target_value)
+            actual_value = float(actual_value)
+        except (TypeError, ValueError):
+            dropped.append(oxide)
+            continue
+        if not (math.isfinite(target_value) and math.isfinite(actual_value)):
+            dropped.append(oxide)
+            continue
+
+        # SIGNED, deliberately: see the docstring. The headline numbers are
+        # unchanged because "relative" takes the magnitude back off it.
+        delta = actual_value - target_value
+        relative = abs(delta) / max(target_value, floor)
+
+        per_oxide[oxide] = {
+            'target': target_value,
+            'actual': actual_value,
+            'delta': delta,
+            'relative': relative,
+        }
+
+        if worst_oxide is None or relative > max_relative:
+            max_relative = relative
+            worst_oxide = oxide
+
+    # Nothing survived, or something was thrown out: there is no number to
+    # report. See the docstring - a 0.0 here is the best possible value in
+    # every distribution downstream, which is the opposite of what happened.
+    if dropped or not per_oxide:
+        return {
+            'max_relative': None,
+            'worst_oxide': None,
+            'l2_absolute': None,
+            'per_oxide': per_oxide,
+            'dropped': dropped,
+        }
+
+    # A second pass, and it has to be one: this walks the TARGET in ITS OWN key
+    # order, which is what calculate_umf_error did. Accumulating inside the
+    # sorted loop above would be the same squares added in a different order,
+    # and that is a different double.
+    squared_error = 0.0
+    for oxide in target_umf:
+        entry = per_oxide.get(oxide)
+        if entry is None:
+            continue
+        squared_error += (entry['target'] - entry['actual']) ** 2
+
+    return {
+        'max_relative': float(max_relative),
+        'worst_oxide': worst_oxide if max_relative > 0.0 else None,
+        'l2_absolute': float(math.sqrt(squared_error)),
+        'per_oxide': per_oxide,
+        'dropped': dropped,
+    }
 
 def _warn_about_unknown_oxides(unknown_oxides, where):
     """

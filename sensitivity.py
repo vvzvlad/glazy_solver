@@ -55,6 +55,7 @@ import math
 import os
 
 from common import (
+    OXIDE_SCALE_FLOOR,
     load_molar_masses,
     oxides_classification,
     weights_to_umf,
@@ -63,10 +64,10 @@ from solver_classic import calculate_recipe_composition
 
 logger = logging.getLogger(__name__)
 
-# Same floor as the feasibility LP of TZ_SOLVER_V2.md, section 2.1: an oxide is
-# scored against max(its own value, 0.1), so that SiO2 ~ 3 and MgO ~ 0.05 are
-# compared on a common footing instead of the trace oxide taking over.
-OXIDE_SCALE_FLOOR = 0.1
+# The ranking below scores an oxide against max(its own value,
+# common.OXIDE_SCALE_FLOOR), imported above - the same footing the feasibility
+# LP of TZ_SOLVER_V2.md section 2.1 draws its verdict on, so that SiO2 ~ 3 and
+# MgO ~ 0.05 are compared alike instead of the trace oxide taking over.
 
 # Fallback for a material_tolerance.json that cannot be read at all, and for a
 # "default_relative" that is not a sane positive number. Deliberately the

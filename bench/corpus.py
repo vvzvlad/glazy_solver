@@ -88,10 +88,10 @@ import numpy as np
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import common
 from common import flux_oxides, load_materials, weights_to_umf
 from solver_classic import (
     calculate_recipe_composition,
-    calculate_umf_error,
     find_multiple_solutions,
 )
 from solver_iterative import find_best_recipe
@@ -166,8 +166,65 @@ FEASIBILITY_TOL = feasibility.DEFAULT_FEASIBILITY_TOL
 MAX_SOLUTIONS = 5
 CLASSIC_SEED = 42
 
-# Level 1 of the two-level criterion of 7.1: the chemistry has to match.
+# Level 1 of the two-level criterion of 7.1: the chemistry has to match. It is
+# the SAME NAME as the tolerance the LP above is called with, not a second
+# assignment out of the same constant, and that is the whole point of
+# TZ_SOLVER_V2.md 10.18. The benchmark's gate and the LP's reachability verdict
+# have to be the same statement about the same recipe - "no oxide is off by
+# more than 5% of its scale" - or the two contradict each other for no reason
+# but arithmetic. Two assignments would let somebody retune FEASIBILITY_TOL for
+# an experiment and silently get the two scales back; one assignment cannot.
+CHEMISTRY_TOL = FEASIBILITY_TOL
+
+# The RETIRED gate: the L2 norm of the ABSOLUTE deviations over the target's
+# oxides, accepted at 0.1. Kept only so that snapshots written before 10.18 can
+# still be scored by the rule they were written under - see chemistry_ok().
+# It is blind to exactly the oxides that matter most per unit: a cobalt of 0.02
+# dropped entirely costs 0.02 in a norm whose limit is 0.1, so a recipe missing
+# the colourant passed. Do not gate anything new on it.
 MAX_UMF_ERROR = 0.1
+
+# The gate a run is scored by, as a self describing block, so that a stored run
+# carries its own rule. Both writers embed this - bench/history.py under
+# "thresholds", bench/diff_baseline.py under "run" - and both read it back
+# through read_chemistry_gate() below. One definition: a snapshot and the
+# history line of the SAME run must not be able to disagree about how they were
+# scored.
+CHEMISTRY_GATE = {'metric': 'max_relative', 'tol': CHEMISTRY_TOL}
+
+# What the absence of that block means. Everything written before 10.18 was
+# scored by the retired absolute norm, and there is no other candidate: the
+# marker and the relative gate arrived together.
+RETIRED_CHEMISTRY_GATE = {'metric': 'umf_error', 'tol': MAX_UMF_ERROR}
+
+
+def read_chemistry_gate(block: Optional[Dict[str, Any]],
+                        fallback_tol: Optional[float] = None) -> Tuple[str, Optional[float]]:
+    """
+    The rule a stored run was scored by, as (metric, tolerance)
+
+    A marker that is PRESENT BUT UNREADABLE is not the same thing as an absent
+    one, and must not be read as one: absent means "written before the marker
+    existed, therefore the retired gate", while unreadable means "written by
+    something that meant to say which gate and failed". Reporting the retired
+    gate for the second case would claim knowledge nobody has, so it answers
+    ('unknown', None) instead - which compares unequal to every real gate,
+    including another ('unknown', None), so the comparability check errs
+    towards warning.
+
+    Args:
+        block: the run's own "chemistry_gate" block, or None when it has none
+        fallback_tol: the tolerance to report for a run with no block. Pass the
+            run's OWN recorded threshold where there is one - a record that
+            stored max_umf_error should be read with the number it stored, not
+            with today's - and leave it None to fall back to the constant.
+    """
+    if block is None:
+        return (RETIRED_CHEMISTRY_GATE['metric'],
+                RETIRED_CHEMISTRY_GATE['tol'] if fallback_tol is None else fallback_tol)
+    if isinstance(block, dict) and block.get('metric'):
+        return str(block['metric']), block.get('tol')
+    return 'unknown', None
 
 # The raw components a run is measured by, and the direction that counts as
 # better. Everything is "smaller is better" except the smallest portion of a
@@ -178,6 +235,7 @@ MAX_UMF_ERROR = 0.1
 # diff, which profiles them over the intersection of two runs, and the run
 # history (bench/history.py), which profiles them over one run.
 METRICS: Tuple[Tuple[str, str], ...] = (
+    ('max_relative', 'lower'),
     ('umf_error', 'lower'),
     ('count', 'lower'),
     ('cost_abs', 'lower'),
@@ -869,6 +927,9 @@ def run_case(case: Dict[str, Any], engine: str = ENGINE_ITERATIVE,
         'status': 'failed: not run',
         'seconds': 0.0,
         'umf_error': None,
+        'max_relative': None,
+        'worst_oxide': None,
+        'dropped_oxides': None,
         'count': None,
         'cost_abs': None,
         'assembly_score': None,
@@ -907,12 +968,29 @@ def run_case(case: Dict[str, Any], engine: str = ENGINE_ITERATIVE,
 
     materials = quality_materials(case, scenario)
     actual_umf = weights_to_umf(calculate_recipe_composition(materials, recipe))
-    umf_error = float(calculate_umf_error(case['target_umf'], actual_umf))
+    # One measurement, two readings of it: "max_relative" is the gate and
+    # "umf_error" is the retired L2 norm, kept as a diagnostic so the stored
+    # series stays readable across the change of gate (10.18).
+    deviation = common.umf_deviation(case['target_umf'], actual_umf)
+    # An oxide whose value is not a finite number was left OUT of the comparison
+    # rather than compared, so the verdict below is drawn on an incomplete
+    # formula and cannot be a pass. The retired metric failed closed here by
+    # accident - calculate_umf_error returned NaN and "nan <= 0.1" is False -
+    # and the replacement has to fail closed on purpose. umf_deviation reports
+    # both numbers as None in that case, which keeps the row out of the metric
+    # distributions instead of entering it at a flattering zero.
+    dropped_oxides = list(deviation['dropped'])
+    umf_error = None if deviation['l2_absolute'] is None else float(deviation['l2_absolute'])
+    max_relative = (None if deviation['max_relative'] is None
+                    else float(deviation['max_relative']))
 
     quality = qm.solution_quality(recipe, case['original'], materials, prices=qm.load_prices())
 
     result.update({
         'umf_error': umf_error,
+        'max_relative': max_relative,
+        'worst_oxide': deviation['worst_oxide'],
+        'dropped_oxides': dropped_oxides,
         'count': len(recipe),
         'cost_abs': quality['cost']['cost_abs'],
         'assembly_score': quality['assembly_score']['value'],
@@ -921,7 +999,8 @@ def run_case(case: Dict[str, Any], engine: str = ENGINE_ITERATIVE,
         'rounding_drift': quality['rounding_drift']['value'],
         'cond': quality['conditioning']['cond'],
         'failures': list(quality['failures']),
-        'chemistry_ok': umf_error <= MAX_UMF_ERROR,
+        'chemistry_ok': ((not dropped_oxides) and max_relative is not None
+                         and max_relative <= CHEMISTRY_TOL),
         'quality_ok': (not quality['failures']) if scenario == SCENARIO_A else None,
         # Kept for the failure log: which side of a gated metric actually moved
         'detail': {
@@ -978,15 +1057,46 @@ def chemistry_ok(row: Dict[str, Any]) -> bool:
     """
     Whether one snapshot row passed level 1 of the two-level criterion
 
-    run_case() records the verdict as "chemistry_ok". Snapshots written before
-    that field entered the baseline carry only the error, so the verdict is
-    re-derived from it with TODAY's MAX_UMF_ERROR - which is the honest thing to
-    do and also the reason the threshold is written into every history record:
-    move it and the re-derived shares of the old runs move with it.
+    Four rungs. The first is a veto and the other three are the ladder, and it
+    is worth reading what each one is actually FOR, because the obvious reading
+    is wrong in a way that matters:
+
+      0. VETO: "dropped_oxides" is non-empty. An oxide left out of the
+         comparison means the formula was never compared in full, and there is
+         no pass to be had from an incomplete comparison - not even a recorded
+         one. This sits ABOVE the recorded verdict deliberately: a row whose
+         verdict was drawn before the fail-closed rule existed, or by some
+         other writer, must not be able to smuggle a pass past it;
+      1. the recorded "chemistry_ok" field. This is the rung that fires for
+         every snapshot the repository has ever committed, including the
+         pre-10.18 baselines of f972201 and 3101b1f, because run_case() has
+         written the field on every row - True or False - since long before the
+         gate moved. So THE LADDER DOES NOT RECONCILE GATES: it hands back
+         whatever verdict the run drew, under whatever rule was in force when
+         it ran, and a caller comparing two snapshots has to check their
+         recorded gate itself. bench/diff_baseline.py does; do likewise;
+      2. "max_relative" against CHEMISTRY_TOL. Unreachable from any snapshot
+         this tree can produce - the field and the verdict were added by the
+         same change - and kept only for a hand-built row and for a future
+         snapshot that stores components without a verdict;
+      3. "umf_error" against MAX_UMF_ERROR, the RETIRED absolute gate. Only the
+         baselines written before "chemistry_ok" existed at all (a463647,
+         096a12d) get this far. Scoring them by the rule they were written
+         under is the honest thing to do; scoring them by today's would invent
+         a number the run never measured.
+
+    Moving CHEMISTRY_TOL therefore does NOT move the re-derived share of a
+    stored run: rung 1 has already answered. The thresholds are written into
+    every history record for the reader, not for the arithmetic.
     """
+    if row.get('dropped_oxides'):
+        return False
     recorded = row.get('chemistry_ok')
     if recorded is not None:
         return bool(recorded)
+    relative = row.get('max_relative')
+    if relative is not None:
+        return float(relative) <= CHEMISTRY_TOL
     error = row.get('umf_error')
     if error is None:
         return False
@@ -1019,18 +1129,37 @@ def misclassification(row: Dict[str, Any]) -> Optional[str]:
     Each disagreement is a bug report against one of the two, and which one has
     to be read case by case, so the row is named rather than counted:
 
-      "reachable_unsolved"   the LP promised a recipe and the solver did not
-                             find one. Either the search is missing something
-                             the LP can see, or the LP is over-promising
+      "reachable_unsolved"   the LP proved a point inside the tolerance on
+                             every oxide exists and the search did not find it.
+                             That is a bug report against the search, and since
+                             10.18 it is nothing else: 4 of the 100 scenario B
+                             cases
       "unreachable_solved"   the LP said no recipe exists and the solver
-                             produced one that passes the chemistry gate anyway.
-                             The two verdicts are not measured on the same
-                             scale - the LP bounds the worst RELATIVE deviation
-                             of each oxide, the gate is an RMS of the ABSOLUTE
-                             deviations over the target's oxides - so a target
-                             whose only unreachable oxide is a colourant at UMF
-                             0.02 is honestly out of reach and honestly inside
-                             an RMS of 0.1 at the same time
+                             produced one that passes the chemistry gate anyway
+
+    Since 10.18 the two sides are the SAME measurement at the SAME tolerance -
+    the worst relative deviation against max(target, OXIDE_SCALE_FLOOR), at
+    FEASIBILITY_TOL - so "unreachable_solved" is no longer a disagreement about
+    scales: it is a soundness check rather than a quality number, and it reads
+    0 of 100.
+
+    It is not an infallible one, and the margin is worth knowing before reading
+    a nonzero value as an LP bug. The LP's optimum is a lower bound on the
+    continuous problem, but the recipe is scored on a UMF that weights_to_umf
+    ROUNDED to three decimals - a step of 0.001, which at the scale floor is
+    0.01, a fifth of the whole tolerance - and the LP verdict itself carries
+    BOUND_EPS of slack. A rounded recipe can therefore read 0.0499 where the
+    continuous optimum is 0.0501 with nothing wrong anywhere; that the margin is
+    live and not theoretical shows in the data, where two of the six scenario B
+    passes sit at max_relative 0.049999999999999996. So: a nonzero count here is
+    either an unsound LP or a case on the boundary within the rounding quantum,
+    and which one has to be read case by case.
+
+    Before 10.18 the gate was an RMS of the ABSOLUTE deviations over the
+    target's oxides at 0.1, and 29 of the same 100 cases landed here: a target
+    whose only unreachable oxide is a colourant at UMF 0.02 was honestly out of
+    reach and honestly inside an RMS of 0.1 at the same time. Those were never
+    disagreements, they were two different questions.
 
     None when they agree, and None for scenario A, which never asks.
     """
@@ -1138,43 +1267,91 @@ def engine_profile(cases: Sequence[Dict[str, Any]], engine: str,
     }
 
 
-def _reachability_profile(rows: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def reachable_rows(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    The scenario B half of a profile: the verdict counts and what came of them
+    The rows the LP proved reachable - the denominator of the scenario B gate
+
+    "feasible is True" and nothing looser: False is an honest refusal and None
+    is an LP that did not answer, and neither belongs in a set that means "the
+    targets we know were there to be hit".
+    """
+    return [row for row in rows if row.get('feasible') is True]
+
+
+def solved_reachable_rows(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    The reachable rows the search actually reached, by the chemistry gate
+
+    THE definition, in one place. It had three copies - this module's profile,
+    diff_baseline's reachability block and the corpus test's own gate - and
+    they drifted exactly where copies do: the diff's never computed the share
+    at all, so the --check gate reading it could never fire, and the test read
+    the raw "chemistry_ok" field where the other two went through
+    chemistry_ok(), which scores an older row by the rule it was written under.
+    Every caller now asks the question here.
+    """
+    return [row for row in reachable_rows(rows) if chemistry_ok(row)]
+
+
+def reachability_counts(rows: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    The verdict split of one scenario B run, as plain numbers
 
     None when no row carries a verdict at all, which is what scenario A looks
     like. An empty feasibility field is not the same as "everything was
     reachable" and must not be rendered as one.
+
+    "solved_among_reachable_share" is None - never 0.0 - when the LP proved
+    nothing reachable: "the search reached none of them" and "the question does
+    not arise" are different statements and only the first one is a failure.
+    "accounted_share" is None on an empty sample for the same reason.
     """
-    judged = [row for row in rows if 'feasible' in row and row.get('feasible') is not None]
+    judged = [row for row in rows if row.get('feasible') is not None]
     if not judged:
         return None
 
     total = len(rows)
-    reachable = [row for row in judged if row.get('feasible') is True]
-    unreachable = [row for row in judged if row.get('feasible') is False]
-    undecided = total - len(judged)
-
+    reachable = reachable_rows(judged)
+    solved_reachable = solved_reachable_rows(judged)
     accounted = [row for row in rows if accounted_ok(row)]
-    solved_reachable = [row for row in reachable if chemistry_ok(row)]
-    misclassified = [row for row in rows if misclassification(row)]
 
     return {
+        'cases': total,
         'reachable': len(reachable),
-        'unreachable': len(unreachable),
-        'undecided': undecided,
+        'unreachable': sum(1 for row in judged if row.get('feasible') is False),
+        'undecided': total - len(judged),
         'accounted': len(accounted),
         'accounted_share': (len(accounted) / total) if total else None,
         'solved_among_reachable': len(solved_reachable),
         'solved_among_reachable_share': (
             (len(solved_reachable) / len(reachable)) if reachable else None),
+    }
+
+
+def _reachability_profile(rows: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    The scenario B half of a profile: the shared counts plus the disputes
+
+    The counts come from reachability_counts() rather than from a second
+    implementation of the same rule; what is added here is what only a LOG line
+    wants - the two disputes as counts, and the tolerance the verdict was drawn
+    at. diff_baseline adds the same two as ID LISTS instead, under names that
+    say so, because a diff has to point at the case that moved.
+    """
+    counts = reachability_counts(rows)
+    if counts is None:
+        return None
+
+    misclassified = [row for row in rows if misclassification(row)]
+    counts.update({
         'misclassified': len(misclassified),
         'reachable_unsolved': sum(
             1 for row in rows if misclassification(row) == 'reachable_unsolved'),
         'unreachable_solved': sum(
             1 for row in rows if misclassification(row) == 'unreachable_solved'),
         'tol': FEASIBILITY_TOL,
-    }
+    })
+    return counts
 
 
 # --------------------------------------------------------------------------
