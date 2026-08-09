@@ -1020,8 +1020,9 @@ class TestRecipeSensitivity(unittest.TestCase):
         """
         The whole point of the metric: lever TIMES uncertainty
 
-        Quartz has the biggest lever on the SiO2 of this recipe in raw UMF units
-        (+0.011 per 1% of its analysis against +0.003 for the B2O3 of ulexite),
+        Of the SiO2 cells quartz has the largest lever in raw UMF units (+0.011
+        per 1% of its analysis against +0.003 for the B2O3 of ulexite; the
+        largest lever across ALL cells is wollastonite's CaO at -0.017),
         but its analysis (99-100% SiO2) never lies, while the hydration of
         ulexite moves the B2O3 it brings.
 

@@ -27,10 +27,13 @@
 # rather than argued from first principles. With the shipped tolerances ulexite
 # leads at 0.700. With one flat 0.05 for everything - the answer of a missing
 # tolerance file - it falls to 0.275 and to third place, behind wollastonite at
-# 0.327 and nepheline at 0.321. Quartz sits last in BOTH, 0.003 and 0.027: its
-# lever on the SiO2 of this recipe is the biggest in raw UMF units (+0.011 per 1%
-# of its analysis, against +0.003 for the B2O3 of ulexite), but a contribution is
-# scored against the scale of the oxide it moves and SiO2 is already 3.15 there.
+# 0.327 and nepheline at 0.321. Quartz sits last in BOTH, 0.003 and 0.027: of the
+# SiO2 cells it has the largest lever in raw UMF units (+0.011 per 1% of its
+# analysis, against +0.010 for nepheline and +0.003 for the B2O3 of ulexite), but
+# a contribution is scored against the scale of the oxide it moves and SiO2 is
+# already 3.15 there. Across ALL cells the largest lever is wollastonite's CaO at
+# -0.017, which moves SiO2 by inflating the unity basis rather than by carrying
+# silica - one more reason not to read a lever without the scale beside it.
 # So "a ranking by lever alone names quartz" is not what happens here and is not
 # the argument for this metric; the argument is that the lever alone drops the
 # material with the least trustworthy analysis to third.
