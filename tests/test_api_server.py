@@ -182,18 +182,49 @@ class TestSensitivityEndpoint(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.get_json()['error'], 'no_fluxes')
 
-    def test_material_outside_an_explicit_inventory_is_reported(self):
+    def test_an_infinite_share_is_not_answered_with_nan(self):
+        """
+        1e400 is valid JSON and Python parses it into inf, which used to travel
+        through the whole calculation and come back as "NaN" strings sitting in
+        fields documented as numbers - under error: null
+        """
+        response = self.client.post(
+            '/api/sensitivity',
+            data='{"recipe": {"Нефелин-сиенит VR13": 1e400, "Мел, CaCO3": 20}}',
+            content_type='application/json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('NaN', response.get_data(as_text=True))
+
+        body = response.get_json()
+        self.assertIsNone(body['error'])
+        self.assertEqual({row['material'] for row in body['by_material']}, {"Мел, CaCO3"})
+        self.assertTrue(body['warnings'])
+
+    def test_an_inventory_parameter_no_longer_restricts_the_analysis(self):
+        """
+        The parameter is gone: all it could do was drop materials of the recipe,
+        and then "umf" reported the formula of what was left instead of the
+        formula the caller asked about
+        """
         response = self.client.post('/api/sensitivity', json={
             "recipe": self.RECIPE,
             "inventory": ["Нефелин-сиенит VR13", "Кварцевая мука Кварцверке W12"]})
 
         self.assertEqual(response.status_code, 200)
         body = response.get_json()
-        self.assertEqual({row['material'] for row in body['by_material']},
-                         {"Нефелин-сиенит VR13", "Кварцевая мука Кварцверке W12"})
-        self.assertTrue(body['warnings'])
+        self.assertEqual({row['material'] for row in body['by_material']}, set(self.RECIPE))
+        self.assertEqual(body['warnings'], [])
 
-    def test_without_an_inventory_the_whole_database_is_searched(self):
+    def test_an_inventory_of_the_wrong_type_is_ignored_instead_of_crashing(self):
+        response = self.client.post('/api/sensitivity',
+                                    json={"recipe": self.RECIPE, "inventory": 5})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual({row['material'] for row in response.get_json()['by_material']},
+                         set(self.RECIPE))
+
+    def test_the_whole_database_is_searched(self):
         """A recipe names its own materials; being out of stock is not a reason to drop one"""
         recipe = {"Оксид марганца": 50, "Каолин КЖФ-1": 30, "Кварцевая мука Кварцверке W12": 20}
 

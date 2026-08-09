@@ -74,6 +74,24 @@ OXIDE_SCALE_FLOOR = 0.1
 # still ranks by lever, instead of failing the request.
 FALLBACK_RELATIVE = 0.05
 
+# ... but that degradation changes the ranking qualitatively - on the reference
+# clear glaze ulexite drops from 0.70 to 0.27 and stops being the leader - and a
+# flat sigma leaves exactly the "by lever alone" answer the header of this file
+# calls useless. A log line is not enough: the caller sees a perfectly valid
+# looking response and cannot tell the two apart, so the fact travels in
+# "warnings" as well.
+DEGRADED_TOLERANCES_WARNING = (
+    "база допусков недоступна, все материалы считаются одинаково надёжными — "
+    "ранжирование только по плечу")
+
+# The same for a recipe no material of which can move the formula at all: the
+# shares are then honestly zero and do NOT sum to 1.0, so a consumer normalizing
+# by their sum would divide by zero without ever being told why.
+ZERO_CONTRIBUTION_WARNING = (
+    "формулу рецепта не сдвигает ни один материал: unity-базис UMF задан "
+    "единственным оксидом, любое отклонение паспорта уходит в сам базис. "
+    "Все доли равны нулю и в сумме дают 0, а не 1.0")
+
 # Below this share of fluxes among all the moles of the recipe, the unity basis
 # of the UMF rests on traces and the whole formula is numerically unstable. Real
 # glazes sit around 0.19-0.21 (measured on the reference recipes); the manganese
@@ -96,8 +114,6 @@ AFFECTS_MIN_SHARE = 0.05
 # Decimals kept on a material share, see the comment at the normalization step
 SHARE_DIGITS = 9
 
-_TOLERANCES_CACHE = None
-
 
 def _default_tolerances_path():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -108,21 +124,27 @@ def load_tolerances(path=None):
     """
     Read database/material_tolerance.json with class defaults and overrides
 
+    The file is re-read on every call and deliberately not cached, unlike the
+    molar masses of common.py: material_tolerance.md tells the user to edit it
+    by hand ("set a small sigma and the material drops down the ranking"), and
+    a process wide cache would make that edit take effect only after a restart
+    of the server. It is ~1.4 KB against a full UMF recalculation per (material,
+    oxide) pair, so the read is not what this endpoint spends its time on.
+
     Args:
-        path: optional path to an alternative tolerance file; the default file
-            is cached in memory, an explicit path is always read from disk
+        path: optional path to an alternative tolerance file
 
     Returns:
-        dictionary {"default_relative": float, "classes": {...}, "materials": {...}}
+        dictionary {"default_relative": float, "classes": {...}, "materials": {...},
+        "degraded": bool}; "degraded" is True when the file could not be read and
+        every material fell back to one flat sigma
     """
-    global _TOLERANCES_CACHE
+    return _read_tolerances(path if path is not None else _default_tolerances_path())
 
-    if path is None:
-        if _TOLERANCES_CACHE is None:
-            _TOLERANCES_CACHE = _read_tolerances(_default_tolerances_path())
-        return _TOLERANCES_CACHE
 
-    return _read_tolerances(path)
+def _fallback_tolerances():
+    return {"default_relative": FALLBACK_RELATIVE, "classes": {}, "materials": {},
+            "degraded": True}
 
 
 def _read_tolerances(path):
@@ -131,18 +153,20 @@ def _read_tolerances(path):
             data = json.load(f)
     except (OSError, ValueError) as exc:
         # A broken tolerance file must not take the whole endpoint down: the
-        # ranking is still meaningful with one flat sigma for everything.
+        # ranking is still meaningful with one flat sigma for everything - as
+        # long as the answer says so, see DEGRADED_TOLERANCES_WARNING.
         logger.warning(f"material_tolerance_unreadable: {path}: {exc}")
-        return {"default_relative": FALLBACK_RELATIVE, "classes": {}, "materials": {}}
+        return _fallback_tolerances()
 
     if not isinstance(data, dict):
         logger.warning(f"material_tolerance_malformed: {path}: expected an object")
-        return {"default_relative": FALLBACK_RELATIVE, "classes": {}, "materials": {}}
+        return _fallback_tolerances()
 
     return {
         "default_relative": _positive_float(data.get('default_relative'), FALLBACK_RELATIVE),
         "classes": data.get('classes') if isinstance(data.get('classes'), dict) else {},
         "materials": data.get('materials') if isinstance(data.get('materials'), dict) else {},
+        "degraded": False,
     }
 
 
@@ -240,7 +264,8 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
         recipe: dictionary {material_name: weight_percent}
         materials: list of material dictionaries to resolve the names against
         tolerances: optional dictionary from load_tolerances(); read from the
-            default file when omitted
+            default file when omitted. A "degraded" one turns into the first
+            warning of the answer: the numbers are then a ranking by lever only
 
     Returns:
         {
@@ -251,11 +276,18 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
           "warnings": [str, ...],
           "error": None                   # a code when nothing could be computed
         }
+
+        The shares of "by_material" sum to 1.0, except when no material can move
+        the formula at all - then every share is 0.0 and ZERO_CONTRIBUTION_WARNING
+        is in "warnings".
     """
     if tolerances is None:
         tolerances = load_tolerances()
 
     warnings = []
+
+    if tolerances.get('degraded'):
+        warnings.append(DEGRADED_TOLERANCES_WARNING)
 
     if not recipe:
         return _empty_result(warnings, "empty_recipe", "the recipe carries no materials")
@@ -276,6 +308,16 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
         except (TypeError, ValueError):
             warnings.append(f"«{material_name}»: доля «{percentage}» не число, материал пропущен")
             logger.warning(f"sensitivity_invalid_percentage: {material_name}")
+            continue
+
+        if not math.isfinite(amount):
+            # 1e400 is valid JSON and Python parses it into inf; the "amount <= 0"
+            # test below lets both inf and nan through (nan <= 0 is False) and
+            # every number downstream would come out as nan, which serializes
+            # into a "NaN" string sitting in a documented numeric field.
+            warnings.append(f"«{material_name}»: доля «{percentage}» не конечное число, "
+                            f"материал пропущен")
+            logger.warning(f"sensitivity_nonfinite_percentage: {material_name}")
             continue
 
         material = by_name.get(material_name)
@@ -326,6 +368,11 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
 
     base_umf = weights_to_umf(base_composition, round_digits=None)
     if not base_umf:
+        # Unreachable at the current order of checks: the flux check above only
+        # passes when at least one flux oxide is both in molar_masses.json and
+        # carried in a non-zero amount, and weights_to_umf keeps every such
+        # oxide. Kept as a guard, and deliberately NOT advertised in API.md as a
+        # response a caller can receive.
         return _empty_result(warnings, "empty_umf",
                              "ни один оксид рецепта не найден в таблице молярных масс")
 
@@ -399,14 +446,18 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
     # A total of zero means nothing in the recipe can move the formula at all:
     # either every material has an empty formula, or the only oxide the recipe
     # carries is a flux and so IS the unity basis by itself (a recipe of pure
-    # copper chloride is always exactly CuO 1.0). Every share is then honestly
-    # zero and the "shares sum to 1" invariant does not apply.
+    # chalk is always exactly CaO 1.0). Every share is then honestly zero and
+    # the "shares sum to 1" invariant does not apply - which is worth saying out
+    # loud, because a consumer normalizing by that sum divides by zero.
     #
     # SHARE_DIGITS and not something shorter because the shares are documented
     # to sum to 1.0 within 1e-6: rounding to 6 decimals lets the per-row error
     # accumulate to 3e-6 on a ten material recipe (measured), which would break
     # exactly the invariant a consumer would rely on.
     total = sum(row["contribution"] for row in material_rows)
+    if total <= 0:
+        warnings.append(ZERO_CONTRIBUTION_WARNING)
+        logger.warning("sensitivity_zero_total_contribution: no material moves the UMF")
     by_material = [{
         "material": row["material"],
         "share": round(row["contribution"] / total, SHARE_DIGITS) if total > 0 else 0.0,

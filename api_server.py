@@ -240,8 +240,13 @@ def solve_recipe():
         return jsonify({"error": "server_error", "message": str(e)}), 500
 
 # HTTP status for a recipe that is syntactically fine but cannot be analysed -
-# the same code /api/glazy_import already uses for a recipe without an analysis
-SENSITIVITY_UNPROCESSABLE_ERRORS = ('no_fluxes', 'no_known_materials', 'empty_composition', 'empty_umf')
+# the same code /api/glazy_import already uses for a recipe without an analysis.
+# 'empty_recipe' and 'empty_umf' are guards of sensitivity.py that no request can
+# reach through this endpoint (an empty recipe is answered with missing_recipe
+# above, and a recipe that passes the flux check always has a UMF); they are
+# listed so that a future path to them lands on 422 and not on the 400 default.
+SENSITIVITY_UNPROCESSABLE_ERRORS = ('no_fluxes', 'no_known_materials', 'empty_composition',
+                                    'empty_recipe', 'empty_umf')
 
 
 @app.route('/api/sensitivity', methods=['POST'])
@@ -256,16 +261,14 @@ def sensitivity():
 
     POST JSON parameters:
     {
-        "recipe": {"Нефелин-сиенит VR13": 30.2, ...},  // required, weight percent
-        "inventory": ["Material1", ...]  // optional. Restricts the lookup of the
-                                         // recipe material names to that list.
-                                         // Omitted or null means the WHOLE
-                                         // database: a recipe names its own
-                                         // materials, there is nothing to search
-                                         // for, and silently dropping a material
-                                         // that is merely out of stock would
-                                         // change the formula being analysed.
+        "recipe": {"Нефелин-сиенит VR13": 30.2, ...}  // required, weight percent
     }
+
+    There is no "inventory" parameter here, unlike /api/solve: the names are
+    always resolved against the WHOLE database. A recipe names its own materials
+    exactly, so there is nothing to search for, and dropping one of them for
+    being out of stock would silently analyse a different formula than the one
+    reported in "umf".
 
     Returns:
     {
@@ -295,13 +298,9 @@ def sensitivity():
                 "message": "recipe parameter is required and must be a non-empty object"
             }), 400
 
-        inventory_data = data.get('inventory', None)
-
         materials = load_materials(only_inventory=False, priority=True)
-        if inventory_data is not None:
-            materials = filter_materials_by_inventory(materials, resolve_inventory(inventory_data))
 
-        logger.info(f"sensitivity requested for {len(recipe)} materials, inventory_size={len(inventory_data) if inventory_data is not None else 'all'}")
+        logger.info(f"sensitivity requested for {len(recipe)} materials")
 
         result = recipe_sensitivity(recipe, materials)
 

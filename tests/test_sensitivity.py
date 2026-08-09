@@ -9,6 +9,9 @@
 # pylance: disable=reportMissingImports, reportMissingModuleSource
 
 import copy
+import json
+import math
+import tempfile
 import unittest
 import sys
 import os
@@ -17,7 +20,11 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common import load_materials, weights_to_umf
 from solver_classic import calculate_recipe_composition
-from sensitivity import load_tolerances, material_sigma, recipe_sensitivity
+from sensitivity import (FALLBACK_RELATIVE, load_tolerances, material_sigma,
+                         recipe_sensitivity)
+
+# A path that cannot exist, to stand in for an unreadable tolerance database
+MISSING_TOLERANCES = os.path.join(tempfile.gettempdir(), 'no_such_material_tolerance.json')
 
 # The reference "Прозрачная глазурь △6" of database/recipes.json, the same one
 # tests/test_common.py checks the UMF of
@@ -91,6 +98,92 @@ class TestMaterialSigma(unittest.TestCase):
 
     def test_empty_formula_gives_no_sigmas(self):
         self.assertEqual(material_sigma(self.materials[EMPTY_FORMULA_MATERIAL], self.tolerances), {})
+
+
+class TestToleranceLoading(unittest.TestCase):
+    """How the file is read: no cache, and an unusable file is reported"""
+
+    def write_tolerances(self, payload):
+        handle = tempfile.NamedTemporaryFile('w', suffix='.json', encoding='utf-8', delete=False)
+        self.addCleanup(os.unlink, handle.name)
+        with handle:
+            handle.write(payload if isinstance(payload, str) else json.dumps(payload))
+        return handle.name
+
+    def test_the_shipped_file_is_not_degraded(self):
+        self.assertFalse(load_tolerances()["degraded"])
+
+    def test_an_edit_of_the_file_takes_effect_without_a_restart(self):
+        """
+        material_tolerance.md tells the user to edit the file by hand ("set a
+        small sigma and the material drops down the ranking"). A process wide
+        cache would silently postpone every such edit to the next restart.
+        """
+        path = self.write_tolerances({"default_relative": 0.05, "classes": {"clay": 0.05},
+                                      "materials": {}})
+        self.assertEqual(load_tolerances(path)["classes"]["clay"], 0.05)
+
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump({"default_relative": 0.05, "classes": {"clay": 0.30}, "materials": {}}, f)
+
+        self.assertEqual(load_tolerances(path)["classes"]["clay"], 0.30)
+
+    def test_a_caller_mutating_the_result_cannot_corrupt_the_next_read(self):
+        tolerances = load_tolerances()
+        tolerances["classes"]["clay"] = 999
+        tolerances["default_relative"] = 999
+
+        fresh = load_tolerances()
+        self.assertNotEqual(fresh["classes"].get("clay"), 999)
+        self.assertNotEqual(fresh["default_relative"], 999)
+
+    def test_a_missing_file_degrades_to_one_flat_sigma_and_says_so(self):
+        with self.assertLogs('sensitivity', level='WARNING'):
+            tolerances = load_tolerances(MISSING_TOLERANCES)
+
+        self.assertTrue(tolerances["degraded"])
+        self.assertEqual(tolerances["classes"], {})
+        self.assertEqual(tolerances["materials"], {})
+        self.assertEqual(tolerances["default_relative"], FALLBACK_RELATIVE)
+
+    def test_a_file_that_is_not_json_degrades_the_same_way(self):
+        with self.assertLogs('sensitivity', level='WARNING'):
+            self.assertTrue(load_tolerances(self.write_tolerances("{not json at all"))["degraded"])
+
+    def test_a_json_file_that_is_not_an_object_degrades_the_same_way(self):
+        with self.assertLogs('sensitivity', level='WARNING'):
+            self.assertTrue(load_tolerances(self.write_tolerances([0.05, 0.10]))["degraded"])
+
+
+class TestDegradedTolerances(unittest.TestCase):
+    """An unavailable tolerance database changes the answer, so it must be visible in it"""
+
+    def setUp(self):
+        self.materials = all_materials()
+        with self.assertLogs('sensitivity', level='WARNING'):
+            self.degraded = load_tolerances(MISSING_TOLERANCES)
+
+    def test_the_degradation_reaches_the_warnings_and_not_only_the_log(self):
+        result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, self.degraded)
+
+        self.assertIsNone(result["error"])
+        self.assertTrue(any("база допусков недоступна" in warning for warning in result["warnings"]),
+                        f"expected a degradation warning, got {result['warnings']}")
+
+    def test_the_ranking_really_does_change_without_the_file(self):
+        """
+        Why the warning is not cosmetic: with flat sigmas the answer is the
+        ranking by lever alone, the one the module exists to avoid. Ulexite
+        stops being the leader and nothing in the response would show it.
+        """
+        with_file = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials)
+        flat = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, self.degraded)
+
+        self.assertEqual(with_file["by_material"][0]["material"], "Улексит (Химпэк)")
+        self.assertNotEqual(flat["by_material"][0]["material"], "Улексит (Химпэк)")
+
+    def test_a_readable_database_adds_no_such_warning(self):
+        self.assertEqual(recipe_sensitivity(TRANSPARENT_RECIPE, self.materials)["warnings"], [])
 
 
 class TestRecipeSensitivity(unittest.TestCase):
@@ -194,6 +287,51 @@ class TestRecipeSensitivity(unittest.TestCase):
         self.assertAlmostEqual(result["by_material"][0]["share"], 1.0, delta=1e-6)
         self.assertTrue(result["per_oxide"])
 
+    def assert_nonfinite_share_is_skipped(self, amount):
+        recipe = dict(TRANSPARENT_RECIPE)
+        recipe["Мел, CaCO3"] = amount
+
+        result = recipe_sensitivity(recipe, self.materials)
+
+        self.assertIsNone(result["error"])
+        self.assertNotIn("Мел, CaCO3", {row["material"] for row in result["by_material"]})
+        self.assertTrue(any("Мел, CaCO3" in warning for warning in result["warnings"]),
+                        f"expected a skip warning, got {result['warnings']}")
+
+        for item in result["per_oxide"]:
+            self.assertTrue(math.isfinite(item["value"]), f"{item['oxide']} value is not finite")
+            self.assertTrue(math.isfinite(item["sigma"]), f"{item['oxide']} sigma is not finite")
+        for row in result["by_material"]:
+            self.assertTrue(math.isfinite(row["share"]), f"{row['material']} share is not finite")
+
+        # The rest of the recipe is answered exactly as if the bad row were absent
+        baseline = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials)
+        self.assertEqual(result["umf"], baseline["umf"])
+        self.assertEqual([row["material"] for row in result["by_material"]],
+                         [row["material"] for row in baseline["by_material"]])
+
+    def test_infinite_share_is_skipped_instead_of_poisoning_the_answer(self):
+        """1e400 is valid JSON and Python parses it into inf"""
+        self.assert_nonfinite_share_is_skipped(float('inf'))
+
+    def test_nan_share_is_skipped_too(self):
+        """The "amount <= 0" filter cannot catch this one: nan <= 0 is False"""
+        self.assert_nonfinite_share_is_skipped(float('nan'))
+
+    def test_a_umf_of_a_single_oxide_warns_that_the_shares_do_not_sum_to_one(self):
+        """
+        Chalk alone is exactly CaO 1.0 whatever its analysis says: the only
+        oxide of the recipe IS the unity basis. Every share is then honestly
+        zero, and a consumer normalizing by their sum divides by zero.
+        """
+        result = recipe_sensitivity({"Мел, CaCO3": 100}, self.materials)
+
+        self.assertIsNone(result["error"])
+        self.assertEqual([row["share"] for row in result["by_material"]], [0.0])
+        self.assertTrue(any("не сдвигает ни один материал" in warning
+                            for warning in result["warnings"]),
+                        f"expected a zero contribution warning, got {result['warnings']}")
+
     def test_unknown_material_is_skipped_with_a_warning(self):
         result = recipe_sensitivity({"Нефелин-сиенит VR13": 70, "Философский камень": 30},
                                     self.materials)
@@ -276,6 +414,70 @@ class TestSigmaMonotonicity(unittest.TestCase):
         result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
 
         self.assertEqual(result["by_material"][0]["material"], "Кварцевая мука Кварцверке W12")
+
+
+class TestNoSideEffects(unittest.TestCase):
+    """
+    The module perturbs analyses for a living and the material records it gets
+    are the shared ones a caller may keep using afterwards
+    """
+
+    def test_the_materials_list_comes_back_untouched(self):
+        materials = all_materials()
+        before = copy.deepcopy(materials)
+
+        recipe_sensitivity(TRANSPARENT_RECIPE, materials)
+
+        self.assertEqual(materials, before)
+
+    def test_the_recipe_comes_back_untouched(self):
+        recipe = dict(TRANSPARENT_RECIPE)
+        before = copy.deepcopy(recipe)
+
+        recipe_sensitivity(recipe, all_materials())
+
+        self.assertEqual(recipe, before)
+
+
+class TestIncrementalComposition(unittest.TestCase):
+    """
+    The perturbed weight composition is built by moving one cell of the base one
+    instead of recomputing the whole recipe - the hot loop of the module, run
+    once per (material, oxide) pair. It is equivalent because the contribution
+    of a material is linear in its formula, and nothing else checks that.
+    """
+
+    def test_matches_a_full_recalculation_on_the_reference_recipe(self):
+        materials = all_materials()
+        tolerances = load_tolerances()
+        by_name = {material["name"]: material for material in materials}
+        used = [by_name[name] for name in TRANSPARENT_RECIPE]
+
+        base = calculate_recipe_composition(used, TRANSPARENT_RECIPE)
+
+        checked = 0
+        for name, amount in TRANSPARENT_RECIPE.items():
+            material = by_name[name]
+            for oxide, sigma in material_sigma(material, tolerances).items():
+                content = float(material["formula"][oxide])
+
+                # What sensitivity.py does: one cell of the composition moves
+                incremental = dict(base)
+                incremental[oxide] = incremental.get(oxide, 0.0) + content * sigma * (amount / 100.0)
+
+                # What it means: that one analysis is A[i][j] * (1 + sigma)
+                perturbed_materials = copy.deepcopy(used)
+                next(m for m in perturbed_materials
+                     if m["name"] == name)["formula"][oxide] = content * (1 + sigma)
+                full = calculate_recipe_composition(perturbed_materials, TRANSPARENT_RECIPE)
+
+                self.assertEqual(set(incremental), set(full))
+                for result_oxide, value in full.items():
+                    self.assertAlmostEqual(incremental[result_oxide], value, delta=1e-12,
+                                           msg=f"{name} / {oxide} -> {result_oxide}")
+                checked += 1
+
+        self.assertGreater(checked, 10, "the reference recipe should cover many pairs")
 
 
 class TestWeightsToUmfSignature(unittest.TestCase):
