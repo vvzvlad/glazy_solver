@@ -1,6 +1,6 @@
 {
  "format_version": 1,
- "generated": "2026-08-09T01:04:52+00:00",
+ "generated": "2026-08-09T02:03:52+00:00",
  "run": {
   "seed": 20260531,
   "sample_size": 300,
@@ -381,8 +381,8 @@
    "no_flux": 31,
    "single_ingredient": 62
   },
-  "git_commit": "1d9dd176160e234e6fa1972f6683b87135a9af61",
-  "git_dirty": true,
+  "git_commit": "86a4a6c37b68968cb00c6d0a622feff10b6ceff0",
+  "git_dirty": false,
   "data_hashes": {
    "database/materials.json": "e9e6fde040ce4ceae1866a4d631dc61f0b6900e918bf864f20e2b84156004e90",
    "database/prices.json": "8e4c9f5768cf3c13817811571786ebc345f1e5d6641d4504db760a72044bd1e7",
@@ -393,7 +393,7 @@
    "classic_seed": 42,
    "candidate_search": "exhaustive"
   },
-  "seconds": 6.114328332943842
+  "seconds": 2.602604834130034
  },
  "cases": [
   {
@@ -504,7 +504,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.0,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.01019803902718536,
    "cond": 15.483280039389632
   },
@@ -600,7 +600,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.99,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.009949874371066208,
    "cond": 25.434922506259966
   },
@@ -776,7 +776,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.47,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.010392304845413548,
    "cond": 14.720672076786885
   },
@@ -808,7 +808,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.43,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.004242640687119178,
    "cond": 15.48328003938963
   },
@@ -1000,7 +1000,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.89,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.020712315177208427,
    "cond": 10.450179201222769
   },
@@ -1160,7 +1160,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.55,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.03602776706930378,
    "cond": 24.423140818415202
   },
@@ -1192,7 +1192,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.35,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.02078460969082665,
    "cond": 17.22381067252553
   },
@@ -1224,7 +1224,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.43,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.02483948469674837,
    "cond": 14.918112059295325
   },
@@ -1304,7 +1304,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.37,
-   "junk_count": 2,
+   "junk_count": 1,
    "rounding_drift": 0.01843908891458588,
    "cond": 79.77721029990312
   },
@@ -1416,7 +1416,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.43,
-   "junk_count": 3,
+   "junk_count": 0,
    "rounding_drift": 0.010099504938361847,
    "cond": 7.4907333905353
   },
@@ -1464,7 +1464,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.91,
-   "junk_count": 2,
+   "junk_count": 0,
    "rounding_drift": 0.034597687784012635,
    "cond": 23.467816315604306
   },
@@ -1496,7 +1496,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.49,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.003741657386773945,
    "cond": 10.650098063374458
   },
@@ -1512,7 +1512,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.75,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.05123475382979782,
    "cond": 15.383484948413304
   },
@@ -1560,7 +1560,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.75,
-   "junk_count": 2,
+   "junk_count": 1,
    "rounding_drift": 0.04989989979949853,
    "cond": 14.585028569132177
   },
@@ -1587,14 +1587,14 @@
    "status": "solved",
    "bucket": "5-7",
    "size": 6,
-   "umf_error": 0.005196152422706635,
-   "count": 5,
+   "umf_error": 0.0019999999999997797,
+   "count": 6,
    "cost_abs": null,
    "assembly_score": null,
-   "min_portion": 2.01,
-   "junk_count": 0,
-   "rounding_drift": 0.006557438524302007,
-   "cond": 4.2472903809233005
+   "min_portion": 1.93,
+   "junk_count": 1,
+   "rounding_drift": 0.0053851648071344465,
+   "cond": 21.30714926712067
   },
   {
    "glazy_id": 29329,
@@ -1603,14 +1603,14 @@
    "status": "solved",
    "bucket": "5-7",
    "size": 6,
-   "umf_error": 0.4499666654320073,
+   "umf_error": 0.5844193699733093,
    "count": 3,
    "cost_abs": null,
    "assembly_score": null,
-   "min_portion": 2.78,
+   "min_portion": 3.16,
    "junk_count": 0,
-   "rounding_drift": 0.04361192497471298,
-   "cond": 1.590683208925546
+   "rounding_drift": 0.03052867504494742,
+   "cond": 3.806395276942986
   },
   {
    "glazy_id": 29616,
@@ -1624,7 +1624,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.93,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.029478805945967267,
    "cond": 16.58794722881094
   },
@@ -1688,7 +1688,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.89,
-   "junk_count": 2,
+   "junk_count": 0,
    "rounding_drift": 0.03598610843089301,
    "cond": 16.901017950244754
   },
@@ -1800,7 +1800,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.97,
-   "junk_count": 2,
+   "junk_count": 0,
    "rounding_drift": 0.01157583690279023,
    "cond": 25.816125849505056
   },
@@ -1880,7 +1880,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.97,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.0,
    "cond": 3.0572805769942275
   },
@@ -1944,7 +1944,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.91,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.022825424421026575,
    "cond": 16.07373437287543
   },
@@ -2040,7 +2040,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.9,
-   "junk_count": 3,
+   "junk_count": 2,
    "rounding_drift": 0.010246950765959563,
    "cond": 16.32684679826002
   },
@@ -2168,7 +2168,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.52,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.014035668847617831,
    "cond": 11.870312484819049
   },
@@ -2200,7 +2200,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.0,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.05721013896155198,
    "cond": 5.767612242641587
   },
@@ -2344,7 +2344,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.51,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.0,
    "cond": 19.33991582543093
   },
@@ -2360,7 +2360,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.98,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.005291502622129184,
    "cond": 3.049074143696121
   },
@@ -2424,7 +2424,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.77,
-   "junk_count": 3,
+   "junk_count": 1,
    "rounding_drift": 0.015588457268119986,
    "cond": 14.959089225131597
   },
@@ -2456,7 +2456,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.97,
-   "junk_count": 3,
+   "junk_count": 0,
    "rounding_drift": 0.0208326666560001,
    "cond": 5.767612242641585
   },
@@ -2504,7 +2504,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.85,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.010723805294763522,
    "cond": 7.816288263768267
   },
@@ -2552,7 +2552,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.24,
-   "junk_count": 2,
+   "junk_count": 1,
    "rounding_drift": 0.13515176654413366,
    "cond": 16.29444042051786
   },
@@ -2824,7 +2824,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.84,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.03996248240537599,
    "cond": 14.21792755245226
   },
@@ -2856,7 +2856,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.88,
-   "junk_count": 2,
+   "junk_count": 1,
    "rounding_drift": 0.025980762113533503,
    "cond": 18.846785780866778
   },
@@ -2920,7 +2920,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.98,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.031208973068654607,
    "cond": 14.94336716135071
   },
@@ -2936,7 +2936,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.53,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.011224972160321745,
    "cond": 24.457679101963613
   },
@@ -2968,7 +2968,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.95,
-   "junk_count": 3,
+   "junk_count": 0,
    "rounding_drift": 0.011661903789690526,
    "cond": 7.233005616383486
   },
@@ -3048,7 +3048,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.84,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.034307433596816796,
    "cond": 9.774280007774761
   },
@@ -3112,7 +3112,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.94,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.013638181696985599,
    "cond": 6.287634365636991
   },
@@ -3176,7 +3176,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.35,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.01276714533480381,
    "cond": 17.22381067252554
   },
@@ -3192,7 +3192,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.95,
-   "junk_count": 2,
+   "junk_count": 1,
    "rounding_drift": 0.012609520212918503,
    "cond": 18.64567996671803
   },
@@ -3219,14 +3219,14 @@
    "status": "solved",
    "bucket": "8+",
    "size": 12,
-   "umf_error": 0.030854497241083027,
-   "count": 8,
+   "umf_error": 0.0256515106767613,
+   "count": 9,
    "cost_abs": null,
    "assembly_score": null,
-   "min_portion": 0.96,
-   "junk_count": 1,
-   "rounding_drift": 0.027568097504180572,
-   "cond": 19.234203757267846
+   "min_portion": 0.48,
+   "junk_count": 0,
+   "rounding_drift": 0.015811388300842184,
+   "cond": 15.367750307966007
   },
   {
    "glazy_id": 266844,
@@ -3304,7 +3304,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.7,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.00943398113205655,
    "cond": 13.546254277445923
   },
@@ -3336,7 +3336,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.49,
-   "junk_count": 2,
+   "junk_count": 0,
    "rounding_drift": 0.041593268686170776,
    "cond": 24.259659584962904
   },
@@ -3384,7 +3384,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.46,
-   "junk_count": 3,
+   "junk_count": 2,
    "rounding_drift": 0.025826343140289833,
    "cond": 17.226795168348286
   },
@@ -3464,7 +3464,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.93,
-   "junk_count": 2,
+   "junk_count": 1,
    "rounding_drift": 0.04065710270051207,
    "cond": 14.959089225131581
   },
@@ -3480,7 +3480,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.22,
-   "junk_count": 4,
+   "junk_count": 0,
    "rounding_drift": 0.018708286933869715,
    "cond": 32.741581135721674
   },
@@ -3496,7 +3496,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.0,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.005477225575051565,
    "cond": 26.706957907749654
   },
@@ -3528,7 +3528,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.92,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.04324349662087913,
    "cond": 15.485307054050354
   },
@@ -3544,7 +3544,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.81,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.012165525060596403,
    "cond": 19.415117253529775
   },
@@ -3560,7 +3560,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.1,
-   "junk_count": 2,
+   "junk_count": 1,
    "rounding_drift": 0.017058722109231685,
    "cond": 6.50971941123327
   },
@@ -3640,7 +3640,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.71,
-   "junk_count": 2,
+   "junk_count": 1,
    "rounding_drift": 0.02260530911091455,
    "cond": 7.519759089802567
   },
@@ -3704,7 +3704,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.95,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.11612923835107065,
    "cond": 23.63757023536295
   },
@@ -3784,7 +3784,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.35,
-   "junk_count": 3,
+   "junk_count": 0,
    "rounding_drift": 0.029393876913398165,
    "cond": 6.796136817231069
   },
@@ -3848,7 +3848,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.52,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.027294688127912286,
    "cond": 9.952898054969978
   },
@@ -3880,7 +3880,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.92,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.046260134024881334,
    "cond": 11.713447649725119
   },
@@ -3912,7 +3912,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.74,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.024413111231467426,
    "cond": 5.275946833356335
   },
@@ -3944,7 +3944,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.0,
-   "junk_count": 2,
+   "junk_count": 0,
    "rounding_drift": 0.018275666882496867,
    "cond": 6.796136817231073
   },
@@ -3976,7 +3976,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.49,
-   "junk_count": 2,
+   "junk_count": 0,
    "rounding_drift": 0.015000000000000221,
    "cond": 7.509866868173351
   },
@@ -4035,14 +4035,14 @@
    "status": "solved",
    "bucket": "8+",
    "size": 9,
-   "umf_error": 0.2518332781822133,
-   "count": 4,
+   "umf_error": 0.2575286391840721,
+   "count": 5,
    "cost_abs": null,
    "assembly_score": null,
-   "min_portion": 15.38,
+   "min_portion": 0.67,
    "junk_count": 0,
-   "rounding_drift": 0.013490737563231932,
-   "cond": 5.61810375321252
+   "rounding_drift": 0.008185352771872292,
+   "cond": 5.618103753212523
   },
   {
    "glazy_id": 478478,
@@ -4072,7 +4072,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.99,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.03033150177620601,
    "cond": 25.81612584950502
   },
@@ -4136,7 +4136,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.93,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.014899664425751144,
    "cond": 13.891540526741375
   },
@@ -4232,7 +4232,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.94,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.003162277660168242,
    "cond": 14.087944025432073
   },
@@ -4280,7 +4280,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.51,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.011135528725659724,
    "cond": 25.365758847111138
   },
@@ -4312,7 +4312,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.88,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.011704699910719549,
    "cond": 17.564170760693038
   },
@@ -4376,7 +4376,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.38,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.0068556546004009695,
    "cond": 4.012134894078109
   },
@@ -4440,7 +4440,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.52,
-   "junk_count": 2,
+   "junk_count": 1,
    "rounding_drift": 0.014560219778561149,
    "cond": 14.053260198018275
   },
@@ -4488,7 +4488,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.77,
-   "junk_count": 2,
+   "junk_count": 1,
    "rounding_drift": 0.014899664425751285,
    "cond": 15.67689737286112
   },
@@ -4536,7 +4536,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.76,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.0068556546004010935,
    "cond": 28.66525381989334
   },
@@ -4600,7 +4600,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.88,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.018734993995195424,
    "cond": 23.35269562842011
   },
@@ -4664,7 +4664,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.83,
-   "junk_count": 3,
+   "junk_count": 2,
    "rounding_drift": 0.014035668847618109,
    "cond": 40.67085038454163
   },
@@ -4680,7 +4680,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.44,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.008426149773176201,
    "cond": 17.121908424796494
   },
@@ -4691,14 +4691,14 @@
    "status": "solved",
    "bucket": "8+",
    "size": 11,
-   "umf_error": 0.014662878298615342,
+   "umf_error": 0.01854723699099132,
    "count": 8,
    "cost_abs": null,
    "assembly_score": null,
-   "min_portion": 1.85,
-   "junk_count": 1,
-   "rounding_drift": 0.013527749258468696,
-   "cond": 25.725612204234977
+   "min_portion": 1.86,
+   "junk_count": 0,
+   "rounding_drift": 0.006557438524301939,
+   "cond": 17.0781759990705
   },
   {
    "glazy_id": 665751,
@@ -4712,7 +4712,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.44,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.007937253933193777,
    "cond": 3.7654126110202686
   },
@@ -4744,7 +4744,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.62,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.009899494936611675,
    "cond": 26.54876565987136
   },
@@ -4792,7 +4792,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.47,
-   "junk_count": 2,
+   "junk_count": 1,
    "rounding_drift": 0.003,
    "cond": 1.8309522315426143
   },
@@ -4808,7 +4808,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.79,
-   "junk_count": 2,
+   "junk_count": 0,
    "rounding_drift": 0.030133038346638292,
    "cond": 1.8305254036657608
   },
@@ -5000,7 +5000,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.66,
-   "junk_count": 2,
+   "junk_count": 0,
    "rounding_drift": 0.014798648586948905,
    "cond": 14.220121566103645
   },
@@ -5016,7 +5016,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.48,
-   "junk_count": 4,
+   "junk_count": 3,
    "rounding_drift": 0.004795831523312701,
    "cond": 93.66739773716728
   },
@@ -5048,7 +5048,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.88,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.004472135954999357,
    "cond": 15.319148816636218
   },
@@ -5080,7 +5080,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.86,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.009899494936611688,
    "cond": 14.918112059295325
   },
@@ -5096,7 +5096,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.88,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.004472135954999357,
    "cond": 15.319148816636218
   },
@@ -5112,7 +5112,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.96,
-   "junk_count": 4,
+   "junk_count": 2,
    "rounding_drift": 0.03181194744117396,
    "cond": 14.009260254815498
   },
@@ -5160,7 +5160,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.95,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.03768288736283347,
    "cond": 13.283747734755686
   },
@@ -5352,7 +5352,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.58,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.01483239697419134,
    "cond": 30.74236120969868
   },
@@ -5368,7 +5368,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.75,
-   "junk_count": 2,
+   "junk_count": 1,
    "rounding_drift": 0.04989989979949853,
    "cond": 14.585028569132177
   },
@@ -5400,7 +5400,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.97,
-   "junk_count": 2,
+   "junk_count": 0,
    "rounding_drift": 0.01157583690279023,
    "cond": 25.816125849505056
   },
@@ -5416,7 +5416,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.97,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.0,
    "cond": 3.0572805769942275
   },
@@ -5512,7 +5512,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.52,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.014035668847617831,
    "cond": 11.870312484819049
   },
@@ -5544,7 +5544,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.95,
-   "junk_count": 4,
+   "junk_count": 1,
    "rounding_drift": 0.008000000000000063,
    "cond": 102.12467913105544
   },
@@ -5560,7 +5560,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.71,
-   "junk_count": 4,
+   "junk_count": 2,
    "rounding_drift": 0.02080865204668491,
    "cond": 79.77721029990303
   },
@@ -5592,7 +5592,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.24,
-   "junk_count": 2,
+   "junk_count": 1,
    "rounding_drift": 0.13416780537819106,
    "cond": 16.29444042051786
   },
@@ -5672,7 +5672,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.95,
-   "junk_count": 2,
+   "junk_count": 0,
    "rounding_drift": 0.026381811916545643,
    "cond": 18.882389665301808
   },
@@ -5752,7 +5752,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.46,
-   "junk_count": 3,
+   "junk_count": 2,
    "rounding_drift": 0.03994996871087606,
    "cond": 17.226795168348286
   },
@@ -5864,7 +5864,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.83,
-   "junk_count": 3,
+   "junk_count": 1,
    "rounding_drift": 0.04437341546466773,
    "cond": 18.885999507932652
   },
@@ -5912,7 +5912,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.76,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.006855654600401094,
    "cond": 28.66525381989334
   },
@@ -5928,7 +5928,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.44,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.008426149773176201,
    "cond": 17.121908424796494
   },
@@ -5944,7 +5944,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 1.62,
-   "junk_count": 1,
+   "junk_count": 0,
    "rounding_drift": 0.024758836806279917,
    "cond": 58.07145147861002
   },
@@ -5976,7 +5976,7 @@
    "cost_abs": null,
    "assembly_score": null,
    "min_portion": 0.66,
-   "junk_count": 4,
+   "junk_count": 2,
    "rounding_drift": 0.0076157731058638925,
    "cond": 18.94062326407415
   },
