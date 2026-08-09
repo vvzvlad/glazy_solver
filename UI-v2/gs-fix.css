@@ -1,0 +1,19 @@
+/* Subscripts must not stretch the line box: a fixed-height dense row would
+   otherwise overlap the row below it (Al2O3 / B2O3 in the R2O3 group). */
+.gs sub { line-height: 0; font-size: 0.72em; }
+.gs-orow { height: auto; min-height: 24px; }
+.gs-ox { line-height: 1.15; }
+.gs-ucell { height: auto; min-height: 18px; }
+
+/* The oxide cell also carries the "this is axis X / Y" marker in interval
+   mode, so it needs room for the longest name plus the marker on one line. */
+.gs-ox-btn { white-space: nowrap; }
+.gs-colhead.is-iv, .gs-orow.is-iv { grid-template-columns: 60px 42px 42px 1fr 74px 16px; }
+
+/* Toolbar: the checkbox label is nowrap, and .gs-check-l carries min-width: 0
+   for the truncating material rows - together they let the label overflow its
+   own box and print on top of the hint. Pin the control, let the hint reflow. */
+.gs-toolbar { flex-wrap: wrap; row-gap: 6px; }
+.gs-toolbar .gs-check { flex: none; }
+.gs-toolbar .gs-check-l { min-width: auto; }
+.gs-toolbar .gs-hint { flex: 1 1 240px; min-width: 0; text-align: right; }

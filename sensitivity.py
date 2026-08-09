@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 OXIDE_SCALE_FLOOR = 0.1
 
 # Fallback for a material_tolerance.json that cannot be read at all, and for a
-# "default_relative" that is not a positive number. Deliberately the
+# "default_relative" that is not a sane positive number. Deliberately the
 # same value as the "default_relative" of the shipped file: a missing tolerance
 # database degrades the answer to "every material is equally trustworthy", which
 # still ranks by lever, instead of failing the request.
@@ -82,13 +82,27 @@ FALLBACK_RELATIVE = 0.05
 # looking response and cannot tell the two apart, so the fact travels in
 # "warnings" as well.
 #
-# "Unavailable" here is about the CONTENT and not about the file handle: a file
-# that parses into an object but carries no usable sigma at all (an empty object,
-# a "classes"/"materials" typo, a section of the wrong type) gives numerically
-# the same flat answer as a missing file, so it is the same degradation.
-DEGRADED_TOLERANCES_WARNING = (
-    "база допусков недоступна или непригодна, все материалы считаются одинаково "
-    "надёжными — ранжирование только по плечу")
+# The fact is established by OBSERVATION, on the finished rows, and never by
+# looking at the tolerance file and guessing what it will do. Three rounds of
+# fixes tried the second way - each round a smarter count of what the file
+# contains - and each round left an input that walked past it, because whether a
+# sigma reaches the calculation depends on the recipe, on materials.json and on
+# which oxides the material actually carries, none of which the file knows. The
+# renamed material and the override on an oxide the material does not have are
+# the two that survived the last count, and both produce the answer of a missing
+# file bit for bit.
+FLAT_SIGMA_WARNING = (
+    "ни один материал этого рецепта не получил собственной сигмы: все взяли одно "
+    "значение по умолчанию, ранжирование идёт только по плечу. База допусков "
+    "недоступна, не описывает эти материалы или разошлась с именами в "
+    "database/materials.json")
+
+# Said when the file itself never became a dictionary. It is a fact about the
+# file and NOT a statement about the answer: what that costs the ranking is for
+# FLAT_SIGMA_WARNING to say, after the ranking exists.
+UNREADABLE_TOLERANCES_ISSUE = (
+    "база допусков не прочитана: файл недоступен или испорчен, "
+    "взяты значения по умолчанию")
 
 # The same for a recipe no material of which can move the formula at all: the
 # shares are then honestly zero and do NOT sum to 1.0, so a consumer normalizing
@@ -107,16 +121,18 @@ NONFINITE_CONTRIBUTION_WARNING = (
     "возведении отклика в квадрат), все доли обнулены — числам в этом ответе "
     "верить нельзя")
 
-# Returned instead of a result any number of which is inf or nan. The guards on
-# the input cannot cover every path to an overflow - the share is bounded above,
-# but the sigma comes from a hand edited file and the variance squares whatever
-# response it produces - so the invariant is checked where it actually holds or
-# fails: on the way out. "Infinity" and "NaN" in a field documented as a number
-# are worse than a refusal, because make_json_safe turns them into strings and
-# the caller sees error: null right next to them.
+# Returned instead of a result any number of which is inf or nan. The bounds on
+# the share and on the sigma each close the path they know about and neither can
+# promise this: an analysis cell of materials.json is a hand edited number too,
+# the variance squares whatever response it produces, and the next such number is
+# not on the list of the ones already thought of. So the invariant is checked
+# where it actually holds or fails: on the way out. "Infinity" and "NaN" in a
+# field documented as a number are worse than a refusal, because make_json_safe
+# turns them into strings and the caller sees error: null right next to them.
 NONFINITE_RESULT_MESSAGE = (
     "расчёт дал бесконечность или NaN: числа не имеют смысла и не возвращаются. "
-    "Проверьте доли рецепта и сигмы в database/material_tolerance.json")
+    "Проверьте доли рецепта, формулы материалов в database/materials.json и "
+    "сигмы в database/material_tolerance.json")
 
 # Below this share of fluxes among all the moles of the recipe, the unity basis
 # of the UMF rests on traces and the whole formula is numerically unstable. Real
@@ -141,6 +157,18 @@ ZERO_FLUX_MOLES = 1e-9
 # itself is still a perfectly finite float - the "is it finite" test on the input
 # passes and the answer comes back with "sigma": Infinity under error: null.
 MAX_PERCENTAGE = 1e6
+
+# The same bound, on the other hand-edited number of this calculation. A sigma is
+# a RELATIVE spread and material_tolerance.md describes it as "порядка сотых" -
+# the loosest shipped class is wood ash at 0.20. At 1.0 the passport is declared
+# wrong by 100%, which is already outside anything the file documents, and above
+# it the value is a typo rather than a tolerance: a 5.0 quietly turns the ranking
+# over (kaolin takes the lead with 0.589 on the reference glaze) and a 1e308 used
+# to take the whole answer down with nonfinite_result because one class was
+# mistyped. Such a value is not a usable sigma: the material falls back to the
+# default, the answer stays alive, and the dropped value is named in "issues".
+# _all_finite() on the result stays as the last net behind this.
+MAX_SIGMA = 1.0
 
 # How many oxides of the RESULT are named as the ones a material moves, and how
 # small a share of that material's own contribution still earns a mention. The
@@ -174,20 +202,25 @@ def load_tolerances(path=None):
 
     Returns:
         dictionary {"default_relative": float, "classes": {...}, "materials": {...},
-        "degraded": bool, "issues": [str, ...]}
+        "issues": [str, ...]}
 
-        "degraded" is True when nothing usable came out of the file and every
-        material fell back to one flat sigma - whether because the file could not
-        be read at all or because its content turned out to carry no sigma
-        (see _usable_sigma_count). "issues" describes the parts that were dropped
-        while the rest still worked, in the language of the response.
+        "issues" lists what the file lost on the way in - a section of the wrong
+        type, an entry that is not an object, a sigma outside the sane range -
+        in the language of the response, so that a partly broken file still says
+        what it dropped.
+
+        There is deliberately no flag here saying the ranking will come out flat.
+        This function sees the file and nothing else; whether any of its sigmas
+        reaches a given recipe depends on materials.json and on the recipe, and
+        every attempt to predict that from the file alone left a hole. The
+        question is answered in recipe_sensitivity(), on the finished rows.
     """
     return _read_tolerances(path if path is not None else _default_tolerances_path())
 
 
 def _fallback_tolerances():
     return {"default_relative": FALLBACK_RELATIVE, "classes": {}, "materials": {},
-            "degraded": True, "issues": []}
+            "issues": [UNREADABLE_TOLERANCES_ISSUE]}
 
 
 def _read_tolerances(path):
@@ -197,7 +230,7 @@ def _read_tolerances(path):
     except (OSError, ValueError) as exc:
         # A broken tolerance file must not take the whole endpoint down: the
         # ranking is still meaningful with one flat sigma for everything - as
-        # long as the answer says so, see DEGRADED_TOLERANCES_WARNING.
+        # long as the answer says so, see FLAT_SIGMA_WARNING.
         logger.warning(f"material_tolerance_unreadable: {path}: {exc}")
         return _fallback_tolerances()
 
@@ -219,25 +252,12 @@ def _read_tolerances(path):
     classes = _object_section(data, 'classes', path, issues)
     materials = _object_section(data, 'materials', path, issues)
 
-    usable = _usable_sigma_count(classes, materials, path, issues)
-
-    if not usable:
-        # The file parses, but not one sigma of it survives: every material ends
-        # up on the same default and the answer is bit for bit the answer of a
-        # missing file. That is the same degradation and gets the same flag - the
-        # numbers, not the exception, are what the caller has to be told about.
-        # What was parsed is still returned as it stands: it changes nothing (it
-        # is unreachable by construction), and "default_relative" is the sigma
-        # every material will actually be given, so replacing it with the
-        # built-in fallback would answer with a spread the file never asked for.
-        logger.warning(f"material_tolerance_unusable: {path}: no per class or per "
-                       f"oxide sigma survived parsing")
+    _report_dropped_sigmas(classes, materials, path, issues)
 
     return {
         "default_relative": default_relative,
         "classes": classes,
         "materials": materials,
-        "degraded": not usable,
         "issues": issues,
     }
 
@@ -264,24 +284,33 @@ def _object_section(data, key, path, issues):
     return value
 
 
-def _usable_sigma_count(classes, materials, path, issues):
+def _report_dropped_sigmas(classes, materials, path, issues):
     """
-    How many sigmas of the file actually differ from the flat default
+    Name every value of the file that the resolution will not use
 
-    This is what tells "the tolerance database works" from "the tolerance
-    database parses": material_sigma() only ever reads a sigma through a class a
-    material is assigned to or through an explicit per oxide override, so a file
-    where neither resolves gives every material the same default_relative - the
-    ranking by lever alone this module exists to avoid.
+    Strictly a description of the CONTENT, and no conclusion drawn from it. Its
+    predecessor, _usable_sigma_count(), added up the same numbers and decided
+    from them whether the answer would be flat - which it cannot know, and got
+    wrong on every input where the file was healthy but disconnected from
+    materials.json. Counting what was dropped is a fact; counting what survived
+    and calling it a working database is a guess.
 
-    Returns:
-        number of usable sigma sources; appends to "issues" the parts that were
-        dropped while others survived
+    A dropped value is silent damage in the most literal sense: the material
+    falls back a level (an override to the class, a class to the default) and
+    the answer that comes back is a smaller number for that material with
+    nothing in it saying why.
     """
-    resolved_classes = 0
     unresolved_classes = 0
     broken_entries = 0
-    overrides = 0
+    broken_oxide_sections = 0
+    broken_overrides = 0
+    oversized = 0
+
+    for name, value in classes.items():
+        if _is_oversized_sigma(value):
+            logger.warning(f"material_tolerance_sigma_out_of_range: {path}: class "
+                           f"'{name}' = {value!r}, above {MAX_SIGMA}")
+            oversized += 1
 
     for name, entry in materials.items():
         if not isinstance(entry, dict):
@@ -291,45 +320,90 @@ def _usable_sigma_count(classes, materials, path, issues):
             continue
 
         class_name = entry.get('class')
-        if class_name is not None:
-            if _is_usable_sigma(classes.get(class_name)):
-                resolved_classes += 1
-            else:
-                unresolved_classes += 1
+        if class_name is not None and not _is_usable_sigma(classes.get(class_name)):
+            unresolved_classes += 1
 
         oxides = entry.get('oxides')
-        if isinstance(oxides, dict):
-            overrides += sum(1 for value in oxides.values() if _is_usable_sigma(value))
+        if oxides is not None and not isinstance(oxides, dict):
+            # Used to be replaced by {} inside material_sigma() without a word,
+            # which is how "oxides": [0.10] moved ulexite from 0.700 to 0.618
+            # under warnings: []
+            logger.warning(f"material_tolerance_oxides_ignored: {path}: '{name}': "
+                           f"'oxides' is a {type(oxides).__name__}, expected an object")
+            broken_oxide_sections += 1
+            continue
 
-    usable = resolved_classes + overrides
+        for oxide, value in (oxides or {}).items():
+            if _is_usable_sigma(value):
+                continue
+            if _is_oversized_sigma(value):
+                logger.warning(f"material_tolerance_sigma_out_of_range: {path}: "
+                               f"'{name}': {oxide}={value!r}, above {MAX_SIGMA}")
+                oversized += 1
+            else:
+                # An unusable value INSIDE oxides used to be the one kind of
+                # damage nothing reported: a bad class sigma was counted, a bad
+                # override was simply not counted as usable and vanished
+                logger.warning(f"material_tolerance_override_ignored: {path}: "
+                               f"'{name}': {oxide}={value!r}")
+                broken_overrides += 1
 
-    # Only worth saying when something else still works: with usable == 0 the
-    # caller gets DEGRADED_TOLERANCES_WARNING, which says strictly more.
-    if usable and unresolved_classes:
+    if unresolved_classes:
         logger.warning(f"material_tolerance_unresolved_classes: {path}: "
                        f"{unresolved_classes} entries point at a class without a sigma")
         issues.append(f"в базе допусков {unresolved_classes} материалов ссылаются на "
                       f"класс без пригодной сигмы, для них взята сигма по умолчанию")
 
-    if usable and broken_entries:
+    if broken_entries:
         issues.append(f"в базе допусков {broken_entries} записей материалов неверного "
                       f"типа и не учтены")
 
-    return usable
+    if broken_oxide_sections:
+        issues.append(f"в базе допусков не учтена секция «oxides» неверного типа: таких "
+                      f"записей {broken_oxide_sections}, для них взята сигма класса")
+
+    if broken_overrides:
+        issues.append(f"в базе допусков не учтены непригодные переопределения сигмы по "
+                      f"оксиду: таких значений {broken_overrides}, для них взята сигма "
+                      f"класса")
+
+    if oversized:
+        issues.append(f"в базе допусков не учтены сигмы больше {MAX_SIGMA:.1f} (100%) — "
+                      f"паспорт не врёт настолько: таких значений {oversized}, эти "
+                      f"материалы взяли сигму уровнем выше")
 
 
 def _is_usable_sigma(value):
     """True when _positive_float() keeps the value instead of falling back"""
+    if isinstance(value, bool):
+        # float(True) is 1.0, so a "clay": true typed into the file used to pass
+        # for a sigma of 100% and hand the class the widest spread in the answer.
+        # _all_finite() has had this check from the start; this one did not.
+        return False
+
     try:
         number = float(value)
     except (TypeError, ValueError):
         return False
 
-    return math.isfinite(number) and number > 0
+    return math.isfinite(number) and 0 < number <= MAX_SIGMA
+
+
+def _is_oversized_sigma(value):
+    """A number, and a plausible sigma in everything but its size"""
+    if isinstance(value, bool):
+        return False
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+
+    return math.isfinite(number) and number > MAX_SIGMA
 
 
 def _positive_float(value, fallback):
-    """A tolerance is a relative spread: anything not a positive number is junk"""
+    """A tolerance is a relative spread: anything but a sane positive number is junk"""
     return float(value) if _is_usable_sigma(value) else fallback
 
 
@@ -347,6 +421,10 @@ def material_sigma(material, tolerances):
     Returns:
         dictionary {oxide: relative_sigma} covering the oxides the material
         actually carries; empty for a material with an empty formula
+
+    Every fallback below is silent by design: this function has no channel to
+    report through and is called once per material. What was dropped and why is
+    said once, by _report_dropped_sigmas() at load time, over the whole file.
     """
     formula = material.get('formula') or {}
     if not formula:
@@ -421,12 +499,11 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
         recipe: dictionary {material_name: weight_percent}
         materials: list of material dictionaries to resolve the names against
         tolerances: a dictionary from load_tolerances() and nothing else; read
-            from the default file when omitted. The state of the tolerance
-            database travels in its "degraded"/"issues" keys and turns into the
-            first warnings of the answer, so a hand built dictionary carrying
-            neither is taken at face value and reports no degradation - which is
-            fine for a caller that built it on purpose and wrong for one that
-            hoped this function would check the file for it.
+            from the default file when omitted. What the file lost on the way in
+            travels in its "issues" key and turns into the first warnings of the
+            answer, so a hand built dictionary carrying none is taken at face
+            value on that point. Whether the sigmas actually did anything is not
+            taken on trust from anybody: it is read off the rows below.
 
     Returns:
         {
@@ -448,11 +525,9 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
 
     warnings = []
 
-    if tolerances.get('degraded'):
-        warnings.append(DEGRADED_TOLERANCES_WARNING)
-
-    # A partly usable file is not degraded - most of the ranking still stands -
-    # but the part that was dropped changed the numbers and cannot stay silent
+    # What the file dropped on the way in. Not a verdict on the answer - most of
+    # the ranking usually still stands - but the dropped part changed the numbers
+    # and cannot stay silent
     warnings.extend(tolerances.get('issues') or [])
 
     if not recipe:
@@ -560,6 +635,18 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
     # Accumulated squared response per result oxide, over every perturbation
     variance = {oxide: 0.0 for oxide in result_oxides}
 
+    # The sigma every material gets when nothing more specific resolves for it,
+    # and whether anything more specific ever did. Not "does the file contain a
+    # sigma" - that question was asked three times and answered wrongly three
+    # times - but "did a sigma other than the flat default enter this
+    # calculation", which is the thing the answer actually rests on and which is
+    # only knowable here. The whole set of applied sigmas is watched and not just
+    # the "sigma_used" of the rows: that field reports the leading oxide of a
+    # material alone, so an override on a secondary oxide - a real move away from
+    # the flat answer - would not show up in it.
+    default_relative = _positive_float(tolerances.get('default_relative'), FALLBACK_RELATIVE)
+    own_sigma_applied = False
+
     material_rows = []
     for material_name, material, amount in used:
         sigmas = material_sigma(material, tolerances)
@@ -589,6 +676,9 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
                 # An oxide missing from molar_masses.json never reaches the UMF,
                 # so perturbing it provably changes nothing
                 continue
+
+            if sigma != default_relative:
+                own_sigma_applied = True
 
             # Only one cell of the analysis moves, so only one entry of the
             # weight composition changes: A[i][j] * sigma * (percent / 100).
@@ -620,6 +710,17 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
             "sigma_used": best_oxide_sigma,
             "affects": _top_affected(per_result_oxide, total_contribution),
         })
+
+    if not own_sigma_applied:
+        # Everything that reached the calculation was one and the same number, so
+        # this IS the flat answer - whatever the tolerance file says about itself.
+        # A file that never mentions these materials, a name a supplier changed,
+        # an override on an oxide the material does not carry and a missing file
+        # all land here, and they land here for the same reason: what the file
+        # contains was never the question, what got used is.
+        logger.warning(f"sensitivity_flat_sigmas: every material of the recipe fell back "
+                       f"to default_relative={default_relative}")
+        warnings.append(FLAT_SIGMA_WARNING)
 
     by_material, share_warning = _material_shares(material_rows)
     if share_warning:
@@ -653,8 +754,14 @@ def recipe_sensitivity(recipe, materials, tolerances=None):
     # sits on an input and none of them can promise this one: the response is
     # squared, summed, divided and rooted on the way here, and any of those steps
     # can leave the finite range. See NONFINITE_RESULT_MESSAGE.
-    if not _all_finite(result):
-        logger.error("sensitivity_nonfinite_result: the computed answer carries inf or nan")
+    nonfinite = _first_nonfinite(result)
+    if nonfinite is not None:
+        # With the offending row named: everything needed for it is already
+        # computed here, and a bare "the answer carries inf or nan" left whoever
+        # reads the log to reproduce the whole recipe to find out which material
+        # or oxide it was
+        logger.error(f"sensitivity_nonfinite_result: the computed answer carries inf or "
+                     f"nan: {nonfinite}")
         return _empty_result(warnings, "nonfinite_result", NONFINITE_RESULT_MESSAGE)
 
     return result
@@ -714,16 +821,47 @@ def _material_shares(material_rows):
 
 def _all_finite(value):
     """Every number anywhere in a nested result structure is a finite float"""
+    return _first_nonfinite(value) is None
+
+
+def _first_nonfinite(value, path="result"):
+    """
+    Where the first inf or nan of a nested structure sits, None when there is none
+
+    The path is what goes into the log, so a row of a list is labelled by its own
+    "material" or "oxide" rather than by an index nobody can resolve afterwards:
+    "result.by_material[Улексит (Химпэк)].share=nan" says what happened, while
+    "by_material[3]" says that something did.
+    """
     if isinstance(value, dict):
-        return all(_all_finite(item) for item in value.values())
+        for key, item in value.items():
+            found = _first_nonfinite(item, f"{path}.{key}")
+            if found is not None:
+                return found
+        return None
 
     if isinstance(value, list):
-        return all(_all_finite(item) for item in value)
+        for index, item in enumerate(value):
+            found = _first_nonfinite(item, f"{path}[{_row_label(item, index)}]")
+            if found is not None:
+                return found
+        return None
 
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return True
+        return None
 
-    return math.isfinite(value)
+    return None if math.isfinite(value) else f"{path}={value}"
+
+
+def _row_label(item, index):
+    """What a row of by_material/per_oxide calls itself, its index otherwise"""
+    if isinstance(item, dict):
+        for key in ("material", "oxide"):
+            name = item.get(key)
+            if isinstance(name, str):
+                return name
+
+    return index
 
 
 def _top_affected(per_result_oxide, total_contribution):

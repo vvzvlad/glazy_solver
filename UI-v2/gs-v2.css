@@ -1,0 +1,83 @@
+/* Second pass: the step and interval modes are gone, the solver settings panel
+   is gone, and the card now carries "what the recipe rests on". */
+
+/* --- target rows: oxide | value | role | delta | actual | x ------------- */
+.gs-colhead, .gs-orow { grid-template-columns: 46px 68px 44px 44px 46px 16px; }
+.gs-colhead.is-plain, .gs-orow.is-plain { grid-template-columns: 46px 68px 44px 16px; }
+.gs-colhead span:nth-child(2) { text-align: right; }
+.gs-orow.is-pass { color: var(--ink2); }
+
+.gs-inp-wrap { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.gs-le { font: 500 11px 'IBM Plex Mono', monospace; color: var(--ink3); }
+
+.gs-role {
+  border: 1px solid var(--ln); background: transparent; cursor: pointer;
+  font: 500 9px/1 'IBM Plex Mono', monospace; letter-spacing: 0.03em;
+  color: var(--ink3); padding: 3px 4px; border-radius: 2px; white-space: nowrap;
+}
+.gs-role:hover { border-color: var(--ac); color: var(--ac); }
+.gs-role.is-req { color: var(--ink2); border-color: var(--ln2); }
+.gs-role.is-pass { color: var(--ink3); border-style: dashed; }
+
+.gs-normalize {
+  border: 1px solid var(--warn); background: transparent; color: var(--warn);
+  font: 500 9.5px 'IBM Plex Mono', monospace; padding: 2px 5px; border-radius: 2px; cursor: pointer;
+}
+.gs-normalize:hover { background: var(--warn-w); }
+
+/* the +-sigma band sits behind the deviation bar */
+.gs-dbar-band { position: absolute; top: 1px; height: 3px; background: var(--ln2); opacity: 0.5; border-radius: 2px; }
+
+/* --- recipe rows: name | why | bar | value | x -------------------------- */
+.gs-rrow { grid-template-columns: minmax(0, 1fr) 92px minmax(60px, 150px) 46px 16px; }
+.gs-rwhy { font-size: 10px; color: var(--ink3); white-space: nowrap; }
+
+/* --- solution card header ----------------------------------------------- */
+.gs-card.is-rec { border-color: var(--ok); }
+.gs-label { font-size: 12.5px; font-weight: 600; }
+.gs-label.is-rec { color: var(--ok); }
+.gs-labelwhy { font-size: 11px; color: var(--ink2); }
+.gs-collapsed { font-size: 10.5px; color: var(--ink3); margin: 4px 0 0; }
+.gs-card-act { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+/* --- what the recipe rests on ------------------------------------------- */
+.gs-sens { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--ln); }
+.gs-sens-lead { font-size: 11.5px; color: var(--ink2); margin: 5px 0 7px; }
+.gs-sens-lead b { color: var(--ink); }
+.gs-sens-rows { display: flex; flex-direction: column; gap: 2px; }
+.gs-sens-row {
+  display: grid; grid-template-columns: minmax(0, 180px) 84px 44px minmax(0, 1fr);
+  gap: 8px; align-items: center; font-size: 11.5px; height: 19px;
+}
+.gs-sens-v { text-align: right; font-size: 11px; }
+.gs-sens-why { font-size: 10.5px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gs-sens-note { margin-top: 7px; }
+
+/* --- umf strip: three contamination levels, not one alarm --------------- */
+.gs-ucell { grid-template-columns: 44px 52px minmax(0, 1fr); }
+.gs-ucell-x { display: flex; align-items: center; min-width: 0; }
+.gs-ucell-tr { font-size: 9.5px; color: var(--ink3); }
+.gs-ucell.tone-extra-trace .gs-ucell-v { color: var(--ink3); }
+.gs-ucell.tone-extra-notable .gs-ucell-v { color: var(--warn); }
+.gs-ucell.tone-extra-strong .gs-ucell-v { color: var(--bad); }
+.gs-ucell.tone-miss .gs-ucell-v { color: var(--ink3); }
+.gs-promote {
+  border: 1px solid var(--ln); background: transparent; cursor: pointer;
+  font: 400 9.5px 'IBM Plex Sans', sans-serif; color: var(--ink2);
+  padding: 1px 5px; border-radius: 2px; white-space: nowrap;
+}
+.gs-promote:hover { border-color: var(--ac); color: var(--ac); }
+
+/* --- materials ---------------------------------------------------------- */
+.gs-flag {
+  font: 500 9px 'IBM Plex Mono', monospace; color: var(--warn);
+  border: 1px solid var(--warn); border-radius: 2px; padding: 1px 3px; flex: none;
+}
+.gs-tol { font: 500 9px 'IBM Plex Mono', monospace; color: var(--ink3); flex: none; }
+.gs-tol.is-loose { color: var(--warn); }
+
+/* --- batch -------------------------------------------------------------- */
+.gs-batch-row.is-total { border-top: 1px solid var(--ln); font-weight: 500; margin-top: 3px; padding-top: 3px; }
+
+.gs-ref-note { margin: 4px 6px 0; }
+.gs-import-i { width: 320px; }

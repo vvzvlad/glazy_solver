@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Glaze Solver — прототип интерфейса</title>
+
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" />
+
+  <!-- Design tokens and layout. gs-base.css holds the whole palette as CSS
+       custom properties on .gs-light / .gs-dark; the later files only add or
+       override. Merge them into one stylesheet when porting. -->
+  <link rel="stylesheet" href="./gs-base.css" />
+  <link rel="stylesheet" href="./gs-extra.css" />
+  <link rel="stylesheet" href="./gs-fix.css" />
+  <link rel="stylesheet" href="./gs-chart.css" />
+  <link rel="stylesheet" href="./gs-v2.css" />
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Pinned versions with integrity hashes: do not bump without re-checking. -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js"
+    integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L"
+    crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"
+    integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm"
+    crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
+    integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y"
+    crossorigin="anonymous"></script>
+
+  <!-- ORDER MATTERS. Each text/babel script gets its own scope, so the modules
+       publish themselves on `window` (window.GS, window.GSUI, ...) and read
+       each other from there. That is a constraint of the prototype host, NOT a
+       design choice: when porting to a bundler, replace every
+       `window.X = {...}` with `export` and every `window.X.y` with an import.
+       Nothing else in these files depends on the globals. -->
+  <script type="text/babel" src="./gs-data.jsx"></script>     <!-- mock data; replace with the API layer -->
+  <script type="text/babel" src="./gs-ui.jsx"></script>       <!-- primitives + shared math -->
+  <script type="text/babel" src="./gs-side.jsx"></script>     <!-- target column, inventory column -->
+  <script type="text/babel" src="./gs-results.jsx"></script>  <!-- verdict, solution cards -->
+  <script type="text/babel" src="./gs-app.jsx"></script>      <!-- shell and state -->
+
+  <script type="text/babel" data-presets="react">
+    // App polls for the modules itself (see the readiness guard inside it), so
+    // mounting immediately is safe even though the scripts above are async.
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
