@@ -30,9 +30,9 @@ NON_OXIDE_KEYS = frozenset({"Loi", "LOI"})
 OXIDE_GROUP_NAMES = ('r2o', 'ro', 'r2o3', 'ro2')
 
 # Keys of the classification file that are not oxide groups. "unity" holds the
-# names of the groups forming the normalization basis, so it can never name
-# itself; stage 7 adds "unity_presets" here.
-CLASSIFICATION_META_KEYS = frozenset({'unity'})
+# names of the groups forming the normalization basis and "unity_presets" holds
+# named flux conventions, so neither can be named by "unity" as a group.
+CLASSIFICATION_META_KEYS = frozenset({'unity', 'unity_presets'})
 
 # The classification is read-only reference data that never changes while the
 # process runs, and it is consulted on every UMF conversion, so the file is
@@ -131,6 +131,56 @@ def _validate_oxide_classification(classification, source):
                                   f"the UMF normalization basis empty: "
                                   f"{', '.join(empty_unity_groups)}")
 
+    _validate_unity_presets(classification, source)
+
+
+def _validate_unity_presets(classification, source):
+    """
+    Check the optional "unity_presets" block of a classification file
+
+    A preset is an alternative flux convention: a flat list of oxide names that
+    replaces the group-derived basis when a caller asks for it by name. The bar
+    is the same as for the groups above - flux_oxides(convention) has to return
+    a non-empty list of oxide names - because a preset that expands to nothing
+    sends weights_to_umf into its "no fluxes" branch and quietly renormalizes
+    every UMF computed under that convention.
+
+    The key is optional: a file without it simply has no named conventions, and
+    flux_oxides(convention) then rejects every name it is given.
+
+    Args:
+        classification: the parsed contents of the classification file
+        source: path of the file, for the error message
+
+    Raises:
+        ClassificationError: "unity_presets" is present but unusable
+    """
+    if 'unity_presets' not in classification:
+        return
+
+    presets = classification['unity_presets']
+    if not isinstance(presets, dict):
+        raise ClassificationError(f"{source}: \"unity_presets\" must be an object mapping a "
+                                  f"convention name to a list of oxide names, got "
+                                  f"{type(presets).__name__}")
+
+    non_string_names = [repr(name) for name in presets if not isinstance(name, str)]
+    if non_string_names:
+        raise ClassificationError(f"{source}: \"unity_presets\" must be keyed by convention names "
+                                  f"as strings, got: {', '.join(non_string_names)}")
+
+    for name in sorted(presets):
+        oxides = presets[name]
+        if not isinstance(oxides, list) or not oxides:
+            raise ClassificationError(f"{source}: unity preset \"{name}\" must be a non-empty list "
+                                      f"of oxide names, otherwise the UMF normalization basis of "
+                                      f"that convention is empty")
+
+        non_string_oxides = [repr(oxide) for oxide in oxides if not isinstance(oxide, str)]
+        if non_string_oxides:
+            raise ClassificationError(f"{source}: unity preset \"{name}\" must hold oxide names as "
+                                      f"strings, got: {', '.join(non_string_oxides)}")
+
 
 def _oxide_classification():
     """
@@ -168,7 +218,7 @@ def oxides_classification():
 
 def load_oxide_classification():
     """
-    Load the whole validated classification file, "unity" key included
+    Load the whole validated classification file, meta keys included
 
     oxides_classification() answers "which group is this oxide in" and hides the
     meta keys; this one hands out the file as it is, for the callers that have
@@ -177,7 +227,9 @@ def load_oxide_classification():
 
     Returns:
         dictionary as stored in database/oxide_classification.json; a fresh copy
-        on every call, so callers are free to modify it
+        on every call, so callers are free to modify it. "unity_presets" is a
+        nested object, so it is copied one level deeper than the flat groups -
+        otherwise a caller editing a preset would edit the cache itself
 
     Raises:
         FileNotFoundError: the classification file is missing and nothing has
@@ -185,12 +237,18 @@ def load_oxide_classification():
         ClassificationError: the file is there but is not usable as a
             classification
     """
+    def copy_value(value):
+        if isinstance(value, list):
+            return list(value)
+        if isinstance(value, dict):
+            return {key: copy_value(item) for key, item in value.items()}
+        return value
+
     classification = _oxide_classification()
-    return {key: list(value) if isinstance(value, list) else value
-            for key, value in classification.items()}
+    return {key: copy_value(value) for key, value in classification.items()}
 
 
-def flux_oxides():
+def flux_oxides(convention=None):
     """
     Load the list of oxides that form the UMF unity basis (the fluxes)
 
@@ -199,15 +257,41 @@ def flux_oxides():
     database/oxide_classification.json, and every consumer of the flux list
     calls this function instead of keeping a copy of its own.
 
+    Which oxides count as fluxes is a convention, not a fact, and the schools
+    disagree: ours is ceramicscalc-2018 ("unity" groups, the default here),
+    while modern Glazy leaves FeO/CoO/NiO/CuO out of the basis. On a recipe
+    carrying a colorant the two conventions inflate the unity denominator
+    differently and every oxide of the resulting UMF moves at once, so a test
+    comparing against published Glazy numbers has to ask for "glazy" explicitly.
+    The named alternatives live in the "unity_presets" key of the same file.
+
     An oxide is listed once even if it belongs to several unity groups: the
     callers sum over the returned list, and a duplicate would count that oxide
     twice in the unity denominator.
 
+    Args:
+        convention: name of a preset from "unity_presets", or None for the
+            group-derived basis named by "unity". None is the default and the
+            behaviour of every existing caller
+
     Returns:
-        flat list of oxide names in the order of the unity groups, without
-        duplicates; a fresh list on every call
+        flat list of oxide names without duplicates - in the order of the unity
+        groups for the default, in the order of the preset otherwise; a fresh
+        list on every call
+
+    Raises:
+        ClassificationError: the requested convention is not defined by the
+            classification file
     """
     classification = _oxide_classification()
+
+    if convention is not None:
+        presets = classification.get('unity_presets') or {}
+        if convention not in presets:
+            available = ', '.join(sorted(presets)) if presets else 'none'
+            raise ClassificationError(f"unknown flux convention '{convention}', "
+                                      f"available: {available}")
+        return list(dict.fromkeys(presets[convention]))
 
     fluxes = []
     for group in classification['unity']:
@@ -359,12 +443,15 @@ def _warn_about_unknown_oxides(unknown_oxides, where):
     logger.warning(f"{where}: no molar mass for {names} - dropped from the conversion")
 
 
-def weights_to_umf(weight_composition):
+def weights_to_umf(weight_composition, convention=None):
     """
     Converts weight fractions to UMF (Unity Molecular Formula)
 
     Args:
         weight_composition: dictionary {oxide: weight_fraction}
+        convention: name of a flux convention from "unity_presets", or None for
+            the default basis; see flux_oxides(). Only the set of oxides in the
+            unity denominator changes, everything else is untouched
 
     Returns:
         dictionary {oxide: umf_value}
@@ -383,7 +470,7 @@ def weights_to_umf(weight_composition):
     _warn_about_unknown_oxides(unknown_oxides, 'weights_to_umf')
 
     # Calculate the sum of the fluxes (the unity basis)
-    sum_fluxes = sum(molar_amounts.get(oxide, 0) for oxide in flux_oxides())
+    sum_fluxes = sum(molar_amounts.get(oxide, 0) for oxide in flux_oxides(convention))
 
     # Normalize relative to the sum of fluxes
     if sum_fluxes == 0:
@@ -480,6 +567,45 @@ def resolve_inventory(inventory_data=None):
 
     materials = load_materials(only_inventory=True, priority=False)
     return [material['name'] for material in materials]
+
+
+def resolve_material_pool(materials=None, inventory_data=None):
+    """
+    Decide which material records a solver works from, and which of them it may use
+
+    This is the material injection seam. It exists for the tests and for any
+    caller carrying its own catalogue (an idealised textbook material set, an
+    imported dump), so that a solver run can be pinned to known numbers instead
+    of whatever database/materials.json currently holds.
+
+    Injected records bypass the inventory resolution entirely when no inventory
+    is given: resolve_inventory() would go back to database/materials.json for
+    the inInventory flags and filter the injected catalogue against the real
+    stock, which would usually leave nothing at all. "Here is my catalogue" is
+    taken to mean "and all of it is available".
+
+    Args:
+        materials: optional list of material records, same structure as the
+            entries of database/materials.json - at least "name" and "formula".
+            "priority" is optional and defaults to DEFAULT_PRIORITY wherever the
+            solvers read it. None loads the database as before
+        inventory_data: optional explicit list of available material names. When
+            it is given the records are filtered by it as usual, injected or not
+
+    Returns:
+        (records, inventory): the material records to build the matrix from and
+        the names available out of them. The caller still applies
+        filter_materials_by_inventory() and filter_materials_with_formula(), so
+        an injected material with an empty formula is dropped like any other
+    """
+    if materials is None:
+        return load_materials(only_inventory=False, priority=True), resolve_inventory(inventory_data)
+
+    records = list(materials)
+    if inventory_data is not None:
+        return records, inventory_data
+
+    return records, [record.get('name') for record in records]
 
 
 def filter_materials_by_inventory(materials, inventory):
@@ -631,13 +757,15 @@ def calc_ratios_umf(umf):
 
 
 
-def calculate_umf_from_recipe(weight_composition):
+def calculate_umf_from_recipe(weight_composition, convention=None):
     """
     Calculate UMF from weight composition with proper normalization 
     based on RO+R2O oxides
     
     Args:
         weight_composition: Dictionary of oxide weights
+        convention: name of a flux convention from "unity_presets", or None for
+            the default basis; see flux_oxides()
     
     Returns:
         Dictionary of UMF values
@@ -652,7 +780,7 @@ def calculate_umf_from_recipe(weight_composition):
             molar_amounts[oxide] = weight / molar_masses[oxide]
     
     # Calculate the sum of the fluxes (the unity basis)
-    sum_fluxes = sum(molar_amounts.get(oxide, 0) for oxide in flux_oxides())
+    sum_fluxes = sum(molar_amounts.get(oxide, 0) for oxide in flux_oxides(convention))
 
     # Normalize relative to the sum of fluxes
     if sum_fluxes == 0:

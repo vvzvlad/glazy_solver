@@ -1,0 +1,49 @@
+{
+  "comment": "Degeneracy stress fixture, fully synthetic (TZ_SOLVER_V2.md 7.5 as amended by 10.9). Custer Feldspar plus two near-collinear twins of it: the same analysis perturbed by +-0.5 absolute percent, spread over SiO2, Al2O3 and K2O at once so that all three still sum to 98.90. The perturbation deliberately moves three oxides instead of trading SiO2 against Al2O3 alone - that simpler variant lands exactly in the span of silica plus kaolin and produces exact rank deficiency, whereas this one produces the finite but huge conditioning the test is about. All six materials share one priority, which is what the measurement of the current solver behaviour was made on.",
+  "materials": [
+    {
+      "name": "Custer Feldspar",
+      "priority": 1,
+      "formula": {"SiO2": 68.50, "Al2O3": 17.00, "Na2O": 3.00, "K2O": 10.00, "CaO": 0.30, "Fe2O3": 0.10}
+    },
+    {
+      "name": "Custer Feldspar Variant A",
+      "priority": 1,
+      "formula": {"SiO2": 69.00, "Al2O3": 16.70, "Na2O": 3.00, "K2O": 9.80, "CaO": 0.30, "Fe2O3": 0.10}
+    },
+    {
+      "name": "Custer Feldspar Variant B",
+      "priority": 1,
+      "formula": {"SiO2": 68.00, "Al2O3": 17.30, "Na2O": 3.00, "K2O": 10.20, "CaO": 0.30, "Fe2O3": 0.10}
+    },
+    {
+      "name": "Silica",
+      "priority": 1,
+      "formula": {"SiO2": 100.0}
+    },
+    {
+      "name": "Whiting",
+      "priority": 1,
+      "formula": {"CaO": 56.10}
+    },
+    {
+      "name": "Kaolin",
+      "priority": 1,
+      "formula": {"Al2O3": 40.21, "SiO2": 47.29}
+    }
+  ],
+  "honest_recipe": {
+    "Custer Feldspar": 40.0,
+    "Silica": 30.0,
+    "Whiting": 20.0,
+    "Kaolin": 10.0
+  },
+  "target_umf": {
+    "SiO2": 3.917,
+    "Al2O3": 0.402,
+    "Na2O": 0.073,
+    "K2O": 0.161,
+    "CaO": 0.766,
+    "Fe2O3": 0.001
+  }
+}

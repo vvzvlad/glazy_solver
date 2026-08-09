@@ -1,0 +1,92 @@
+{
+  "comment": "Determined inverse problems with a unique solution: as many independent materials as oxides, so the recipe weights can be asserted directly (TZ_SOLVER_V2.md 7.4). The materials are idealised textbook analyses written out as plain numbers, not records copied from any database; every one of them carries an explicit priority so that the iterative solver's starting set does not depend on DEFAULT_PRIORITY.",
+  "cases": [
+    {
+      "id": "leach_4321",
+      "name": "Leach 4321",
+      "source": "Numbers from the PHP tests of the Glazy calculation core, PieterMostert/ceramicscalc, tests/BaseCompositeMaterialTest.php",
+      "materials": [
+        {
+          "name": "Potash Feldspar",
+          "priority": 1,
+          "formula": {"K2O": 16.92, "Al2O3": 18.32, "SiO2": 64.76}
+        },
+        {
+          "name": "Silica",
+          "priority": 1,
+          "formula": {"SiO2": 100.0}
+        },
+        {
+          "name": "Whiting",
+          "priority": 1,
+          "formula": {"CaO": 56.10}
+        },
+        {
+          "name": "Kaolin",
+          "priority": 1,
+          "formula": {"Al2O3": 40.21, "SiO2": 47.29}
+        }
+      ],
+      "target_umf": {
+        "SiO2": 3.711,
+        "Al2O3": 0.409,
+        "K2O": 0.264,
+        "CaO": 0.736
+      },
+      "expected_recipe": {
+        "Potash Feldspar": 40.0,
+        "Silica": 30.0,
+        "Whiting": 20.0,
+        "Kaolin": 10.0
+      },
+      "weight_tolerance": 1.0
+    },
+    {
+      "id": "arbuckle_problem_3",
+      "name": "Linda Arbuckle, problem 3",
+      "source": "Linda Arbuckle's glaze chemistry handout, glazechem_ans.pdf; the arithmetic checks out against the equivalent weights whiting 100, SrCO3 148, BaCO3 197, kaolin 258, flint 60, summing to 325.55",
+      "materials": [
+        {
+          "name": "Whiting",
+          "priority": 1,
+          "formula": {"CaO": 56.03}
+        },
+        {
+          "name": "Strontium Carbonate",
+          "priority": 1,
+          "formula": {"SrO": 70.19}
+        },
+        {
+          "name": "Barium Carbonate",
+          "priority": 1,
+          "formula": {"BaO": 77.70}
+        },
+        {
+          "name": "Kaolin",
+          "priority": 1,
+          "formula": {"Al2O3": 39.50, "SiO2": 46.55}
+        },
+        {
+          "name": "Flint",
+          "priority": 1,
+          "formula": {"SiO2": 100.0}
+        }
+      ],
+      "target_umf": {
+        "CaO": 0.40,
+        "SrO": 0.35,
+        "BaO": 0.25,
+        "Al2O3": 0.25,
+        "SiO2": 2.5
+      },
+      "expected_recipe": {
+        "Whiting": 12.3,
+        "Strontium Carbonate": 15.9,
+        "Barium Carbonate": 15.1,
+        "Kaolin": 19.8,
+        "Flint": 36.9
+      },
+      "weight_tolerance": 0.5
+    }
+  ]
+}

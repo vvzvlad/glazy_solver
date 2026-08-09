@@ -19,10 +19,9 @@ from common import (
     ClassificationError,
     umf_to_weights,
     weights_to_umf,
-    resolve_inventory,
+    resolve_material_pool,
     filter_materials_by_inventory,
     filter_materials_with_formula,
-    load_materials,
 )
 
 # find_multiple_solutions() takes a parameter called "logging", which shadows
@@ -207,9 +206,24 @@ def _warn_no_usable_materials(inventory, materials_in_inventory):
 
 
 # Solve for a given target UMF using the whole inventory at once
-def solve_glaze_recipe(target_umf, inventory_data=None):
-    materials = load_materials(only_inventory=False, priority=True)
-    inventory = resolve_inventory(inventory_data)
+def solve_glaze_recipe(target_umf, inventory_data=None, materials=None):
+    """
+    Solve a target UMF over the whole inventory in a single NNLS pass
+
+    Args:
+        target_umf: target UMF formula
+        inventory_data: optional list of available material names, instead of
+            the materials flagged inInventory in materials.json
+        materials: optional material records to use as the database, same shape
+            as database/materials.json entries. Meant for the tests and for
+            callers carrying their own catalogue; when it is given together with
+            inventory_data=None it bypasses the inventory resolution and every
+            injected material is available. See common.resolve_material_pool()
+
+    Returns:
+        dictionary describing the solution, or {'error': ...}
+    """
+    materials, inventory = resolve_material_pool(materials, inventory_data)
 
     # Keep only the materials available in the inventory that can carry oxides:
     # a material with an empty formula is a zero column of the NNLS matrix
@@ -243,7 +257,7 @@ def solve_glaze_recipe(target_umf, inventory_data=None):
 
 
 # Search for several solutions built from different material subsets
-def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, error_tolerance=1, logging=True, inventory_data=None, seed: int | None = 0):
+def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, error_tolerance=1, logging=True, inventory_data=None, seed: int | None = 0, materials=None):
     """
     Find several solutions for a given target UMF formula
 
@@ -257,6 +271,11 @@ def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, err
         seed: seed of the random generator drawing the material subsets; the
             default makes the search reproducible, seed=None makes it
             non-deterministic
+        materials: optional material records to use as the database, same shape
+            as database/materials.json entries. Meant for the tests and for
+            callers carrying their own catalogue; when it is given together with
+            inventory_data=None it bypasses the inventory resolution and every
+            injected material is available. See common.resolve_material_pool()
 
     Returns:
         List of solutions sorted by preference
@@ -265,8 +284,7 @@ def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, err
     # outside must not be able to change what this search does
     rng = np.random.default_rng(seed)
 
-    materials = load_materials(only_inventory=False, priority=True)
-    inventory = resolve_inventory(inventory_data)
+    materials, inventory = resolve_material_pool(materials, inventory_data)
 
     # Keep only the materials available in the inventory that can carry oxides:
     # a material with an empty formula is a zero column of the NNLS matrix

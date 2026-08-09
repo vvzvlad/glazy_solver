@@ -325,6 +325,140 @@ class TestOxideClassificationIntegrity(unittest.TestCase):
         self.assertAlmostEqual(sum(umf.get(oxide, 0) for oxide in flux_oxides()), 1.0, delta=1e-6)
         self.assertAlmostEqual(_flux_sum(umf), 1.0, delta=1e-6)
 
+    def test_presets_that_are_not_an_object_are_rejected(self):
+        broken = read_classification_file()
+        broken['unity_presets'] = ['Na2O', 'CaO']
+
+        with self.assertRaises(common.ClassificationError):
+            common._validate_oxide_classification(broken, 'broken.json')
+
+    def test_an_empty_preset_is_rejected(self):
+        """An empty basis is the "no fluxes" branch of weights_to_umf, silently"""
+        broken = read_classification_file()
+        broken['unity_presets'] = {'glazy': []}
+
+        with self.assertRaises(common.ClassificationError):
+            common._validate_oxide_classification(broken, 'broken.json')
+
+    def test_a_preset_that_is_a_bare_string_is_rejected(self):
+        """A string would expand into a list of single characters"""
+        broken = read_classification_file()
+        broken['unity_presets'] = {'glazy': 'Na2O'}
+
+        with self.assertRaises(common.ClassificationError):
+            common._validate_oxide_classification(broken, 'broken.json')
+
+    def test_non_string_oxide_names_in_a_preset_are_rejected(self):
+        broken = read_classification_file()
+        broken['unity_presets'] = {'glazy': ['Na2O', 7]}
+
+        with self.assertRaises(common.ClassificationError):
+            common._validate_oxide_classification(broken, 'broken.json')
+
+    def test_a_file_without_presets_is_still_valid(self):
+        """The key is optional: a file without it simply has no named conventions"""
+        without_presets = read_classification_file()
+        without_presets.pop('unity_presets', None)
+
+        common._validate_oxide_classification(without_presets, 'no_presets.json')
+
+
+class TestFluxConventions(unittest.TestCase):
+    """Named flux conventions: which oxides land in the unity denominator"""
+
+    def test_the_shipped_file_defines_both_conventions(self):
+        classification = read_classification_file()
+
+        self.assertIn('unity_presets', classification)
+        self.assertEqual(sorted(classification['unity_presets']), ['glazy', 'legacy'])
+
+    def test_unity_cannot_name_the_presets_block_as_a_group(self):
+        """Otherwise the basis would expand into convention names, not oxides"""
+        self.assertIn('unity_presets', common.CLASSIFICATION_META_KEYS)
+
+        broken = read_classification_file()
+        broken['unity'] = ['unity_presets']
+
+        with self.assertRaises(common.ClassificationError):
+            common._validate_oxide_classification(broken, 'broken.json')
+
+    def test_classification_does_not_leak_the_presets_key(self):
+        self.assertNotIn('unity_presets', oxides_classification())
+
+    def test_the_legacy_preset_matches_the_group_definition(self):
+        """The preset must not drift away from the "unity" groups it copies.
+
+        Compared as sets on purpose: the groups list K2O before Na2O and the
+        preset the other way round, and the order of the flux list changes
+        nothing - every consumer sums over it.
+        """
+        self.assertEqual(set(flux_oxides()), set(flux_oxides('legacy')))
+
+    def test_the_default_is_the_legacy_convention(self):
+        """The default keeps every existing caller byte-identical"""
+        composition = {"SiO2": 60.0, "Al2O3": 10.0, "CaO": 12.0, "Na2O": 4.0, "CuO": 4.0}
+
+        self.assertEqual(weights_to_umf(composition),
+                         weights_to_umf(composition, convention='legacy'))
+        self.assertEqual(calculate_umf_from_recipe(composition),
+                         calculate_umf_from_recipe(composition, convention='legacy'))
+
+    def test_an_unknown_convention_is_rejected_and_lists_the_known_ones(self):
+        with self.assertRaises(common.ClassificationError) as caught:
+            flux_oxides('ceramicscalc')
+
+        message = str(caught.exception)
+        self.assertIn('ceramicscalc', message)
+        self.assertIn('glazy', message)
+        self.assertIn('legacy', message)
+
+    def test_copper_moves_the_whole_umf_between_the_conventions(self):
+        """A colorant is a flux in one convention and not in the other.
+
+        CuO counts towards unity for us (ceramicscalc-2018) and does not for
+        Glazy, so on a copper glaze the two conventions divide by different
+        denominators and EVERY oxide of the UMF moves at once - which is why a
+        target copied from Glazy cannot be compared with ours oxide by oxide.
+
+        The factor is derived here from the molar masses rather than pinned as a
+        literal: it is exactly the ratio of the two flux sums.
+        """
+        # A copper glaze: 4.77% CuO of a 100% analysis
+        composition = {"SiO2": 69.23, "Al2O3": 9.50, "CaO": 10.00, "K2O": 3.00,
+                       "Na2O": 2.30, "MgO": 1.00, "Fe2O3": 0.20, "CuO": 4.77}
+        self.assertAlmostEqual(sum(composition.values()), 100.0, delta=1e-9)
+
+        molar_masses = load_molar_masses()
+
+        def flux_sum(convention):
+            return sum(composition[oxide] / molar_masses[oxide]
+                       for oxide in flux_oxides(convention) if oxide in composition)
+
+        # CuO is the whole difference on this composition
+        self.assertIn('CuO', flux_oxides())
+        self.assertNotIn('CuO', flux_oxides('glazy'))
+        self.assertAlmostEqual(flux_sum(None) - flux_sum('glazy'),
+                               composition['CuO'] / molar_masses['CuO'], delta=1e-12)
+
+        expected_factor = flux_sum(None) / flux_sum('glazy')
+
+        # Direction and rough magnitude: dropping CuO shrinks the denominator,
+        # so every UMF value grows, by about 22% on this composition
+        self.assertGreater(expected_factor, 1.0)
+        self.assertAlmostEqual(expected_factor, 1.22, delta=0.05)
+
+        default_umf = weights_to_umf(composition)
+        glazy_umf = weights_to_umf(composition, convention='glazy')
+
+        self.assertNotEqual(default_umf, glazy_umf)
+
+        for oxide, default_value in default_umf.items():
+            # The UMF values are rounded to 3 decimals, so the comparison is
+            # made against the rescaled default rather than value by ratio
+            self.assertAlmostEqual(glazy_umf[oxide], default_value * expected_factor,
+                                   delta=0.002,
+                                   msg=f"{oxide} did not scale with the convention")
+
 
 class TestUmfConversions(unittest.TestCase):
 

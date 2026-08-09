@@ -73,9 +73,9 @@ from common import (
     filter_materials_by_inventory,
     filter_materials_with_formula,
     flux_oxides,
-    load_materials,
     load_molar_masses,
     resolve_inventory,
+    resolve_material_pool,
     umf_to_weights,
     weights_to_umf,
 )
@@ -830,7 +830,8 @@ def _solution_sort_key(solution: Dict[str, Any], best_error: float):
 def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
                      max_solutions=5, verbose=False, error_threshold=0.1,
                      penalize_unlisted=1.0,
-                     candidate_search=SEARCH_EXHAUSTIVE) -> List[Dict[str, Any]]:
+                     candidate_search=SEARCH_EXHAUSTIVE,
+                     materials=None) -> List[Dict[str, Any]]:
     """
     Find glaze recipes for a target UMF by adding materials one at a time.
 
@@ -880,6 +881,15 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
             the inventory is tried per step, so it is no longer a shortcut and
             no longer cheaper. The 11th recipe is out of reach for both: it
             needs MnO2 and no material of the inventory carries any.
+        materials: optional material records to use as the database, same shape
+            as database/materials.json entries. Meant for the tests and for
+            callers carrying their own catalogue; when it is given together with
+            inventory=None it bypasses the inventory resolution and every
+            injected material is available. See common.resolve_material_pool().
+            "priority" is optional in those records and defaults to
+            DEFAULT_PRIORITY, which puts every injected material in one group -
+            so _priority_start_set() starts from the whole catalogue at once
+            unless the records carry explicit priorities.
 
     Raises:
         ValueError: candidate_search is not one of CANDIDATE_SEARCH_MODES,
@@ -943,11 +953,11 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
                        f"no recipe can satisfy both")
         return []
 
-    all_materials = load_materials(only_inventory=False, priority=True)
+    all_materials, available_names = resolve_material_pool(materials, inventory)
     # A material with an empty formula can never move the UMF. _rank_candidates
     # already skips it, but _priority_start_set does not, so it is dropped here
     available_materials = filter_materials_with_formula(
-        filter_materials_by_inventory(all_materials, resolve_inventory(inventory)))
+        filter_materials_by_inventory(all_materials, available_names))
 
     if not available_materials:
         if verbose:

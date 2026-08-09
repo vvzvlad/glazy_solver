@@ -229,6 +229,13 @@ curl -X GET http://localhost:5000/api/molar_masses
 `r2o + ro`. Отдаётся та же провалидированная копия, по которой считают
 решатели, а не отдельное чтение файла.
 
+Ключ `unity_presets` — именованные конвенции флюсов: плоские списки оксидов,
+которыми `common.flux_oxides(convention)` подменяет базис, собранный по группам.
+`legacy` — наша конвенция (ceramicscalc-2018), совпадает по составу с `unity`;
+`glazy` — конвенция современного Glazy, без `FeO/CoO/NiO/CuO`. На рецепте с
+колорантом знаменатель unity у них разный, и весь UMF съезжает целиком, поэтому
+сравнивать наши числа с опубликованными в Glazy можно только через `glazy`.
+
 **Output:**
 ```json
 {
@@ -236,7 +243,11 @@ curl -X GET http://localhost:5000/api/molar_masses
   "ro": ["MgO", "CaO", "SrO", "BaO", "ZnO", "PbO", "MnO", "FeO", "CoO", "NiO", "CuO"],
   "r2o3": ["Al2O3", "B2O3", "Fe2O3", "Cr2O3", "Mn2O3"],
   "ro2": ["SiO2", "TiO2", "ZrO2", "SnO2", "GeO2", "MnO2"],
-  "unity": ["r2o", "ro"]
+  "unity": ["r2o", "ro"],
+  "unity_presets": {
+    "legacy": ["Na2O", "K2O", "Li2O", "MgO", "CaO", "SrO", "BaO", "ZnO", "PbO", "MnO", "FeO", "CoO", "NiO", "CuO"],
+    "glazy": ["Na2O", "K2O", "Li2O", "PbO", "SrO", "BaO", "ZnO", "CaO", "MgO", "MnO"]
+  }
 }
 ```
 
