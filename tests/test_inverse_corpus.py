@@ -114,15 +114,45 @@ CORPUS_ENV = 'GLAZY_CORPUS'
 # was touched: bench/diff_baseline.py reports 0 cases moved on every metric of
 # every series across the change.
 #
-# The margin still has to absorb sampling luck, and it was re-measured under the
-# new gate rather than assumed. Over five seeds (20260531, 1, 42, 999, 20260101)
-# the iterative both-levels share ranged 82.67 - 88.00% and the classic one
-# 98.00 - 100%, the pinned seed being the least lucky of the five again. 0.78
-# therefore clears the whole spread, and clears the pinned seed by 4.67 points
-# (14 cases) - a slightly wider margin than the 3.33 points it had before.
+# THE THRESHOLD MOVED 0.78 -> 0.93 IN 10.19, AND THIS TIME THE SOLVER DID MOVE.
+# The NNLS residual and the search objective went onto the same relative scale
+# the gate has measured on since 10.18, so the search is now optimizing what it
+# is graded by: chemistry alone went 83.67% -> 98.67% (251 -> 296 of 300) and
+# both levels 82.67% -> 98.00%. A gate at 0.78 would have to lose 60 cases
+# before it noticed, which is not a gate.
+#
+# The margin still has to absorb sampling luck, and it was re-measured rather
+# than assumed. Over the same five seeds (20260531, 1, 42, 999, 20260101) the
+# iterative both-levels share now ranges 97.33 - 99.00%, the pinned seed sitting
+# at 98.00% in the middle of it instead of at the bottom. 0.93 clears the whole
+# spread and clears the pinned seed by 5.00 points, which on 300 cases is 15
+# cases - the same margin discipline as the 4.67 points it replaced, over a
+# spread that is a third as wide.
+#
+# ONE CONSTANT GATES TWO SERIES OF DIFFERENT SIZE, and the margin in CASES is
+# what matters, not the margin in points. Re-measured on the classic series,
+# which is 50 cases and therefore quantized at 2 points:
+#
+#     seed       classic chemistry   both levels
+#     20260531       100.00%           98.00%   <- pinned
+#     1              100.00%          100.00%
+#     42             100.00%           98.00%
+#     999            100.00%          100.00%
+#     20260101       100.00%          100.00%
+#
+# so 0.93 leaves the classic series 2 cases (49 of 50 today, and 47 of 50 is the
+# last passing value) against the iterative series' 15. The previous 0.78 left
+# classic 10. Two is thin but it is not fragile: both series are deterministic -
+# the sample seed is hard-wired and the classic engine runs on the pinned
+# CLASSIC_SEED - so the margin absorbs deliberate change rather than noise, and
+# this change does not touch the classic engine at all (bench/diff_baseline.py
+# reports 0 cases moved on every classic metric). Splitting the constant per
+# series would buy nothing but a second number to keep in step. If a future
+# change does move classic, split it then, with the measurement in hand.
+#
 # It does NOT have to absorb solver changes: those are what
 # bench/diff_baseline.py measures, case by case, against a committed snapshot.
-MIN_BOTH_LEVELS_SHARE = 0.78
+MIN_BOTH_LEVELS_SHARE = 0.93
 
 # Scenario B's gate is the share of the REACHABLE targets the search actually
 # reached. It replaced the accounted share in 10.18, and the reason is
@@ -144,32 +174,39 @@ MIN_BOTH_LEVELS_SHARE = 0.78
 # argument. The seed is hard-wired: tests/test_inverse_corpus._shared_corpus
 # builds the sample with bench_corpus.DEFAULT_SEED and there is no override, so
 # the only run this assertion will ever judge is the one with 10 reachable
-# targets and 6 reached. At n=10 the metric is quantized at 10 points, so the
-# threshold is set two cases below the measured value: 0.40 demands 4 of 10.
-# One or two lost cases is what a real regression looks like, and 0.40 sees the
-# third; the 0.15 this replaced only woke up after five of the six were gone.
+# targets and TEN reached. At n=10 the metric is quantized at 10 points, so the
+# threshold is set two cases below the measured value: 0.80 demands 8 of 10.
+# One or two lost cases is what a real regression looks like, and 0.80 sees the
+# third.
 #
-# For reference only, the same five seeds the threshold above uses:
+# THE PREVIOUS COMMENT ASKED FOR THIS, IN THESE WORDS: "6 of 10 is not a target
+# anybody should be content with - the LP has PROVEN a recipe exists for all
+# ten. Stage 3 (the relative NNLS residual) is expected to take this to 10/10,
+# and on that day 0.40 becomes exactly the catastrophe gate this comment was
+# written to complain about. Raise it in the same commit." Stage 3 is 10.19 and
+# it did take it to 10/10, so the number is raised here.
 #
-#     seed       reachable   solved among them
-#     20260531       10          6   (60.00%)   <- pinned, the only one gated
-#     1              10          5   (50.00%)
-#     42             11          4   (36.36%)
-#     999            15          3   (20.00%)
-#     20260101       11          3   (27.27%)
+# For reference only, the same five seeds re-measured under 10.19:
 #
-# THIS NUMBER MUST RISE WITH THE SEARCH. It is pinned to today's strength, and
-# 6 of 10 is not a target anybody should be content with - the LP has PROVEN a
-# recipe exists for all ten. Stage 3 (the relative NNLS residual) is expected to
-# take this to 10/10, and on that day 0.40 becomes exactly the catastrophe gate
-# this comment was written to complain about. Raise it in the same commit.
+#     seed       reachable   solved among them        was
+#     20260531       10         10   (100.00%)   <- pinned, 6 (60.00%)
+#     1              10          8    (80.00%)              5 (50.00%)
+#     42             11         11   (100.00%)              4 (36.36%)
+#     999            15          9    (60.00%)              3 (20.00%)
+#     20260101       11         10    (90.91%)              3 (27.27%)
+#
+# Seed 999 is the honest footnote: 9 of 15 there, so "the search reaches every
+# target the LP calls reachable" is a statement about the pinned corpus and not
+# a law. What is a law is the direction - every one of the five improved - and
+# the pinned seed is the only one this assertion judges.
 #
 # READ THE MISCLASSIFICATION LOG, NOT ONLY THIS NUMBER. What the run is actually
 # worth is in the two dispute lists printed below it, and since 10.18 those
 # lists mean something sharper: "reachable_unsolved" is a bug report against the
-# search (4 of 100 on the pinned seed), and "unreachable_solved" is a soundness
-# check on the LP, modulo the rounding quantum - see bench/corpus.py.
-MIN_SOLVED_AMONG_REACHABLE = 0.40
+# search (0 of 100 on the pinned seed since 10.19, 4 before it), and
+# "unreachable_solved" is a soundness check on the LP, modulo the rounding
+# quantum - see bench/corpus.py.
+MIN_SOLVED_AMONG_REACHABLE = 0.80
 
 # How many failing cases are printed in full. All of them are counted; the log
 # would otherwise be unreadable on a bad run.

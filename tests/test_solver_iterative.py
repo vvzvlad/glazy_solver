@@ -18,18 +18,34 @@ about its arguments and about the shape of what it returns.
 """
 
 import json
+import math
 import os
 import sys
 import unittest
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from common import weights_to_umf
+from common import (
+    OXIDE_SCALE_FLOOR,
+    load_materials,
+    load_molar_masses,
+    umf_deviation,
+    weights_to_umf,
+)
+from feasibility import DEFAULT_FEASIBILITY_TOL as CHEMISTRY_TOLERANCE
 from solver_classic import calculate_recipe_composition, calculate_umf_error
 from solver_iterative import (
+    OBJECTIVE_DEADBAND,
     SEARCH_EXHAUSTIVE,
     SEARCH_HEURISTIC,
+    _build_problem,
+    _focus_oxide,
+    _known_oxide,
+    _score_candidate,
+    _solve_material_set,
+    _weight_residual,
     find_best_recipe,
+    usable_target,
 )
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -280,21 +296,410 @@ class TestErrorSelfConsistency(SolverTestCase):
                     recomputed = float(calculate_umf_error(solution['target_umf'], solution['result_umf']))
                     self.assertAlmostEqual(solution['error'], recomputed, places=9)
 
-    def test_objective_equals_error_when_nothing_is_penalized(self):
+    def test_objective_is_recomputable_when_nothing_is_penalized(self):
+        """
+        The objective is no longer the reported error, and a consumer has to be
+        able to rebuild it anyway
+
+        It used to be exactly calculate_umf_error over the requested oxides when
+        penalize_unlisted was 0, and a test pinned that equality. That equality
+        is gone by design: the objective is now the L2 of the per-oxide RELATIVE
+        deviations, each one given OBJECTIVE_DEADBAND for free. What replaces it
+        is the same promise on the new definition - the number can be rebuilt
+        from target_umf and result_umf, and nothing else goes into it while the
+        unlisted oxides carry no weight.
+        """
         for solution in find_best_recipe(self.inventory, PARTIAL_TARGET, max_solutions=5,
                                          penalize_unlisted=0.0):
-            self.assertAlmostEqual(solution['error'], solution['objective_error'], places=9)
+            squared = 0.0
+            for oxide, expected in solution['target_umf'].items():
+                scale = max(expected, OXIDE_SCALE_FLOOR)
+                residual = (abs(expected - solution['result_umf'].get(oxide, 0.0)) / scale
+                            - OBJECTIVE_DEADBAND)
+                if residual > 0.0:
+                    squared += residual ** 2
+            self.assertAlmostEqual(solution['objective_error'], math.sqrt(squared), places=9)
 
-    def test_objective_is_never_below_the_reported_error(self):
-        for solution in find_best_recipe(self.inventory, PARTIAL_TARGET, max_solutions=5,
-                                         penalize_unlisted=1.0):
-            self.assertGreaterEqual(solution['objective_error'] + 1e-12, solution['error'])
+    def test_the_objective_is_not_the_reported_error(self):
+        """
+        The two numbers measure different things and must not be read as one
+
+        A consumer comparing objective_error against an absolute tolerance, or
+        error against the 0.05 the feasibility LP and the benchmark speak, is
+        making a units mistake. The partial target here is off by about 2% on
+        every requested oxide, which is a hair over the deadband and worth
+        0.002 of objective, while the same answer carries 0.066 of absolute L2 -
+        the two are not within an order of magnitude of each other.
+        """
+        solution = find_best_recipe(self.inventory, PARTIAL_TARGET, max_solutions=1,
+                                    penalize_unlisted=0.0)[0]
+        self.assertNotAlmostEqual(solution['error'], solution['objective_error'], places=3)
+
+    def test_the_contamination_term_lives_in_the_objective_only(self):
+        """
+        What the contamination term does to the objective, on a target that has
+        one
+
+        This replaces an assertion that the objective is NEVER below the
+        reported error, which was true while the two were the same absolute norm
+        plus a non-negative term and is false now: the relative objective
+        divides a deviation of a big oxide by that oxide, so a well fitted
+        target of large numbers comes out below its own absolute L2. Measured
+        over the 300 case corpus, 340 of the returned solutions have an
+        objective below their error, the widest by 13.8 - it is not an ordering
+        that exists, and a test claiming it would only be pinning a fixture.
+
+        What IS true is the reason the two differ at all: penalize_unlisted
+        loads the objective with contamination that `error` does not see, so on
+        a partial target the hard setting must raise the objective while leaving
+        the reported error to its own trade-off.
+        """
+        soft = find_best_recipe(self.inventory, PARTIAL_TARGET, max_solutions=1,
+                                penalize_unlisted=0.0)[0]
+        hard = find_best_recipe(self.inventory, PARTIAL_TARGET, max_solutions=1,
+                                penalize_unlisted=1.0)[0]
+
+        self.assertGreater(hard['objective_error'], hard['error'])
+        self.assertAlmostEqual(soft['objective_error'], 0.0, delta=0.05)
 
     def test_effective_target_extends_the_requested_one(self):
         solution = find_best_recipe(self.inventory, PARTIAL_TARGET, max_solutions=1)[0]
         for oxide, value in solution['target_umf'].items():
             self.assertEqual(solution['effective_target_umf'][oxide], value)
         self.assertGreater(len(solution['effective_target_umf']), len(solution['target_umf']))
+
+
+class TestKeysWithoutAMolarMassGetNoRow(unittest.TestCase):
+    """
+    A key the system cannot express in UMF takes no part in the fit at all
+
+    The rule is the molar mass, not a list of names, and it has to hold in every
+    place the search reads a formula - the NNLS rows, the objective, the
+    residual and the candidate score. A key with no molar mass has no relative
+    deviation to minimize, so any weight it gets in weight percent is arbitrary;
+    and under the relative weights an arbitrary weight is decisive rather than
+    small. A chemical row is 1 / (molar mass * scale), which over this database
+    runs from 0.005548 (SiO2 at a target of 3.0) to at most 0.5264 (fluorine at
+    the scale floor), so a row left on the bare penalty of 1.0 outweighs every
+    chemical row there can be - by 1.9x at worst and 180x in the common case
+    (1 / 0.005548; the 182 that stood here was 1 / 0.0055, the reciprocal of the
+    rounded row rather than of the row).
+
+    Loss on ignition is the instance that occurs in the shipped data, and it is
+    rarer than the first version of this docstring claimed: 3 of the 216
+    materials of database/materials.json carry a Loi key and all three are
+    inInventory: false. Neither measurement rig can see it - the default 19
+    material inventory excludes all three and bench/corpus strips LOI from every
+    Glazy formula - so the fixtures below carry their own.
+
+    "Carbon" stands for the general case: an unanalysed key nobody has ever put
+    on a list.
+    """
+
+    MATERIALS = [
+        {'name': 'Whiting', 'formula': {'CaO': 56.1, 'Loi': 43.9}},
+        {'name': 'Silica', 'formula': {'SiO2': 100.0}},
+        {'name': 'Kaolin', 'formula': {'Al2O3': 40.0, 'SiO2': 47.0, 'LOI': 13.0}},
+    ]
+    TARGET = {'SiO2': 3.0, 'Al2O3': 0.4, 'CaO': 0.7}
+
+    # The general case: the same shelf with and without an unanalysed key on the
+    # one material that carries the requested P2O5
+    ASH_BASE = [
+        {'name': 'Silica', 'formula': {'SiO2': 100.0}},
+        {'name': 'Whiting', 'formula': {'CaO': 56.1}},
+        {'name': 'Kaolin', 'formula': {'Al2O3': 40.0, 'SiO2': 47.0}},
+    ]
+    ASH_TARGET = {'SiO2': 3.0, 'Al2O3': 0.4, 'CaO': 0.7, 'P2O5': 0.05}
+    CLEAN_ASH = {'CaO': 30.0, 'SiO2': 30.0, 'P2O5': 5.0}
+    DIRTY_ASH = {'CaO': 30.0, 'SiO2': 30.0, 'P2O5': 5.0, 'Carbon': 35.0}
+
+    def setUp(self):
+        self.problem = _build_problem(usable_target(self.TARGET)[0], self.MATERIALS, 1.0)
+
+    def solve_ash(self, ash_formula):
+        materials = self.ASH_BASE + [{'name': 'Ash', 'formula': ash_formula}]
+        problem = _build_problem(usable_target(self.ASH_TARGET)[0], materials, 1.0)
+        return problem, _solve_material_set(materials, problem)
+
+    def test_a_key_without_a_molar_mass_is_not_an_oxide_of_the_problem(self):
+        for key in ('Loi', 'LOI'):
+            self.assertNotIn(key, self.problem['oxides'])
+            self.assertNotIn(key, self.problem['full_target'])
+            self.assertNotIn(key, self.problem['unlisted'])
+
+    def test_every_row_weight_is_priced_by_a_molar_mass(self):
+        """
+        The symptom the bug would have shown: a row at 1.0 among rows at 0.006
+
+        Stated as the invariant rather than as a ceiling, because a ceiling is
+        the wrong test here - fluorine at the scale floor legitimately reaches
+        0.5264, so "below 0.5" would fail on a fluorine-bearing shelf for the
+        right chemistry and the wrong reason. Every row has to BE
+        penalty / (molar mass * scale); a row that is not is a key that got
+        through without a mass.
+        """
+        molar_masses = load_molar_masses()
+        problem = self.problem
+
+        self.assertTrue(len(problem['row_weights']) > 0)
+        for oxide, weight in zip(problem['oxides'], problem['row_weights']):
+            penalty = 1.0 if oxide in problem['target_umf'] else problem['unlisted_weight']
+            scale = max(problem['full_target'][oxide], OXIDE_SCALE_FLOOR)
+            self.assertAlmostEqual(weight, penalty / (molar_masses[oxide] * scale), places=12,
+                                   msg=f"{oxide} is not priced by its molar mass")
+
+    def test_an_unanalysed_key_does_not_change_the_answer(self):
+        """
+        The general case, and the one that showed the damage
+
+        The two shelves differ by one unanalysed key on one material. Before the
+        rule was the molar mass, that key got a row at 1.0 against chemical rows
+        of 0.0055 to 0.0705, the fit went to minimizing it, and the only carrier
+        of the requested P2O5 was thrown out whole: the answer became
+        {Kaolin, Silica, Whiting} at an objective of 0.4800 instead of
+        {Ash, Kaolin, Silica} at 0.0117, a 41-fold regression announced by one
+        log line.
+        """
+        clean_problem, clean = self.solve_ash(self.CLEAN_ASH)
+        dirty_problem, dirty = self.solve_ash(self.DIRTY_ASH)
+
+        self.assertEqual(clean_problem['oxides'], dirty_problem['oxides'])
+        self.assertEqual(clean['recipe'], dirty['recipe'])
+        self.assertAlmostEqual(clean['objective_error'], dirty['objective_error'], places=12)
+        self.assertIn('Ash', dirty['recipe'], "the only carrier of the requested P2O5 was dropped")
+
+    def test_the_residual_and_the_focus_oxide_never_see_it(self):
+        """
+        The second route into the fit, which the problem-level tests miss
+
+        calculate_recipe_composition keeps every key of every formula, so the
+        actual side of the residual arrives carrying Loi whatever _expand_target
+        did. Taking the union of the two sides put it back: measured on this
+        very fixture, the residual held Loi -10.1 and LOI -4.4 against a worst
+        real oxide of +10.0, and _focus_oxide picked "Loi" as the oxide of the
+        step - so the whole candidate ranking of that step was about which
+        material burns off least.
+        """
+        state = _solve_material_set(self.MATERIALS, self.problem)
+        residual = _weight_residual(self.problem, state)
+
+        self.assertEqual(sorted(residual), sorted(self.problem['oxides']))
+        self.assertIn(_focus_oxide(residual), set(self.problem['oxides']))
+
+    def test_the_residual_is_normalized_over_the_oxides_alone(self):
+        """
+        Order matters: filter first, normalize second
+
+        Scaling the actual composition to 100 with the loss on ignition still in
+        it divides every real oxide by a total 10-15% too large, which pushes
+        EVERY residual up at once - a systematic deficit the search then chases.
+        This fixture is solved exactly, so every residual has to be ~0; with the
+        old order SiO2 alone read +10.0.
+        """
+        state = _solve_material_set(self.MATERIALS, self.problem)
+        residual = _weight_residual(self.problem, state)
+
+        for oxide, gap in residual.items():
+            self.assertAlmostEqual(gap, 0.0, delta=0.05, msg=f"{oxide} residual is {gap}")
+
+    def test_writing_the_loss_out_or_not_does_not_change_the_score(self):
+        """
+        The key is invisible to the score in BOTH directions
+
+        It contributes to none of the four terms - it used to land in
+        "disturbance", because residual.get(key, 0.0) is 0.0 and 0.0 is inside
+        MATCHED_OXIDE_TOLERANCE, so every material was penalized in proportion
+        to how much of it burns off - and it does not move the denominator
+        either, because the denominator is 100, the basis the analysis is stated
+        on, not the sum of the analysis.
+
+        Those two are the same requirement seen twice: whiting with its loss
+        written out and whiting without it are THE SAME MATERIAL described two
+        ways, and they have to score the same. Under the old denominator they
+        did not - the sum was 56.1 in one case and 100 in the other, so the
+        CaO fraction came out 1.0 against 0.561 and the analysis that omits its
+        loss looked like pure calcium oxide.
+
+        Pure lime IS a different material and must score differently, which is
+        what keeps this test from passing for the trivial reason.
+        """
+        state = _solve_material_set(self.MATERIALS, self.problem)
+        residual = _weight_residual(self.problem, state)
+        focus = _focus_oxide(residual)
+
+        spelled_out = _score_candidate({'name': 'Whiting', 'formula': {'CaO': 56.1, 'Loi': 43.9}},
+                                       residual, focus)
+        implied = _score_candidate({'name': 'Whiting', 'formula': {'CaO': 56.1}},
+                                   residual, focus)
+        quicklime = _score_candidate({'name': 'Quicklime', 'formula': {'CaO': 100.0}},
+                                     residual, focus)
+
+        self.assertAlmostEqual(spelled_out, implied, places=12,
+                               msg="the same material scores differently depending on whether "
+                                   "its loss on ignition is written out")
+        self.assertNotAlmostEqual(implied, quicklime, places=6,
+                                  msg="whiting and quicklime are not the same material")
+
+    def test_the_denominator_is_the_weighed_basis_and_not_the_analysis_sum(self):
+        """
+        Stated as the arithmetic, because the bias it removes is a ratio
+
+        Only 65 of the 179 analysed materials of the shipped database have an
+        analysis that adds up to 100, so for the other 114 the old denominator
+        inflated every fraction by 1 / (oxide sum): whiting by 1.783, dolomite
+        by 1.926, borax by 1.894, quartz by 1.000. The score therefore preferred
+        exactly the materials that lose the most in the kiln - a bias in the
+        ranking, and NOT a measured loss of quality: A/B'd over the 300 case
+        corpus it moves one answer of 300 under 'heuristic' and none at all
+        under 'exhaustive' (the numbers are in _score_candidate). What the test
+        pins is the arithmetic, which is wrong or right regardless.
+        """
+        residual = {'CaO': 10.0}
+        score = _score_candidate({'name': 'Whiting', 'formula': {'CaO': 56.1}}, residual, 'CaO')
+
+        # focus gain = residual * fraction, and the fraction has to be 0.561
+        self.assertAlmostEqual(score, 10.0 * 0.561, places=12)
+
+    def test_the_carbonate_is_not_penalized_for_burning_off(self):
+        """Whiting is the only CaO source, so a Loi row could only hurt it"""
+        state = _solve_material_set(self.MATERIALS, self.problem)
+
+        self.assertIsNotNone(state)
+        self.assertIn('Whiting', state['recipe'])
+
+    def test_the_whole_search_is_unmoved_by_the_key(self):
+        """
+        End to end through the documented materials= seam, so that every place
+        that reads a formula is on the path: _expand_state and _rank_candidates
+        as well as _build_problem and _solve_material_set.
+        """
+        clean = find_best_recipe(None, self.ASH_TARGET, max_solutions=5,
+                                 materials=self.ASH_BASE + [{'name': 'Ash',
+                                                             'formula': self.CLEAN_ASH}])
+        dirty = find_best_recipe(None, self.ASH_TARGET, max_solutions=5,
+                                 materials=self.ASH_BASE + [{'name': 'Ash',
+                                                             'formula': self.DIRTY_ASH}])
+
+        self.assertTrue(clean)
+        self.assertEqual([s['recipe'] for s in clean], [s['recipe'] for s in dirty])
+        self.assertEqual([round(s['objective_error'], 12) for s in clean],
+                         [round(s['objective_error'], 12) for s in dirty])
+
+
+class TestTheRuleOnAShippedCarrier(unittest.TestCase):
+    """
+    The same rule, on a material nobody invented for the occasion
+
+    Every fixture above carries its own synthetic Loi, and so does every other
+    automated run in this repository - which means that until this class existed
+    the rule had no witness on real data at all. The reason is worth writing
+    down, because it is a property of the shipped database rather than an
+    oversight of the tests: three of the 216 materials of database/materials.json
+    carry a Loi key and all three are inInventory: false, while
+    tests/test_individual_recipes.py and corpus scenario B build their inventory
+    from that very flag and bench/corpus strips LOI out of every Glazy formula
+    before it makes a case. Nothing that runs reaches a real carrier by accident.
+
+    So this class reaches one on purpose, through the documented materials= seam
+    and end to end, and asserts the two halves of the rule that the shipped data
+    can show: the key gets no row of the fit, and a material scores the same
+    whether or not its analysis writes the loss out.
+    """
+
+    # A real material with a real loss on ignition, chosen for being an ordinary
+    # glaze ingredient rather than for being convenient: metakaolin brings the
+    # Al2O3 of the target below and is the only carrier of it on this shelf.
+    CARRIER = 'Метакаолин BMK-45'
+    SHELF = (CARRIER, 'Кварцевая мука Кварцверке W12', 'Мел, CaCO3')
+    TARGET = {'SiO2': 3.0, 'Al2O3': 0.4, 'CaO': 0.7}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.shipped = {material['name']: material
+                       for material in load_materials(only_inventory=False, priority=False)}
+
+    def shelf(self, strip_loss=False):
+        materials = []
+        for name in self.SHELF:
+            material = dict(self.shipped[name])
+            formula = dict(material['formula'])
+            if strip_loss:
+                formula.pop('Loi', None)
+            material['formula'] = formula
+            materials.append(material)
+        return materials
+
+    def test_the_premise_the_rest_of_this_class_rests_on(self):
+        """
+        The witness is real and it is unreachable any other way
+
+        Stated as assertions rather than as prose because every part of it is a
+        property of a data file this repository keeps editing. If the carrier
+        loses its Loi key the class below has stopped testing anything; if ANY
+        shipped carrier enters the default inventory, the comments in
+        solver_iterative and the docstrings here - which say "all three are
+        inInventory: false", and conclude from that that no measurement rig can
+        see this rule - have gone stale. The last assertion covers what those
+        comments actually claim, not just the one material this class uses,
+        because the claim is about the database and not about the fixture.
+
+        The refusal is spelled with _known_oxide and not with `key in
+        molar_masses`, because the second is the WEAKER of the two writings the
+        predicate was extracted to unify - it misses a mass of zero or NaN. On
+        the shipped table the two agree; a test that reproduces the weak writing
+        is a test that would keep passing through exactly the divergence
+        _known_oxide exists to prevent.
+        """
+        molar_masses = load_molar_masses()
+        material = self.shipped.get(self.CARRIER)
+
+        def refused(entry):
+            return [key for key in (entry.get('formula') or {})
+                    if not _known_oxide(key, molar_masses)]
+
+        self.assertIsNotNone(material, f"{self.CARRIER} is gone from the shipped database")
+        self.assertTrue(refused(material),
+                        f"{self.CARRIER} no longer carries a key without a molar mass, so this "
+                        f"class has lost its witness - point it at another shipped carrier")
+
+        stocked = sorted(name for name, entry in self.shipped.items()
+                         if refused(entry) and entry.get('inInventory'))
+
+        self.assertFalse(stocked,
+                         f"{stocked} carry a key without a molar mass AND are in the default "
+                         f"inventory, so the rule is now reached by the ordinary runs - the "
+                         f"comments in solver_iterative and above that say otherwise are stale")
+
+    def test_the_loss_of_a_shipped_material_gets_no_row(self):
+        solutions = find_best_recipe(None, self.TARGET, max_solutions=3,
+                                     materials=self.shelf())
+
+        self.assertTrue(solutions)
+        best = solutions[0]
+        self.assertIn(self.CARRIER, best['recipe'],
+                      "the carrier is not in the answer, so nothing here was exercised")
+        # effective_target_umf IS the oxide set of the fit, so a key missing
+        # from it is a key with no NNLS row and no term of the objective
+        self.assertNotIn('Loi', best['effective_target_umf'])
+        self.assertNotIn('Loi', best['result_umf'])
+
+    def test_a_shipped_answer_does_not_depend_on_the_loss_being_written_out(self):
+        """
+        The consistency statement, on the database as shipped: metakaolin with
+        its 1% loss listed and metakaolin without it are the same material
+        described two ways, and the search may not tell them apart.
+        """
+        with_loss = find_best_recipe(None, self.TARGET, max_solutions=3,
+                                     materials=self.shelf())
+        without_loss = find_best_recipe(None, self.TARGET, max_solutions=3,
+                                        materials=self.shelf(strip_loss=True))
+
+        self.assertTrue(with_loss)
+        self.assertEqual([s['recipe'] for s in with_loss],
+                         [s['recipe'] for s in without_loss])
+        self.assertEqual([round(s['objective_error'], 12) for s in with_loss],
+                         [round(s['objective_error'], 12) for s in without_loss])
 
 
 class TestPartialTarget(SolverTestCase):
@@ -310,10 +715,25 @@ class TestPartialTarget(SolverTestCase):
         return solutions[0]
 
     def test_not_penalizing_unlisted_oxides_hits_the_requested_ones(self):
+        """
+        Measured RELATIVELY, which is what "hits" means here
+
+        The tolerance used to be an absolute 0.02 of UMF, which on the SiO2 of
+        3.0 in this target is 0.67% and on the Na2O of 0.3 is 6.7% - one numeral
+        asking for two very different things. The solver does not promise
+        either: it optimizes the relative deviation and stops caring inside
+        OBJECTIVE_DEADBAND, so every requested oxide comes back about 2% low
+        here (the recipe brings unrequested fluxes, which is exactly what
+        penalize_unlisted=0.0 permits, and they inflate the unity denominator).
+        The gate is the tolerance the whole system judges by.
+        """
         solution = self.best_error(penalize_unlisted=0.0)
-        for oxide, expected in PARTIAL_TARGET.items():
-            self.assertAlmostEqual(solution['result_umf'].get(oxide, 0.0), expected, delta=0.02,
-                                   msg=f"{oxide} missed the target")
+        deviation = umf_deviation(PARTIAL_TARGET,
+                                  {oxide: solution['result_umf'].get(oxide, 0.0)
+                                   for oxide in PARTIAL_TARGET})
+
+        self.assertLessEqual(deviation['max_relative'], CHEMISTRY_TOLERANCE,
+                             msg=f"{deviation['worst_oxide']} missed the target")
 
     def test_penalizing_unlisted_oxides_is_worse_on_the_requested_ones(self):
         """The documented trade-off: a hard zero on the unlisted oxides costs accuracy"""
@@ -369,15 +789,20 @@ class TestTraceIngredient(SolverTestCase):
     needs the colourant, so the test states its own premise instead of trusting
     a number pasted from somewhere.
 
-    Everything below runs at the DEFAULT max_solutions, and that is not an
-    accident. The same target at max_solutions=1 still comes back without the
-    colourant, for a completely different reason that the pruning pass does not
-    touch: the colourant-free answer scores 0.0575, the default error_threshold
-    is 0.1, so find_best_recipe declares the branch converged and stops the
-    search before the colourant is ever tried. Passing error_threshold=0.01
-    recovers it at max_solutions=1 as well. That is a second, independent way
-    for a trace ingredient to go missing and it lives in the acceptance rule,
-    not in the weight floor.
+    THE SECOND WAY A TRACE INGREDIENT USED TO GO MISSING IS GONE, and the
+    paragraph that used to be here described it: at max_solutions=1 the same
+    target came back without the colourant, because the colourant-free answer
+    scored 0.0575 against a default error_threshold of 0.1, so the branch was
+    declared converged and the search stopped before the colourant was ever
+    tried. Only error_threshold=0.01 recovered it.
+
+    That was the absolute objective failing to see a trace oxide, which is the
+    defect the relative objective exists to fix. Re-measured: the same
+    colourant-free answer now scores 0.1300, because CoO is missed by 0.15 of
+    its own scale and only the deadband comes off that. 0.1300 is above the
+    default threshold, the branch is not declared converged, and the colourant
+    comes back at max_solutions=1 with every argument at its default -
+    test_the_colourant_is_found_at_max_solutions_one below pins exactly that.
     """
 
     COBALT = "Карбонат кобальта, CoCO3"
@@ -419,6 +844,32 @@ class TestTraceIngredient(SolverTestCase):
         self.assertAlmostEqual(recipe[self.COBALT], self.COLOURED_RECIPE[self.COBALT], delta=0.2)
         self.assertAlmostEqual(solutions[0]['result_umf'].get('CoO', 0.0),
                                self.target['CoO'], delta=0.002)
+
+    def test_the_colourant_is_found_at_max_solutions_one(self):
+        """
+        The regression of the acceptance-rule failure, not of the weight floor
+
+        Everything at its default, including max_solutions=1, where the beam
+        width and the number of children are both 1 and the early-convergence
+        rule has the most room to fire. It cannot fire here any more: the
+        colourant-free branch is at 0.13 on the relative objective, above the
+        0.1 threshold, so the search keeps going and finds the cobalt.
+        """
+        solutions = find_best_recipe(self.coloured_inventory, self.target, max_solutions=1)
+
+        self.assertTrue(solutions)
+        self.assertIn(self.COBALT, solutions[0]['recipe'],
+                      f"the colourant was dropped at max_solutions=1: {solutions[0]['recipe']}")
+
+    def test_the_colourant_free_branch_is_no_longer_acceptable(self):
+        """The premise of the test above, measured rather than asserted"""
+        without = find_best_recipe(self.inventory, self.target, max_solutions=1)
+
+        self.assertTrue(without)
+        self.assertNotIn(self.COBALT, without[0]['recipe'])
+        # the absolute norm called this answer good; the relative one does not
+        self.assertLess(without[0]['error'], 0.1)
+        self.assertGreater(without[0]['objective_error'], 0.1)
 
     def test_dropping_it_would_have_passed_for_an_acceptable_answer(self):
         """

@@ -67,6 +67,9 @@ let current_umf = {
 };
 
 let current_solutions = [];
+// Warnings of the last /api/solve request. Reset at the start of every request,
+// so a banner can never outlive the answer it belongs to.
+let current_solve_warnings = [];
 let calculate_timer = null;
 let all_oxides = {}; // Будет содержать все доступные оксиды из molar_masses.json
 let is_calculating = false;
@@ -614,12 +617,40 @@ function show_calculation_status(is_loading) {
 // Показать сообщение об ошибке в контейнере решений
 function show_error_message(message) {
     elements.solutions_container.innerHTML = '';
-    
+
     const status_elem = document.createElement('div');
     status_elem.className = 'status-message';
     status_elem.textContent = message;
-    
+
     elements.solutions_container.appendChild(status_elem);
+    render_solve_warnings();
+}
+
+// /api/solve answers {solutions, warnings} and used to answer the bare list.
+// Both are accepted here, in one place rather than at each call site, so that
+// this page works against a server of either vintage.
+function unpack_solve_response(data) {
+    if (Array.isArray(data)) {
+        return { solutions: data, warnings: [] };
+    }
+    return { solutions: (data && data.solutions) || [], warnings: (data && data.warnings) || [] };
+}
+
+// "Мы проигнорировали оксид, который вы просили" is the one thing the user
+// cannot read off the answer: the recipe arrives, the target it was fitted to
+// simply no longer has the key. It is shown ABOVE the solutions and on the
+// "nothing found" path too, because a target of nothing but unknown oxides is
+// exactly the request that produces no solutions at all.
+function render_solve_warnings() {
+    if (!current_solve_warnings || current_solve_warnings.length === 0) {
+        return;
+    }
+
+    const warnings_elem = document.createElement('div');
+    warnings_elem.className = 'status-message';
+    warnings_elem.textContent = current_solve_warnings.join('; ');
+
+    elements.solutions_container.appendChild(warnings_elem);
 }
 
 // Получить класс цвета в зависимости от погрешности
@@ -857,22 +888,28 @@ function format_oxide_name(oxide) {
 // Solve recipe based on current UMF
 async function solve_recipe() {
     try {
+        // Cleared before anything can display: a banner belongs to the request
+        // that produced it, and show_error_message renders it on every path out
+        current_solve_warnings = [];
+
         const umf = get_umf_from_inputs();
-        
+
         if (Object.keys(umf).length === 0) {
             show_calculation_status(false);
             is_calculating = false;
             show_error_message('Введите значения UMF для решения.');
             return;
         }
-        
+
         // Call API to solve recipe
-        const solutions = await api.solve_recipe(umf, {
+        const answer = unpack_solve_response(await api.solve_recipe(umf, {
             max_solutions: 15,  // Запрашиваем больше для полноценной сортировки
             min_materials: use_min_materials, // Используем значение из параметра
             error_tolerance: 0.05
-        });
-        
+        }));
+        const solutions = answer.solutions;
+        current_solve_warnings = answer.warnings;
+
         // Убираем индикатор расчета
         show_calculation_status(false);
         is_calculating = false;
@@ -929,12 +966,14 @@ function disable_material_in_list(material_name) {
 // Display found solutions
 function display_solutions() {
     elements.solutions_container.innerHTML = '';
-    
+
     if (current_solutions.length === 0) {
         show_error_message('Решения не найдены.');
         return;
     }
-    
+
+    render_solve_warnings();
+
     current_solutions.forEach((solution, index) => {
         const solution_item = document.createElement('div');
         solution_item.className = 'solution-item';

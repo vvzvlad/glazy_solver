@@ -291,13 +291,20 @@ def _usable_target(target_umf):
     """
     Keep the target entries the math can work with
 
-    Same rule as solver_iterative._usable_target, deliberately: a known oxide
-    carrying a finite, non negative number. An explicit zero is KEPT - the
-    interface sends the whole oxide table on every request and "give me no iron"
-    is a constraint, not the absence of an opinion.
+    Same rule as solver_iterative.usable_target, deliberately: a known oxide
+    carrying a finite, non negative number. An explicit zero is KEPT - it is a
+    legal input here and "give me no iron" is a constraint, not the absence of
+    an opinion. Loss on ignition is dropped
+    WITHOUT being reported (it is bookkeeping, not an oxide anybody asked for),
+    and the other module is silent about it for the same reason - both sides are
+    pinned by a test, because "they agree" is not a property a reader can check.
 
     Returns:
-        (usable, dropped): the cleaned target and the names that were refused
+        (usable, dropped): the cleaned target and the names that were refused,
+        SORTED. /api/solve answers this refusal with the very same sentence, and
+        two endpoints must not name the same two oxides in two different orders
+        - which is what happened while this side returned them in the order the
+        request happened to serialize its keys in.
     """
     if not target_umf:
         return {}, []
@@ -322,7 +329,7 @@ def _usable_target(target_umf):
         else:
             dropped.append(str(oxide))
 
-    return usable, dropped
+    return usable, sorted(dropped)
 
 
 def _normalized_target(target):

@@ -83,7 +83,8 @@ def calculate_recipe_composition(materials, recipe):
     return composition
 
 # Non-negative least squares solution
-def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=None, target_weights=None):
+def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=None,
+                 target_weights=None, row_weights=None):
     """
     Solve one NNLS problem for a target UMF over the given oxide matrix
 
@@ -100,6 +101,23 @@ def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=N
             oxide with no molar mass, the repeated warning that comes with it.
             Left out, the conversion is done here, so a standalone call behaves
             exactly as before
+        row_weights: per-oxide weights of the least squares problem, one entry
+            per key of target_umf and in that order. None means an unweighted
+            fit, which is what a plain call has always done.
+
+            THE WHOLE POINT OF THIS PARAMETER IS THAT IT SCALES BOTH SIDES.
+            Weighting row i means minimizing sum_i (w_i * (A_i x - b_i))^2, so
+            the matrix row AND the right hand side travel together. Callers used
+            to scale the matrix outside this function, which happened to be
+            exact only because every row they scaled had b_i = 0; the moment an
+            oxide the target actually names gets a weight, scaling the matrix
+            alone solves a different problem than the one anybody wrote down.
+            TZ_SOLVER_V2.md 10.5 records that trap; this parameter exists so
+            that one place knows the invariant.
+
+            Only the NNLS fit is weighted. The composition estimate below reads
+            the UNSCALED oxide_matrix, because it answers "what does this recipe
+            contain", a question the weighting has nothing to do with.
 
     Returns:
         dictionary describing the solution, or {'error': ..., 'recipe': {}} when
@@ -109,6 +127,11 @@ def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=N
         ClassificationError: the oxide classification is unusable. Unlike every
             other failure here this one is not reported as a result: a corrupt
             database is not a material set that happens to have no solution
+        ValueError: row_weights does not have one entry per target oxide. A
+            silent mismatch would weight the wrong oxides, which is worse than
+            not weighting at all, so it is raised rather than reported as a
+            result - and raised OUTSIDE the try below, which turns everything
+            into "this subset has no solution"
     """
     # Oxide list taken from the target_umf keys
     target_oxides = list(target_umf.keys())
@@ -118,9 +141,24 @@ def solve_recipe(oxide_matrix, target_umf, material_names, available_materials=N
         target_weights = umf_to_weights(target_umf)
     weights_array = np.array([target_weights.get(oxide, 0.0) for oxide in target_oxides])
 
+    # Weighted least squares: a LOCAL copy of the matrix is scaled, together
+    # with the right hand side. oxide_matrix itself stays untouched, both
+    # because the caller owns it and because the composition estimate below
+    # needs the unscaled numbers
+    if row_weights is None:
+        fit_matrix = oxide_matrix
+        fit_weights = weights_array
+    else:
+        row_weights = np.asarray(row_weights, dtype=float)
+        if row_weights.shape != (len(target_oxides),):
+            raise ValueError(f"row_weights holds {row_weights.shape} entries, "
+                             f"expected one per target oxide ({len(target_oxides)})")
+        fit_matrix = oxide_matrix * row_weights[:, None]
+        fit_weights = weights_array * row_weights
+
     try:
         # Solve the NNLS problem
-        x, _residual = nnls(oxide_matrix, weights_array)
+        x, _residual = nnls(fit_matrix, fit_weights)
 
         # A solution too close to zero means the material is not used
         x[x < 1e-6] = 0
@@ -262,7 +300,20 @@ def find_multiple_solutions(target_umf, max_solutions=5, min_materials=True, err
     Find several solutions for a given target UMF formula
 
     Args:
-        target_umf: target UMF formula
+        target_umf: target UMF formula. IT IS NOT VALIDATED HERE, and that is
+            worth knowing before trusting an answer: an oxide whose name has no
+            molar mass is dropped by umf_to_weights with a log line, but a
+            NEGATIVE or NaN value is carried straight into the NNLS and fitted,
+            and the returned 'target_composition' echoes back whatever was
+            passed in. A target left with NO OXIDE AT ALL raises inside
+            numpy.matrix_rank and one of nothing but ZEROS raises inside
+            umf_to_weights, which divides by the total molar weight - neither is
+            caught here. Cleaning is the caller's job -
+            solver_iterative.usable_target() is the shared implementation of it,
+            returning (clean_target, dropped_names) - and /api/solve does it
+            above the choice of engine so that both engines answer for the same
+            target. main() below does it too, because a command line is an
+            interface and not a library call
         max_solutions: maximum number of solutions
         min_materials: if True, prefer solutions with fewer materials
         error_tolerance: acceptable error increase for solutions with fewer materials
@@ -459,7 +510,31 @@ def main():
         else:
             print("ошибка: неверный формат JSON для UMF")
         return
-    
+
+    # A COMMAND LINE IS AN INTERFACE, so it cleans its input the way /api/solve
+    # does instead of inheriting the library's "the caller validates" contract:
+    # --umf '{"SiO2": -4, "Al2O3": -1}' used to print three "solutions" fitted
+    # to negative oxides without a word about it.
+    #
+    # Imported here and not at the top of the module on purpose: solver_iterative
+    # imports this module, so a module level import would close the cycle.
+    from solver_iterative import usable_target
+
+    target_umf, dropped_oxides = usable_target(target_umf)
+    if dropped_oxides:
+        print(f"внимание: оксиды цели не распознаны и не учтены: {', '.join(dropped_oxides)}")
+    if not target_umf:
+        print("ошибка: в целевой формуле не осталось ни одного пригодного оксида")
+        return
+    # Same two refusals /api/solve answers with empty_target and zero_target,
+    # and for the same reason: a formula of nothing but zeros has no unity to be
+    # normalized by, so umf_to_weights below divides by zero. A zero NEXT TO a
+    # real value is an ordinary constraint and is solved
+    if not any(value > 0.0 for value in target_umf.values()):
+        print("ошибка: в целевой формуле все оксиды нулевые — нормировать не на что "
+              "и подбирать нечего")
+        return
+
     solutions = find_multiple_solutions(
         target_umf, 
         max_solutions=args.solutions,

@@ -310,15 +310,37 @@
                 }
 
                 // Отправляем запрос на сервер
+                current_solve_warnings = [];
                 fetch('/api/solve', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(request_data)
                 })
-                .then(response => response.json())
+                // Статус проверяется ДО разбора тела. Раньше тело ошибки
+                // попадало в current_solutions и display_solutions() падал, что
+                // случайно давало красное «Ошибка расчета»; unpack_solve_response
+                // такое тело разбирает молча — {solutions: [], warnings: []} —
+                // и 500 выглядел бы как «решений не найдено». Живой сценарий:
+                // classic + инвентарь из неизвестных серверу имён.
+                // js/app.js делает ту же проверку в api.request
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().catch(() => null).then(body => {
+                            // Ответы-ошибки тоже несут warnings — например,
+                            // «оксид не учтён» вместе с 422 empty_target
+                            current_solve_warnings = (body && body.warnings) || [];
+                            throw new Error((body && body.message) || `API error: ${response.status}`);
+                        });
+                    }
+                    return response.json();
+                })
                 .then(data => {
-                    // Обработка результатов и отображение
-                    current_solutions = data;
+                    // Обработка результатов и отображение. unpack_solve_response
+                    // (js/app.js) принимает и объект {solutions, warnings}, и
+                    // старый голый список
+                    const answer = unpack_solve_response(data);
+                    current_solutions = answer.solutions;
+                    current_solve_warnings = answer.warnings;
                     display_solutions();
                     status_element.textContent = 'Готово';
                     status_element.classList.remove('calculating');
@@ -330,6 +352,13 @@
                 })
                 .catch(error => {
                     console.error('calculation_error:', error);
+                    // Контейнер обязан очиститься: статус гаснет через три
+                    // секунды, и без этого на экране остаются рецепты ПРОШЛОЙ
+                    // цели — отличить их от свежих нельзя. show_error_message
+                    // чистит контейнер, показывает message с сервера и рисует
+                    // warnings; ровно это делает js/app.js в той же ситуации
+                    current_solutions = [];
+                    show_error_message(error.message || 'Ошибка расчета');
                     status_element.textContent = 'Ошибка расчета';
                     status_element.classList.remove('calculating');
                     status_element.classList.add('error');

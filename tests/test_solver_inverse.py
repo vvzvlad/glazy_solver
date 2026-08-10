@@ -42,12 +42,13 @@ from solver_classic import (
 )
 from solver_iterative import (
     PRUNE_ERROR_TOLERANCE,
+    PRUNE_OBJECTIVE_TOLERANCE,
     _build_problem,
     _prune_solution,
     _sole_carriers,
     _solve_material_set,
-    _usable_target,
     find_best_recipe,
+    usable_target,
 )
 
 FIXTURES_DIR = os.path.join(PROJECT_DIR, 'tests', 'fixtures')
@@ -397,7 +398,9 @@ class TestCollinearFeldsparsConditioning(CollinearFeldsparsMixin, unittest.TestC
         changed is what happens to a solved state on the way out.
         solver_iterative._prune_solution() re-solves the recipe once per
         material with that material left out and accepts the removal whenever
-        the objective error grows by no more than PRUNE_ERROR_TOLERANCE. One of
+        the objective error grows by no more than PRUNE_OBJECTIVE_TOLERANCE
+        (and the reported error by no more than PRUNE_ERROR_TOLERANCE - two
+        different gates in two different units, see _prune_solution). One of
         the two twins is exactly that kind of material - the other one can carry
         its share almost unchanged - so it goes, and the answer collapses onto
         the well conditioned four material recipe that was always available:
@@ -431,7 +434,7 @@ class TestPruningPass(CollinearFeldsparsMixin, unittest.TestCase):
     """
 
     def setUp(self):
-        self.problem = _build_problem(_usable_target(self.target_umf), self.materials, 1.0)
+        self.problem = _build_problem(usable_target(self.target_umf)[0], self.materials, 1.0)
         self.unpruned = _solve_material_set(self.materials, self.problem)
         self.assertIsNotNone(self.unpruned, "the fixture produced no recipe at all")
 
@@ -462,9 +465,12 @@ class TestPruningPass(CollinearFeldsparsMixin, unittest.TestCase):
         self.assertTrue(removed <= {'Custer Feldspar Variant A', 'Custer Feldspar Variant B'},
                         f"pruned something other than a feldspar twin: {sorted(removed)}")
 
-        # The rule is per removal, so one removal may cost one tolerance
+        # The rule is per removal, so one removal may cost one tolerance. The
+        # OBJECTIVE tolerance: this is the objective, and the two halves of the
+        # old single constant are not interchangeable just because they happen
+        # to carry the same numeral today
         growth = pruned['objective_error'] - self.unpruned['objective_error']
-        self.assertLessEqual(growth, PRUNE_ERROR_TOLERANCE * len(removed) + 1e-12,
+        self.assertLessEqual(growth, PRUNE_OBJECTIVE_TOLERANCE * len(removed) + 1e-12,
                              f"the objective grew by {growth}")
         self.assertAlmostEqual(sum(pruned['recipe'].values()), 100.0, places=6)
 
@@ -559,25 +565,37 @@ class TestSoleCarrierRule(unittest.TestCase):
 
         Chrome oxide is not a flux, so losing it does not drag the unity
         denominator the way losing cobalt does, and its whole contribution to
-        the UMF error is smaller than PRUNE_ERROR_TOLERANCE. On the numbers
-        alone the removal is free. On the question the rule actually asks - is
-        anything else in this recipe carrying the Cr2O3 the target asked for -
-        it is not free at all.
+        the search objective is smaller than PRUNE_OBJECTIVE_TOLERANCE. On the
+        numbers alone the removal is free. On the question the rule actually
+        asks - is anything else in this recipe carrying the Cr2O3 the target
+        asked for - it is not free at all.
         """
         materials = [self.SILICA, self.WHITING, self.KAOLIN, self.CHROME]
         recipe = {'Silica': 30.0, 'Whiting': 25.0, 'Kaolin': 44.85, 'Chrome Oxide': 0.15}
         target = forward_umf(materials, recipe)
 
-        problem = _build_problem(_usable_target(target), materials, 1.0)
+        problem = _build_problem(usable_target(target)[0], materials, 1.0)
         state = _solve_material_set(materials, problem)
         self.assertIn('Chrome Oxide', state['recipe'], "the fixture lost the colourant before pruning")
 
-        # The premise: dropping it really is cheap enough for the tolerance
+        # The premise, and it takes BOTH gates: a removal passes only when it
+        # costs at most PRUNE_OBJECTIVE_TOLERANCE on the objective AND at most
+        # PRUNE_ERROR_TOLERANCE on the reported error, so asserting one of them
+        # leaves the test able to pass for the wrong reason - drop the other
+        # gate below what this removal costs and the colourant would survive
+        # because the removal was refused on price, not because it carries the
+        # Cr2O3. Measured on this fixture: 0.0200 of objective against a gate of
+        # 0.03 and 0.0030 of error against a gate of 0.03, both open.
         without = _solve_material_set(
             [m for m in materials if m['name'] != 'Chrome Oxide'], problem)
         self.assertLessEqual(without['objective_error'],
-                             state['objective_error'] + PRUNE_ERROR_TOLERANCE,
+                             state['objective_error'] + PRUNE_OBJECTIVE_TOLERANCE,
                              "this colourant is no longer a counterexample to the tolerance")
+        self.assertLessEqual(without['error'],
+                             state['error'] + PRUNE_ERROR_TOLERANCE,
+                             "the error gate now refuses the removal on its own, so this test "
+                             "no longer shows that the sole carrier rule is what keeps the "
+                             "colourant")
 
         # ...and it stays anyway
         self.assertIn('Chrome Oxide', _prune_solution(state, problem, 1)['recipe'])
@@ -587,11 +605,21 @@ class TestPruningChecksBothErrors(unittest.TestCase):
     """
     The removal test runs on `error` as well as on the search objective
 
-    With penalize_unlisted > 0 the objective is error plus the damped
-    contamination of the unlisted oxides, so dropping a material that brought
-    unrequested oxides shrinks the second term and can pay for an arbitrary
-    rise in the first - and the first is the number the caller receives. The
-    materials below are built so that exactly that trade is on offer.
+    The two numbers are not the same quantity and no longer even the same units:
+    the objective is the L2 of the RELATIVE per-oxide deviations with a
+    deadband, bounded by PRUNE_OBJECTIVE_TOLERANCE, while `error` is the
+    absolute L2 the caller receives, bounded by PRUNE_ERROR_TOLERANCE. A removal
+    can therefore be cheap on one and dear on the other, and only the second
+    gate bounds what the caller is handed.
+
+    The mechanism that used to produce the divergence is still named in
+    _prune_solution - with penalize_unlisted > 0 the objective folds in the
+    contamination of the unlisted oxides, which a removal can shrink to pay for
+    a rise in `error` - but it is weaker than it was, because that contamination
+    term is on the relative scale now too. What is easy to build instead, and
+    what the fixture below builds, is the plain difference of scale: a removal
+    that walks a big oxide by a percent of ITSELF is nearly free on the relative
+    objective and expensive on the absolute norm.
     """
 
     def setUp(self):
@@ -600,13 +628,13 @@ class TestPruningChecksBothErrors(unittest.TestCase):
             {'name': 'Whiting', 'formula': {'CaO': 56.1}},
             {'name': 'Kaolin', 'formula': {'Al2O3': 40.0, 'SiO2': 47.0}},
             # The trap: it carries the requested K2O and a lot of unrequested BaO
-            {'name': 'Dirty Feldspar', 'formula': {'K2O': 14.0, 'SiO2': 40.0, 'BaO': 30.0}},
+            {'name': 'Dirty Feldspar', 'formula': {'K2O': 20.0, 'SiO2': 30.0, 'BaO': 50.0}},
             # ...and this one keeps it from being the SOLE carrier of K2O, so the
             # structural rule stays out of the way and the tolerance has to decide
-            {'name': 'Clean Feldspar', 'formula': {'Al2O3': 19.0, 'SiO2': 68.0, 'K2O': 2.0}},
+            {'name': 'Clean Feldspar', 'formula': {'Al2O3': 19.0, 'SiO2': 80.8, 'K2O': 0.2}},
         ]
-        self.target = {'SiO2': 3.0, 'Al2O3': 0.5, 'CaO': 0.7, 'K2O': 0.4}
-        self.problem = _build_problem(_usable_target(self.target), self.materials, 1.0)
+        self.target = {'SiO2': 3.0, 'Al2O3': 0.5, 'CaO': 0.7, 'K2O': 0.1}
+        self.problem = _build_problem(usable_target(self.target)[0], self.materials, 1.0)
         self.state = _solve_material_set(self.materials, self.problem)
         self.assertIsNotNone(self.state)
 
@@ -616,7 +644,7 @@ class TestPruningChecksBothErrors(unittest.TestCase):
         self.assertNotIn('Dirty Feldspar',
                          _sole_carriers([m for m in self.materials
                                          if m['name'] in self.state['recipe']],
-                                        _usable_target(self.target)))
+                                        usable_target(self.target)[0]))
 
     def test_a_removal_that_only_looks_free_on_the_objective_is_rejected(self):
         used = [m for m in self.materials if m['name'] in self.state['recipe']]
@@ -628,7 +656,7 @@ class TestPruningChecksBothErrors(unittest.TestCase):
             if candidate is None:
                 continue
             cheap_on_objective = (candidate['objective_error']
-                                  <= self.state['objective_error'] + PRUNE_ERROR_TOLERANCE)
+                                  <= self.state['objective_error'] + PRUNE_OBJECTIVE_TOLERANCE)
             dear_on_error = candidate['error'] > self.state['error'] + PRUNE_ERROR_TOLERANCE
             if cheap_on_objective and dear_on_error:
                 tempting.append(dropped['name'])

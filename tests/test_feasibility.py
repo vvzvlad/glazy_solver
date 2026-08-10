@@ -298,6 +298,41 @@ class TestCheckFeasibility(unittest.TestCase):
                                plain['max_relative_deviation'], places=6)
         self.assertTrue(any('плавн' in warning for warning in scaled['warnings']))
 
+    def test_an_unknown_oxide_of_the_target_is_named_in_the_warnings(self):
+        """
+        The sentence /api/solve reuses word for word, and the ORDER of the names
+
+        Both modules sort the refused names, and this is the side that did not:
+        it returned them in the order the target's keys happened to arrive in, so
+        two endpoints could name the same two oxides two ways. Two of them, in
+        non-alphabetical order, is what makes that observable.
+        """
+        result = check_feasibility({"Zz": 0.2, "SiO2": 3.0, "Aa": 0.1, "CaO": 1.0},
+                                   SYNTHETIC)
+
+        refusals = [warning for warning in result['warnings'] if 'не распознаны' in warning]
+        self.assertEqual(len(refusals), 1)
+        self.assertIn('Aa, Zz', refusals[0])
+
+    def test_loss_on_ignition_in_the_target_is_dropped_without_a_warning(self):
+        """
+        The silence solver_iterative.usable_target claims to share with this one
+
+        Loi is bookkeeping leaked in from a material analysis, not an oxide
+        anybody asked for, so neither module reports it - and both say in prose
+        that the other behaves the same way. usable_oxides() is pinned above,
+        but that is a different function about matrix ROWS; nothing pinned the
+        TARGET side, so this agreement could have gone stale without a failure.
+        """
+        clean = check_feasibility({"SiO2": 3.0, "Al2O3": 0.3, "CaO": 1.0}, SYNTHETIC)
+        with_loss = check_feasibility({"SiO2": 3.0, "Al2O3": 0.3, "CaO": 1.0,
+                                       "Loi": 8.0, "LOI": 2.0}, SYNTHETIC)
+
+        self.assertEqual(with_loss['warnings'], clean['warnings'])
+        self.assertFalse([warning for warning in with_loss['warnings']
+                          if 'Loi' in warning or 'LOI' in warning])
+        self.assertEqual(with_loss['feasible'], clean['feasible'])
+
     def test_a_target_without_fluxes_is_refused(self):
         result = check_feasibility({"SiO2": 3.0, "Al2O3": 0.3}, SYNTHETIC)
 

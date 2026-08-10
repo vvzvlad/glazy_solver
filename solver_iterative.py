@@ -19,6 +19,10 @@ The algorithm mimics the way a human ceramist works:
 2. Solve the mix with NNLS in WEIGHT space (the same math the classic solver
    uses: target UMF -> weights, NNLS over the material formulas, result back
    to UMF), drop materials weighing less than MIN_MATERIAL_WEIGHT and re-solve.
+   The rows of that fit are WEIGHTED so that the residual it minimizes is the
+   relative per-oxide deviation the rest of the system judges by, rather than
+   the weight percentage it is posed in - see _build_problem for the derivation
+   and OBJECTIVE_DEADBAND for what the numbers mean.
 3. Look at the per-oxide residual, find the oxide that is the furthest away
    from the target - the focus oxide of this step.
 4. Rank the materials that are not in the set yet by a score that is built from
@@ -76,6 +80,8 @@ import numpy as np
 
 from common import (
     DEFAULT_PRIORITY,
+    NON_OXIDE_KEYS,
+    OXIDE_SCALE_FLOOR,
     filter_materials_by_inventory,
     filter_materials_with_formula,
     flux_oxides,
@@ -110,13 +116,21 @@ logger = logging.getLogger(__name__)
 #                         feldspar 39.48, CoCO3 0.5}
 #   MIN=1.0  err 0.0575  {kaolin 10.04, quartz 30.16, chalk 20.12, feldspar 39.68}
 #
-# 0.0575 is below the default error_threshold of 0.1, so the second answer is
-# returned as acceptable and nothing in it says that an ingredient was dropped:
-# a blue glaze silently becomes a clear one. Colourants are exactly the class of
-# material that weighs the least and matters the most. The cut was fuzzy on top
-# of that - a component genuinely needed at 1.00% went too, because the first
-# NNLS estimate landed just below the floor and _solve_material_set then removed
-# the material from `active` for good.
+# 0.0575 is the ABSOLUTE norm, and it is below the default error_threshold of
+# 0.1, so the second answer used to come back as acceptable with nothing in it
+# saying that an ingredient was dropped: a blue glaze silently becomes a clear
+# one. Colourants are exactly the class of material that weighs the least and
+# matters the most. The cut was fuzzy on top of that - a component genuinely
+# needed at 1.00% went too, because the first NNLS estimate landed just below
+# the floor and _solve_material_set then removed the material from `active` for
+# good.
+#
+# The same answer scores 0.1300 on the relative objective this module minimizes
+# now, because the CoO it dropped is missed by 0.15 of its own scale, so it no
+# longer passes the threshold and the branch is no longer declared converged.
+# That closes the "returned as acceptable" half of the defect and nothing else:
+# a weight floor of 1.0 would still throw the cobalt away, it would just be
+# reported honestly. The floor stays at 0.1.
 #
 # Keeping a recipe free of pointless components is the job of _prune_solution(),
 # which asks whether a material is the only source of something the target asked
@@ -124,34 +138,212 @@ logger = logging.getLogger(__name__)
 # that have nothing to do with how much it weighs.
 MIN_MATERIAL_WEIGHT = 0.1
 
-# How much a removal may cost, checked per removal against the state it starts
-# from, on BOTH error numbers (see _prune_solution for why both).
+# --- the scale everything below is measured on -------------------------------
+#
+# _objective_error returns the L2 norm of the RELATIVE per-oxide deviations,
+# |target - actual| / max(target, common.OXIDE_SCALE_FLOOR), which is the metric
+# the feasibility LP minimizes and the benchmark gate accepts at 0.05. Every
+# threshold compared against that number - the error_threshold argument,
+# PRUNE_OBJECTIVE_TOLERANCE, SOLUTION_ERROR_TIE_ABS - is therefore in RELATIVE
+# units and was re-derived by measurement when the scale changed, not converted
+# by a factor. PRUNE_ERROR_TOLERANCE is the odd one out: it bounds `error`, the
+# retired absolute L2, whose scale did not move.
+#
+# STALL_IMPROVEMENT and SOLUTION_ERROR_TIE_REL are ratios of the objective to
+# itself, so the change of scale cannot touch them.
+#
+# --- the deadband ------------------------------------------------------------
+#
+# How much relative deviation on one oxide is free. TUNABLE POLICY, NOT PHYSICS.
+#
+# What it buys is weighability. Driving an oxide that is already inside its
+# tolerance the rest of the way to zero costs a material, and 27 of the 300
+# scenario A cases paid one for exactly that - a deviation moved from 0.04 to
+# 0.02, an improvement no threshold and no potter can see. This is
+# UI_DECISIONS.md 2.2's passenger idea generalised from the unrequested oxides
+# to all of them: an oxide already inside its tolerance is not an error to be
+# minimized.
+#
+# EVERY SWEEP TABLE IN THIS MODULE NAMES ITS WHOLE PINNED SET, because a table
+# that does not cannot be reproduced: the first version of this one was taken
+# while SOLUTION_ERROR_TIE_ABS was still 0.01, said only "at the old pruning
+# budget", and a reader pinning the shipped 0.02 instead got median min_portion
+# 2.70 where the table says 2.35. "Everything else at its shipped value" is the
+# default below and the deviations are spelled out.
+#
+# Swept twice on the 300 case scenario A corpus at max_solutions=5, exhaustive,
+# paired case by case against the answers of commit 1f521c9. First with
+# PRUNE_OBJECTIVE_TOLERANCE = PRUNE_ERROR_TOLERANCE = 0.005 and
+# SOLUTION_ERROR_TIE_ABS = 0.01 - the pre-10.19 budget, which isolates the
+# deadband from the widening of the pruning pass:
+#
+#   deadband   rel<=0.05   mean count   median min_portion   count worse/better
+#     none        296         5.960          2.350                 76 / 0
+#     0.01        296         5.887          2.905                 61 / 1
+#     0.02        296         5.833          2.905                 53 / 4
+#     0.03        295         5.817          2.905                 50 / 5
+#     0.04        295         5.787          2.915                 48 / 9
+#     0.05        287         5.757          2.920                 45 / 12
+#
+# and again with everything else at its shipped value, where the last column
+# also carries the scenario B score:
+#
+#   deadband   rel<=0.05   mean count   median min_portion   worse/better   B
+#     none        296         5.797          2.960             52 / 9      10/10
+#     0.01        296         5.760          2.995             49 / 16      9/10
+#     0.02        296         5.730          3.050             47 / 22     10/10
+#     0.03        291         5.697          3.075             45 / 25      9/10
+#     0.04        281         5.653          3.215             40 / 32      5/10
+#     0.05        273         5.623          3.295             35 / 33      5/10
+#
+# Two things the second table says that the first cannot:
+#
+# * the deadband MUST be narrower than the acceptance tolerance the answer is
+#   graded by (0.05, common to the LP and the benchmark gate), because the
+#   pruning pass spends its own budget ON TOP of the band. Inside the band every
+#   removal already reads as free; give the pass 0.03 more and a deadband of
+#   0.03 already walks 5 of 300 cases out the far side of the gate, 0.04 walks
+#   15 and takes half of scenario B with it. The first table, measured at a
+#   pruning budget of 0.005, put that cliff at 0.05 - so the width that is safe
+#   depends on what the pass is allowed to spend afterwards, and the two have to
+#   be read together;
+# * 0.02 is the knee. It keeps the full chemistry of the deadband-free version
+#   (296 of 300, and all ten reachable scenario B targets) and recovers most of
+#   the weighability the relative weights cost: against today's answers the
+#   paired count regression is 47 worse / 22 better, where the relative weights
+#   with no deadband and the old pruning budget cost 76 worse / 0 better.
+#
+# The tempting rule "deadband + pruning budget <= 0.05" is NOT a law, and it was
+# checked rather than assumed. Five splits that all sum to 0.05, everything else
+# shipped, score on the gate and on scenario B:
+#
+#   deadband + PRUNE_OBJECTIVE_TOLERANCE   rel<=0.05   B solved/reachable
+#     0.00 + 0.05                             294            7/10
+#     0.01 + 0.04                             295            8/10
+#     0.02 + 0.03                             296           10/10
+#     0.03 + 0.02                             295           10/10
+#     0.04 + 0.01                             290           10/10
+#
+# The sum is a ceiling worth knowing; where the budget sits inside it is a
+# measurement, and 0.02 + 0.03 is the best point on that line.
+OBJECTIVE_DEADBAND = 0.02
+
+# How much a removal may cost the SEARCH OBJECTIVE, per removal, against the
+# state it starts from. RELATIVE UNITS, so this number is not comparable with
+# the absolute one below and was measured rather than converted.
+#
+# Swept on the 300 case scenario A corpus at max_solutions=5, exhaustive,
+# everything else at its shipped value EXCEPT the reported-error gate below,
+# pinned at its old 0.005 so that this axis is read on its own:
+#
+#   tolerance   rel<=0.05   mean count   median min_portion   B solved/reachable
+#     0.005        296         5.817         2.905                 10/10
+#     0.01         296         5.817         2.905                 10/10
+#     0.02         296         5.817         2.905                 10/10
+#     0.03         296         5.813         2.905                 10/10
+#     0.04         295         5.807         2.910                 10/10
+#     0.05         293         5.800         2.910                 10/10
+#     0.1          293         5.800         2.910                 10/10
+#
+# and the same sweep with the two gates moved TOGETHER, everything else shipped,
+# which is what a single constant would have done and is where the cliff is:
+#
+#     0.005        296         5.817         2.905                 10/10
+#     0.02         296         5.753         2.995                 10/10
+#     0.03         296         5.730         3.050                 10/10
+#     0.04         295         5.710         3.105                  9/10
+#     0.05         285         5.663         3.250                  8/10
+#     0.1          263         5.567         3.375                  7/10
+#
+# 0.03 is the knee on both readings: the last value that keeps the whole
+# chemistry (296 of 300, and all ten reachable scenario B targets). Past it the
+# pass starts spending the acceptance tolerance itself - the deadband already
+# gives every oxide 0.02 for free, so 0.05 on top of that is a licence to walk a
+# recipe out of the gate one removal at a time.
+#
+# The first table is also the reason the two constants exist. Moving this axis
+# alone buys almost nothing (mean count 5.817 -> 5.813) because the absolute
+# gate below is the binding one, while moving it alone past 0.03 is what breaks
+# the chemistry. The two gates have different safe ranges, and one numeral would
+# hide that: somebody raising "the pruning tolerance" to 0.05 would lose eleven
+# cases and two reachable scenario B targets without being told which half of it
+# did the damage.
+#
+# THIS is the gate that protects a trace ingredient, and it does it far better
+# than the absolute one ever could, which is the reason the absolute one below
+# could be relaxed. Same base and same colourants as the table under
+# PRUNE_ERROR_TOLERANCE, measured again on both numbers:
+#
+#   material                       %   d error   d objective
+#   Карбонат кобальта, CoCO3     1.0    0.1196        0.2815
+#   Карбонат кобальта, CoCO3     0.2    0.0242        0.0400
+#   Оксид никеля зеленый, NiO    0.3    0.0545        0.1300
+#   Оксид хрома, Cr2O3           1.0    0.0230        0.2200
+#   Оксид хрома, Cr2O3           0.3    0.0063        0.0500
+#   Хромат железа, FeCr2O4       0.5    0.0064        0.0424
+#   Оксид железа красный, Fe2O3  0.3    0.0034        0.0400
+#
+# The last row is the point: 0.3% of red iron oxide costs 0.0034 on the absolute
+# norm, under the 0.005 the pass used to allow, and was thrown away; on the
+# relative objective it costs 0.0400, over this tolerance, and is kept. Every
+# row of the table is blocked here at 0.03 and several of them were not blocked
+# at 0.005 there. It is still not a colourant rule - see PRUNE_ERROR_TOLERANCE
+# for why no error threshold can be one - but it is no longer the wrong quantity
+# by an order of magnitude.
+PRUNE_OBJECTIVE_TOLERANCE = 0.03
+
+# How much a removal may cost the REPORTED error, per removal, against the state
+# it starts from. ABSOLUTE units: `error` is calculate_umf_error, the L2 of the
+# absolute UMF deviations, and it kept its scale when the objective changed.
+# One numeral for both gates would be one ruler for two scales, which is why
+# there are two constants where there used to be one.
 #
 # What this tolerance is for is recognising FIT NOISE: a material the search
 # added to shave a fourth decimal off one oxide, which by construction is not
-# the only thing in the recipe carrying that oxide. 0.005 of UMF error is
-# invisible in a fired glaze - smaller than the 0.0033 that the published
-# percentages of a textbook recipe already cost by being rounded to one decimal.
+# the only thing in the recipe carrying that oxide. It is now the BACKSTOP of
+# the pass rather than its main gate - the relative tolerance above is the one
+# that decides - and it was re-measured in that role. Swept with everything else
+# at its shipped value, so the objective gate sits at 0.03 throughout:
 #
-# What it is NOT for, at any calibration, is protecting a colourant, and it is
-# worth being explicit about that because the first version of this pass claimed
-# otherwise. Removing 0.5% of cobalt carbonate costs 0.0545, ten times the
-# tolerance, which looked like proof that the test protects colourants. It is
-# not: cobalt is a FLUX, so losing it drags the unity denominator of the whole
-# formula and inflates the measured cost. Colourants that are not fluxes get no
-# such amplification, and the same measurement on the same base says so:
+#   tolerance   rel<=0.05   mean count   median min_portion   B solved/reachable
+#     0.005        296         5.813         2.905                 10/10
+#     0.01         296         5.777         2.925                 10/10
+#     0.02         296         5.737         3.030                 10/10
+#     0.03         296         5.730         3.050                 10/10
+#     0.05         296         5.717         3.075                 10/10
+#     0.1          296         5.713         3.075                 10/10
+#
+# Nothing on this axis touches the chemistry - the relative gate is already
+# holding that line - and the weighability saturates at 0.03, so that is where
+# it sits. At 0.03 the cap is at most 1% of a SiO2 of 3.0, a fifth of the 0.05
+# the whole system accepts, so it is still the conservative of the two.
+#
+# The old value was 0.005, argued from "0.005 of UMF error is invisible in a
+# fired glaze, smaller than the 0.0033 that the published percentages of a
+# textbook recipe already cost by being rounded to one decimal". That argument
+# is sound and is exactly why this gate cannot be the main one: 0.005 of
+# absolute L2 is 0.17% of a SiO2 of 3.0 and 10% of an MgO of 0.05, one numeral
+# meaning two completely different amounts of chemistry.
+#
+# What this tolerance is NOT for, at any calibration, is protecting a colourant,
+# and it is worth being explicit about that because the first version of this
+# pass claimed otherwise. Removing 0.5% of cobalt carbonate costs 0.0545, ten
+# times the old tolerance, which looked like proof that the test protects
+# colourants. It is not: cobalt is a FLUX, so losing it drags the unity
+# denominator of the whole formula and inflates the measured cost. Colourants
+# that are not fluxes get no such amplification, and the same measurement on the
+# same base says so (re-measured under the relative row weights, which change
+# the fit itself and moved a few of these rows in the third decimal):
 #
 #   material              oxide          1.0%    0.5%    0.3%    0.2%
-#   Карбонат кобальта     CoO (flux)   0.1196  0.0545  0.0371  0.0242
-#   Оксид никеля          NiO (flux)   0.1844  0.0954  0.0555  0.0313
-#   Оксид хрома           Cr2O3        0.0240  0.0110  0.0070  0.0051
-#   Хромат железа         Cr2O3/Fe2O3  0.0152  0.0067  0.0034  0.0030
-#   Оксид железа красный  Fe2O3        0.0212  0.0099  0.0050  0.0045
+#   Карбонат кобальта     CoO (flux)   0.1196  0.0545  0.0351  0.0242
+#   Оксид никеля          NiO (flux)   0.1824  0.0964  0.0545  0.0302
+#   Оксид хрома           Cr2O3        0.0230  0.0110  0.0063  0.0040
+#   Хромат железа         Cr2O3/Fe2O3  0.0157  0.0064  0.0027  0.0020
+#   Оксид железа красный  Fe2O3        0.0196  0.0102  0.0034  0.0022
 #
 # Everything at or below the tolerance in that table is a colourant this test
-# throws away: 0.4% of iron chromate, 0.25% of red iron oxide, 0.15% of chrome
-# oxide - and 0.4% is four grams in a kilogram batch, an ordinary weighable
-# addition. Raising the number to catch them would only move the line to some
+# throws away. Raising the number to catch them would only move the line to some
 # other colourant, because the quantity being measured is the wrong one. A
 # colourant works OPTICALLY and contributes almost nothing to the chemistry;
 # that is what makes it a colourant. 0.5% of cobalt is the difference between a
@@ -162,7 +354,7 @@ MIN_MATERIAL_WEIGHT = 0.1
 # So colourants are not protected by this number at all. They are protected by
 # the sole carrier rule in _prune_solution, which asks a different question
 # entirely and has no quantity in it.
-PRUNE_ERROR_TOLERANCE = 0.005
+PRUNE_ERROR_TOLERANCE = 0.03
 
 # How many candidate recipes the pruning pass may work through, as a multiple of
 # max_solutions. The pass must run before the sort and before the max_solutions
@@ -203,13 +395,58 @@ STALL_IMPROVEMENT = 0.01
 # 'heuristic' candidate search: the heuristic proposes, NNLS disposes
 TOP_CANDIDATES = 3
 
+# Objective difference below which two candidates of one expansion step count as
+# equally good, so that the heuristic order - and through it the material
+# priority - decides between them instead of the last decimal.
+#
+# It is named rather than written as a literal round(objective, 4) because it is
+# a tolerance in the OBJECTIVE's own units, which makes it one of the numbers the
+# move to the relative scale silently changed the meaning of. Written out: a
+# relative deviation of 1e-4 spread over the oxides, two orders of magnitude
+# under the deadband and three under the acceptance tolerance.
+#
+# Swept from 1e-4 to 2e-3 over the 300 case scenario A corpus, everything else
+# shipped: not one case moves, on any metric. It stays at the old granularity
+# because the measurement
+# gives no reason to move it, and a number that was left alone should look like
+# one. What the tie between two chemically interchangeable materials really
+# turns on is _solution_sort_key, not this step - recipe 09 of the reference set
+# is the worked example there.
+CANDIDATE_TIE_STEP = 1e-4
+
 # Maximum number of branches kept alive by the beam search
 MAX_BEAM_WIDTH = 4
 
-# Solutions whose error is within this distance from the best one are treated as
-# equally good, so that the material count decides between them
+# Solutions whose objective is within this distance from the best one are
+# treated as equally good, so that the material count decides between them.
+#
+# SOLUTION_ERROR_TIE_REL is a ratio of the objective to itself and is unaffected
+# by the change of scale. SOLUTION_ERROR_TIE_ABS is in RELATIVE units like the
+# objective and was re-measured. It is the floor of the band, and the deadband
+# made it matter more than it used to: many states now score exactly 0, where
+# best * SOLUTION_ERROR_TIE_REL is 0 too and this constant is the whole band.
+#
+# Swept with everything else at its shipped value, scenario A, 300 cases:
+#
+#   tie_abs   rel<=0.05   mean count   median min_portion   B solved/reachable
+#     0.0        296         5.743         3.030                10/10
+#     0.01       296         5.733         3.050                10/10
+#     0.02       296         5.730         3.050                10/10
+#     0.05       286         5.670         3.160                 8/10
+#     0.1        259         5.563         3.375                 7/10
+#
+# Everything from 0 to 0.02 is one flat region - the choice inside it is not
+# measurable, and saying otherwise would be inventing a result. What IS measured
+# is the cliff at 0.05, which is the acceptance tolerance itself: a band that
+# wide calls a recipe missing an oxide by the whole tolerance "as good as" one
+# that hits it, and then prefers it for being shorter.
+#
+# 0.02 is picked inside the flat region because it is the deadband: an objective
+# difference smaller than the amount of relative deviation this module has
+# already declared free is not a difference. 0.01 measures the same; it is not a
+# better number, it is the old numeral meaning something new.
 SOLUTION_ERROR_TIE_REL = 0.2
-SOLUTION_ERROR_TIE_ABS = 0.01
+SOLUTION_ERROR_TIE_ABS = 0.02
 
 # --- unity basis ------------------------------------------------------------
 #
@@ -289,43 +526,119 @@ SEARCH_EXHAUSTIVE = 'exhaustive'
 CANDIDATE_SEARCH_MODES = (SEARCH_HEURISTIC, SEARCH_EXHAUSTIVE)
 
 
-def _usable_target(target_umf: Dict[str, Any]) -> Dict[str, float]:
+def _known_oxide(oxide: Any, molar_masses: Dict[str, float]) -> bool:
     """
-    Keep only the target entries the math can actually work with: a known oxide
-    (present in molar_masses.json) carrying a finite, non negative number.
+    THE rule that decides whether a key can take part in the fit at all.
 
-    An oxide asked for as an explicit ZERO is kept, and that is deliberate. The
-    UI sends the whole oxide table on every request, zeros included ('SrO': 0.0,
-    'Fe2O3': 0.0, 'TiO2': 0.0), and "give me no iron" is a constraint, not the
-    absence of an opinion. Dropping those entries used to move them into the
-    unlisted group, where penalize_unlisted decides their fate - so with a soft
-    weight "no iron please" silently turned into "iron is fine". A zero stays in
-    the target, gets its NNLS row with a zero right hand side and is penalized
-    like any other requested value, which is what the classic solver does too.
+    A key is usable when molar_masses.json gives it a POSITIVE mass, and the two
+    halves of that sentence are not the same test. The presence half is what
+    keeps a key the system cannot express in UMF - Loi, an unanalysed "Carbon" -
+    out of the oxide set. The positivity half is what keeps the row weight of
+    _build_problem, penalty / (mass * scale), from dividing by zero.
+
+    IT LIVES HERE BECAUSE IT IS APPLIED TWICE: usable_target cleans the
+    requested target with it, _expand_target applies it to the target's keys and
+    to the materials'. The two used to spell it differently - membership in one,
+    a positive mass in the other - and they agreed only because all 64 entries
+    of the shipped table happen to be positive. A zero or a NaN in that table
+    would have split them: the target key would pass the clean, be refused by
+    the expansion, and _build_problem narrows target_umf to whatever the
+    expansion kept - so the reported error and the returned target would quietly
+    have been about a smaller problem than the one that was asked for.
+
+    NaN needs no branch of its own: NaN > 0.0 is False.
+    """
+    mass = molar_masses.get(oxide)
+    return mass is not None and mass > 0.0
+
+
+def usable_target(target_umf: Dict[str, Any]) -> Tuple[Dict[str, float], List[str]]:
+    """
+    Keep only the target entries the math can actually work with: a key
+    _known_oxide accepts, carrying a finite, non negative number.
+
+    An oxide asked for as an explicit ZERO is kept, and that is deliberate:
+    'Fe2O3': 0.0 is a legal input to this system and it means "give me no iron",
+    which is a constraint rather than the absence of an opinion. Dropping those
+    entries used to move them into the unlisted group, where penalize_unlisted
+    decides their fate - so with a soft weight "no iron please" silently turned
+    into "iron is fine". A zero stays in the target, gets its NNLS row with a
+    zero right hand side and is penalized like any other requested value, which
+    is what the classic solver does too.
 
     Anything else is dropped: an unknown oxide, a non numeric value, a negative
     value, NaN and infinity.
 
-    Note that a target of nothing but zeros is still unusable - umf_to_weights
-    divides by the total molar weight - and find_best_recipe rejects it.
+    WHAT WAS DROPPED IS RETURNED, and that is the difference between a clean and
+    a silent one. An oxide the caller asked for and did not get is the single
+    thing it cannot deduce from the answer: a recipe comes back, the target it
+    was graded against no longer holds the key, and the response used to say
+    nothing at all - while /api/feasibility, given the very same target, has
+    always answered "оксиды цели не распознаны и не учтены".
+
+    PUBLIC, AND THAT IS THE POINT OF THE FUNCTION. /api/solve calls it ONCE, at
+    the boundary, and hands the CLEANED dictionary to whichever engine was
+    asked for. The alternative - each engine cleaning to its own taste - is what
+    the endpoint used to do, and the two do not agree: the classic engine drops
+    an unknown NAME (in umf_to_weights) but feeds a NEGATIVE VALUE straight into
+    its NNLS, so a warning drawn from this rule sat next to a recipe fitted to
+    'Fe2O3': -0.5 and changed every material in it. Cleaning above the fork
+    makes the warning, the returned target_composition and the vector actually
+    fitted the same object by construction rather than by coincidence.
+
+    Loss on ignition is dropped as well but NOT reported: a target carrying Loi
+    is bookkeeping that leaked in from a material analysis rather than an oxide
+    somebody asked for, and feasibility._usable_target passes over it in silence
+    for the same reason (pinned there by its own test, so the two cannot drift
+    apart quietly).
+
+    A ZERO SURVIVING THIS FUNCTION DOES NOT MAKE THE TARGET SOLVABLE. A formula
+    of nothing BUT zeros is not a UMF - the unity it would be normalized by is
+    the sum of its own oxides, which is why umf_to_weights divides by zero on
+    it - and this function is not where that is caught, because it is not a
+    property of any single entry. find_best_recipe answers such a target with an
+    empty list; the interfaces refuse it outright and say why, /api/solve with
+    422 "zero_target" and solver_classic.main() with a message.
+
+    Returns:
+        (usable, dropped) - the cleaned target, and the names refused, SORTED.
+        Sorted rather than in the order they arrived, because the same refusal
+        has to read the same way whichever endpoint reports it, and the order a
+        JSON object's keys arrive in is a property of the client's serializer.
+        feasibility._usable_target sorts for the same reason.
     """
     if not target_umf:
-        return {}
+        return {}, []
 
     molar_masses = load_molar_masses()
     usable: Dict[str, float] = {}
+    dropped: List[str] = []
 
     for oxide, value in target_umf.items():
-        if oxide not in molar_masses:
+        if oxide in NON_OXIDE_KEYS:
+            continue
+        if not _known_oxide(oxide, molar_masses):
+            dropped.append(str(oxide))
             continue
         try:
             number = float(value)
         except (TypeError, ValueError):
+            dropped.append(str(oxide))
             continue
         if math.isfinite(number) and number >= 0.0:
             usable[oxide] = number
+        else:
+            dropped.append(str(oxide))
 
-    return usable
+    return usable, sorted(dropped)
+
+
+# The one wording for "the target asked for something that cannot be fitted",
+# shared with the API layer. One HTTP request must produce ONE line about it,
+# and grepping a log for that line must give the same count whichever engine ran
+# and whichever layer noticed - two phrasings of one fact are two facts to
+# anybody counting.
+DROPPED_TARGET_OXIDES_LOG = "target oxides not recognized and not fitted: {oxides}"
 
 
 def _flux_sum(umf: Dict[str, float]) -> float:
@@ -378,23 +691,96 @@ def _unity_scale(target_umf: Dict[str, float], result_umf: Dict[str, float]) -> 
     return numerator / denominator
 
 
-def _expand_target(target_umf: Dict[str, float], materials: Sequence[Dict]) -> Dict[str, float]:
+def _expand_target(target_umf: Dict[str, float],
+                   materials: Sequence[Dict]) -> Tuple[Dict[str, float], List[str]]:
     """
-    Extend the target UMF with explicit zeros for every oxide the available
-    materials can bring in.
+    Build the oxide set of the fit: the requested target plus an explicit zero
+    for every oxide the available materials can bring in.
 
     Whether those zeros are actually enforced is decided by the caller through
     penalize_unlisted: the expansion only builds the list of oxides, the weight
     attached to them says how much an unlisted oxide is allowed to appear.
+
+    ONE RULE DECIDES WHAT GETS A ROW, and it is _known_oxide: a key with a
+    positive molar mass gets a row, a key without one does not. It is applied to
+    both sides here - the target's keys and the materials' - so that the oxide
+    set, the row weights and the objective cannot disagree about what is being
+    fitted. usable_target calls the same predicate on the target upstream;
+    repeating it costs nothing and makes the guarantee local to this function.
+    The predicate is shared rather than restated because the two spellings of it
+    used to differ, and the divergence was invisible on the shipped table - see
+    _known_oxide.
+
+    WHY THE RULE IS THE MOLAR MASS AND NOT A LIST OF NAMES. The residual of row
+    i is turned into a relative UMF deviation by dividing it by M_i * s_i (see
+    _build_problem). A key with no molar mass cannot be expressed in UMF at all,
+    so there is no relative deviation to compute and no principled weight to
+    give it - in weight percent its weight is arbitrary. Under the relative
+    weights an arbitrary weight is not a small mistake: a chemical row is
+    1 / (M_i * s_i), which over this database runs from 0.005548 (SiO2 at a
+    target of 3.0) to at most 0.5264 (fluorine at the scale floor, the lightest
+    key in molar_masses.json), so a row left on the bare penalty of 1.0 is
+    heavier than ANY chemical row - by 1.9x in the most favourable case and by
+    180x in the common one (1 / 0.005548 = 180.2; the 182 this line used to
+    carry was the reciprocal of the rounded 0.0055 rather than of the row).
+    Measured on a wood-ash fixture whose only difference is an
+    unanalysed "Carbon" key on one material, where the chemical rows run 0.0055
+    to 0.0705 and the refused row would sit at 1.0:
+
+        clean  {Ash 40.57, Kaolin 31.16, Silica 28.27}  objective 0.0117
+        dirty  {Kaolin 33.51, Silica 43.49, Whiting 23.0} objective 0.4800
+
+    The only carrier of the requested P2O5 is thrown out whole and the objective
+    grows 41-fold, because minimizing an unnamed quantity outweighed the
+    chemistry. Refusing the row instead makes the two runs identical.
+
+    Loss on ignition is the case that occurs in practice, and it falls out of
+    the same rule rather than needing a name list: Loi is bookkeeping - the mass
+    a material loses in the kiln - and every verdict in the system already
+    ignores it (weights_to_umf leaves it out of the formula, so do umf_deviation
+    and the feasibility LP). Giving it a row with a zero right hand side was an
+    instruction to MINIMIZE loss on ignition, a preference for oxides over
+    carbonates that nobody asked for and nothing grades.
+
+    MEASURED, because the first version of this comment guessed and was wrong by
+    two orders of magnitude: 3 of the 216 materials of database/materials.json
+    carry a Loi key - Дисульфид Молибдена, Метакаолин BMK-45 and Нефелин-сиенит
+    А-270 - and all three are inInventory: false. That is exactly why neither
+    measurement rig sees the row and a run over the full catalogue does: the
+    default 19 material inventory excludes all three, and bench/corpus strips
+    LOI from every Glazy formula before it builds a case. Only an explicit
+    inventory naming one of the three, or an injected catalogue, reaches it.
+
+    Returns:
+        (full_target, refused) - the oxides that get a row, and the sorted names
+        that were refused for having no molar mass. _build_problem logs them: a
+        key silently dropped from the fit is a key nobody can debug.
+
+        ON THE PRODUCTION PATH THAT LIST IS ABOUT THE MATERIALS, NOT ABOUT THE
+        TARGET, and this docstring used to promise otherwise. find_best_recipe
+        runs usable_target first, so by the time a target reaches this function
+        its unknown keys are already gone and nothing here can report them; they
+        are reported by usable_target instead, which is where the caller's own
+        keys are actually refused. The target half of the rule still runs here,
+        because the function is also called directly with a raw target and the
+        oxide set may not be allowed to disagree with the row weights.
     """
-    full_target = dict(target_umf)
+    molar_masses = load_molar_masses()
+
+    full_target = {oxide: value for oxide, value in target_umf.items()
+                   if _known_oxide(oxide, molar_masses)}
+    refused = {oxide for oxide in target_umf if oxide not in full_target}
 
     for material in materials:
-        for oxide in material.get('formula', {}):
-            if oxide not in full_target:
-                full_target[oxide] = 0.0
+        for key in material.get('formula', {}):
+            if key in full_target:
+                continue
+            if not _known_oxide(key, molar_masses):
+                refused.add(key)
+                continue
+            full_target[key] = 0.0
 
-    return full_target
+    return full_target, sorted(refused)
 
 
 def _normalize_unlisted_weight(penalize_unlisted: Any) -> float:
@@ -448,30 +834,89 @@ def _int_argument(value: Any, name: str) -> int:
         raise ValueError(f"{name} must be an integer, got {value!r}")
 
 
+def _oxide_scale(target_value: float) -> float:
+    """
+    The scale one oxide's deviation is measured against: max(target, floor).
+
+    common.OXIDE_SCALE_FLOOR is the single definition of that floor, and it is
+    deliberately the same one the feasibility LP and the benchmark's chemistry
+    gate use: the search, the verdict and the gate have to be measuring the same
+    thing or the search optimizes something nobody is grading.
+    """
+    return max(float(target_value), OXIDE_SCALE_FLOOR)
+
+
 def _build_problem(target_umf: Dict[str, float], materials: Sequence[Dict],
                    unlisted_weight: float) -> Dict[str, Any]:
     """
     Pack everything the search needs to know about the target into one context.
 
-    The unlisted oxides get their NNLS rows scaled by unlisted_weight. Their
-    right hand side is zero by construction, so scaling the row alone is an
-    exact weighted least squares: ||w*(A_i x) - w*0|| == w*||A_i x - 0||. That
-    is how a soft "do not bring what I did not ask for" is expressed without
-    touching the shared NNLS core.
+    THE ROW WEIGHTS ARE THE POINT OF THIS FUNCTION, so here is where they come
+    from. The NNLS problem is posed in WEIGHT PERCENT of oxides, while every
+    verdict in this system - the feasibility LP, the benchmark gate,
+    common.umf_deviation - is the worst RELATIVE deviation of a UMF value,
+    |actual - target| / max(target, OXIDE_SCALE_FLOOR). Unweighted, the fit
+    therefore spends its effort where the weight percentages are large (SiO2,
+    Al2O3) and cannot see an MgO of 0.05 being missed entirely. Three steps
+    connect the two:
+
+      * a deviation of d weight percent on oxide i is d / (M_i * S) in UMF
+        units, where M_i is the molar mass and S is the flux molar sum the UMF
+        is normalized by (weights_to_umf: umf_i = (w_i / M_i) / S);
+      * S is the same for every row of one recipe, so it is a constant factor
+        of the whole residual and drops out of the argmin. Only 1 / M_i has to
+        be carried;
+      * dividing by s_i = max(target_i, OXIDE_SCALE_FLOOR) turns the UMF
+        deviation into the relative one the verdict is drawn on.
+
+    which gives
+
+        w_i = penalty_i / (M_i * s_i)
+
+    with penalty_i = 1.0 for an oxide the target names and unlisted_weight for
+    one it does not. THE PENALTY IS A FACTOR OF THIS, not a replacement for it:
+    penalize_unlisted keeps exactly the meaning it had, it now rides on top of
+    a residual that is already on the relative scale.
+
+    THERE IS NO BRANCH FOR AN OXIDE WITHOUT A MOLAR MASS, and that is the
+    point: 1 / (M_i * s_i) has no value to take, and the previous version left
+    such a row on the bare penalty of 1.0 - heavier than every chemical row this
+    database can produce, the heaviest of which is 0.5264. _expand_target
+    refuses the key instead, so every oxide reaching this loop has a mass by
+    construction and molar_masses[oxide] is indexed rather than probed - a
+    KeyError here would be a broken invariant, not a data problem to paper over.
+
+    The weights are handed to solve_recipe(row_weights=...), which scales the
+    matrix and the right hand side together. That is not a detail: the unlisted
+    rows have b_i = 0 and could be scaled matrix-only, but the listed ones
+    cannot, and mixing the two would silently solve a different problem.
     """
-    full_target = _expand_target(target_umf, materials)
+    full_target, refused = _expand_target(target_umf, materials)
+    if refused:
+        logger.warning(f"no molar mass for {', '.join(refused)} - those keys get no NNLS row "
+                       f"and no term of the objective, because a quantity the system cannot "
+                       f"express in UMF has no relative deviation to minimize")
+
+    # The requested target is narrowed to the same set, so that target_umf,
+    # oxides and row_weights cannot describe three different problems
+    target_umf = {oxide: value for oxide, value in target_umf.items() if oxide in full_target}
+
     oxides = list(full_target.keys())
     unlisted = tuple(oxide for oxide in oxides if oxide not in target_umf)
 
-    row_weights = None
-    if unlisted and unlisted_weight != 1.0:
-        row_weights = np.array([1.0 if oxide in target_umf else unlisted_weight
-                                for oxide in oxides])
+    molar_masses = load_molar_masses()
+    row_weights = np.empty(len(oxides))
+    for index, oxide in enumerate(oxides):
+        penalty = 1.0 if oxide in target_umf else unlisted_weight
+        row_weights[index] = penalty / (molar_masses[oxide] * _oxide_scale(full_target[oxide]))
 
     return {
         'target_umf': dict(target_umf),
         'full_target': full_target,
         'oxides': oxides,
+        # Membership test of _weight_residual, which runs once per search step;
+        # the list above is kept because the row order of the matrix is its order
+        'oxide_set': frozenset(oxides),
         'unlisted': unlisted,
         'unlisted_weight': unlisted_weight,
         'row_weights': row_weights,
@@ -481,22 +926,47 @@ def _build_problem(target_umf: Dict[str, float], materials: Sequence[Dict],
 
 def _objective_error(problem: Dict[str, Any], result_umf: Dict[str, float]) -> float:
     """
-    The quantity the search minimizes: the plain UMF error on the requested
-    oxides plus the contamination of the unlisted ones, damped by the weight.
+    The quantity the search minimizes: the L2 norm of the RELATIVE per-oxide
+    deviations, each one first given OBJECTIVE_DEADBAND for free.
 
-    With unlisted_weight == 1.0 this is exactly calculate_umf_error against the
-    fully expanded target; with 0.0 it is exactly calculate_umf_error against
-    the requested target.
+        residual_i = max(0, |target_i - actual_i| / s_i - OBJECTIVE_DEADBAND)
+        objective  = sqrt(sum residual_i^2)
+
+    with s_i = max(target_i, OXIDE_SCALE_FLOOR), the same scale _build_problem
+    weights the NNLS rows by and the same one common.umf_deviation draws the
+    verdict on. The unlisted oxides deviate from zero and carry unlisted_weight,
+    exactly as before - only the scale of the term changed.
+
+    THE NUMBER IS IN RELATIVE UNITS, and it is NOT the reported `error` by any
+    other name - on a well fitted target of large oxides it comes out below it,
+    on a target of trace oxides far above. Every threshold compared against it
+    was re-derived by measurement rather than carried over: the error_threshold
+    argument, PRUNE_OBJECTIVE_TOLERANCE, SOLUTION_ERROR_TIE_ABS.
+    PRUNE_ERROR_TOLERANCE bounds `error` instead and stayed absolute.
+
+    A consequence worth stating before somebody rediscovers it: with the
+    deadband many states score exactly 0, they all land in one tie band, and
+    _solution_sort_key then ranks them by material count. Among recipes that
+    meet the spec the SHORTEST one wins - not because a preference was coded,
+    but because every other difference between them became zero.
     """
     squared = 0.0
+    target_umf = problem['target_umf']
 
-    for oxide, expected in problem['target_umf'].items():
-        squared += (expected - result_umf.get(oxide, 0.0)) ** 2
+    for oxide, expected in target_umf.items():
+        deviation = abs(expected - result_umf.get(oxide, 0.0)) / _oxide_scale(expected)
+        residual = deviation - OBJECTIVE_DEADBAND
+        if residual > 0.0:
+            squared += residual * residual
 
     weight = problem['unlisted_weight']
     if weight > 0.0:
+        # An unlisted oxide is wanted at zero, so its scale is the floor
         for oxide in problem['unlisted']:
-            squared += (weight * result_umf.get(oxide, 0.0)) ** 2
+            deviation = abs(result_umf.get(oxide, 0.0)) / OXIDE_SCALE_FLOOR
+            residual = deviation - OBJECTIVE_DEADBAND
+            if residual > 0.0:
+                squared += (weight * residual) ** 2
 
     return math.sqrt(squared)
 
@@ -582,10 +1052,13 @@ def _solve_material_set(material_set: Sequence[Dict], problem: Dict[str, Any]) -
         # Dropping a material changes the optimum, so re-solve until the set settles
         for _ in range(len(material_set)):
             oxide_matrix, material_names = create_oxide_matrix(active, oxides)
-            if row_weights is not None:
-                oxide_matrix = oxide_matrix * row_weights[:, None]
 
-            solution = solve_recipe(oxide_matrix, full_target, material_names, active)
+            # The weighting is done INSIDE solve_recipe, which scales the matrix
+            # and the right hand side together. It used to be done here, on the
+            # matrix alone, which was exact only while every weighted row had a
+            # zero right hand side (see _build_problem and solve_recipe)
+            solution = solve_recipe(oxide_matrix, full_target, material_names, active,
+                                    row_weights=row_weights)
 
             recipe = solution.get('recipe') or {}
             recipe = {name: weight for name, weight in recipe.items() if weight >= MIN_MATERIAL_WEIGHT}
@@ -627,7 +1100,10 @@ def _solve_material_set(material_set: Sequence[Dict], problem: Dict[str, Any]) -
         'unity_scale': float(unity_scale),
         # Reported error: reproducible by the caller from target_umf/result_umf
         'error': float(calculate_umf_error(problem['target_umf'], result_umf)),
-        # Search objective: the reported error plus the damped contamination
+        # Search objective, and NOT the reported error by another name: the L2
+        # of the RELATIVE per-oxide deviations with a deadband, plus the damped
+        # contamination. See _objective_error for why the two can order either
+        # way round
         'objective_error': float(_objective_error(problem, result_umf)),
         'weight_composition': composition,
         'materials_count': len(recipe),
@@ -670,7 +1146,7 @@ def _sole_carriers(used: Sequence[Dict], target_umf: Dict[str, float]) -> set:
 
     Args:
         used: the material records the recipe actually uses
-        target_umf: the requested target, as cleaned by _usable_target
+        target_umf: the requested target, as cleaned by usable_target
 
     Returns:
         set of material names that must not be pruned away
@@ -712,23 +1188,35 @@ def _prune_solution(state: Dict[str, Any], problem: Dict[str, Any],
        chemical error can tell one from fit noise at any calibration. The table
        in PRUNE_ERROR_TOLERANCE is the demonstration: cobalt survived the
        error test only because it happens to be a flux and its removal drags the
-       unity denominator, while chrome oxide at 0.15% and iron chromate at 0.4%
-       are just as much colourants, are not fluxes, and were being thrown away.
+       unity denominator, while chrome oxide and iron chromate are just as much
+       colourants, are not fluxes, and were being thrown away.
 
-    2. THE ERROR TOLERANCE, for everything else. Fit noise - a material the
+       The relative objective narrowed that hole without closing it - the second
+       table under PRUNE_OBJECTIVE_TOLERANCE measures by how much, and 0.3% of
+       red iron oxide is the row that used to fall through and no longer does -
+       but "narrower" is not "closed", and the rule above is still the only
+       thing here that answers the right question.
+
+    2. THE ERROR TOLERANCES, for everything else. Fit noise - a material the
        search added to shave a fourth decimal off one oxide - is by construction
        not the sole carrier of anything requested, so gate 1 lets it through and
-       this one measures it: the removal is accepted when it grows the error by
-       at most PRUNE_ERROR_TOLERANCE.
+       this one measures it.
 
        BOTH error numbers are checked, not just the objective the search
-       minimizes. With penalize_unlisted > 0 - the default, and what the API
-       sends - the objective folds in the contamination of the unlisted oxides,
-       so removing a material that brought unrequested oxides shrinks that term
-       and can pay for a rise in `error`, which is the number the caller
-       actually receives. Checking the objective alone therefore has no bound on
-       `error` at all. tests/test_solver_inverse.py TestPruningChecksBothErrors
-       builds the trade explicitly and pins that the removal is refused.
+       minimizes, and each has its OWN tolerance because the two are no longer
+       in the same units: the objective is the L2 of the RELATIVE deviations and
+       is bounded by PRUNE_OBJECTIVE_TOLERANCE, while `error` is the absolute L2
+       the caller receives and is bounded by PRUNE_ERROR_TOLERANCE. One numeral
+       for both would be one ruler for two scales.
+
+       Why the second gate exists at all: with penalize_unlisted > 0 - the
+       default, and what the API sends - the objective folds in the
+       contamination of the unlisted oxides, so removing a material that brought
+       unrequested oxides shrinks that term and can pay for a rise in `error`,
+       which is the number the caller actually receives. Checking the objective
+       alone therefore has no bound on `error` at all.
+       tests/test_solver_inverse.py TestPruningChecksBothErrors builds the trade
+       explicitly and pins that the removal is refused.
 
     Only the materials the recipe actually USES are candidates and only they are
     re-solved: the state carries the whole material set it was built from, and
@@ -756,7 +1244,7 @@ def _prune_solution(state: Dict[str, Any], problem: Dict[str, Any],
                 if material['name'] in current['recipe']]
         protected = _sole_carriers(used, target_umf)
 
-        objective_limit = current['objective_error'] + PRUNE_ERROR_TOLERANCE
+        objective_limit = current['objective_error'] + PRUNE_OBJECTIVE_TOLERANCE
         error_limit = current['error'] + PRUNE_ERROR_TOLERANCE
         best: Optional[Dict[str, Any]] = None
 
@@ -800,12 +1288,33 @@ def _weight_residual(problem: Dict[str, Any], state: Dict[str, Any]) -> Dict[str
     A positive value is a deficit (the recipe delivers too little of that oxide)
     and a negative one an excess. Both sides are normalized to 100, so the two
     vectors are directly comparable.
+
+    THE OXIDE SET IS problem['oxides'] AND NOTHING ELSE. calculate_recipe_
+    composition keeps every key of every material formula, loss on ignition
+    included, so the actual side arrives carrying keys that _expand_target has
+    already refused a row and a molar mass. Taking the union of the two sides -
+    which this function used to do - let them back in through the side door, and
+    with real consequences: on a recipe of whiting and kaolin the union produced
+    residuals of Loi -10.1 and LOI -4.4 against a worst real oxide of +10.0, so
+    _focus_oxide picked "Loi" as the oxide of the step and _score_candidate then
+    scored every material by how little it burns off. One rule, applied in both
+    places, is what keeps that from coming back.
+
+    Normalizing comes AFTER the filter, and the order is load bearing. Scaling
+    the actual composition to 100 with the loss on ignition still in it divides
+    every real oxide by a total that is 10-15% too large, which biases every
+    residual of every oxide upwards at once - a systematic deficit the search
+    then chases.
     """
     target_weights = problem['target_weights']
-    actual_weights = _normalize_to_100(state['weight_composition'])
+    oxides = problem['oxides']
+
+    fitted = {oxide: value for oxide, value in state['weight_composition'].items()
+              if oxide in problem['oxide_set']}
+    actual_weights = _normalize_to_100(fitted)
 
     residual: Dict[str, float] = {}
-    for oxide in sorted(set(target_weights) | set(actual_weights)):
+    for oxide in sorted(oxides):
         residual[oxide] = target_weights.get(oxide, 0.0) - actual_weights.get(oxide, 0.0)
 
     return residual
@@ -815,6 +1324,18 @@ def _focus_oxide(residual: Dict[str, float]) -> Optional[str]:
     """
     Return the oxide the current recipe is the furthest away from, measured in
     weight percent - the oxide this iteration is about.
+
+    THE ONE PLACE OF THE SEARCH LEFT ON THE ABSOLUTE WEIGHT SCALE, and that is a
+    decision rather than an oversight. Everything that RANKS an answer went
+    relative in 10.19; this picks which oxide one step is about, and under
+    candidate_search='exhaustive' - the default - every candidate is solved
+    anyway, so the focus oxide only orders a tie between sets whose objective
+    agrees to CANDIDATE_TIE_STEP. Under 'heuristic' it really does filter, and
+    the absolute scale costs something there, but less than the relative
+    residual costs the exhaustive mode nothing: measured over the 300 case
+    scenario A corpus, 'heuristic' goes 253 -> 294 inside the chemistry gate
+    across 10.19 while 'exhaustive' goes 251 -> 296. Converting this too is a
+    separate change with its own measurement, not a free tidy-up.
 
     The oxides are walked in sorted order so that an exact tie between two
     oxides always resolves the same way; iterating a set here used to make the
@@ -852,15 +1373,65 @@ def _score_candidate(material: Dict, residual: Dict[str, float], focus: Optional
                             match; their residual is ~0, so this term needs its
                             own scale (MATCHED_OXIDE_TOLERANCE) to exist at all
 
-    Returns None for a material with an empty formula.
+    A formula key the residual does not know - one _expand_target refused for
+    having no molar mass - scores in NONE of the four terms. It used to score in
+    the fourth by accident: `residual.get(key, 0.0)` returns 0.0, |0.0| is
+    inside MATCHED_OXIDE_TOLERANCE, so the key landed in "disturbance" and every
+    material was penalized in proportion to how much of it burns off. That is
+    the same "minimize loss on ignition" instruction _weight_residual removes,
+    arriving by a second route.
+
+    The DENOMINATOR is 100, the basis a material analysis is stated on, and NOT
+    the sum of the analysis. 100 g of whiting as weighed out yields 56.1 g of
+    CaO, so the CaO fraction of whiting is 0.561; dividing by the sum of its
+    analysis would make it 1.0 and claim that whiting is pure calcium oxide.
+
+    This is the convention the rest of the system already reads material
+    analyses by - feasibility.build_molar_matrix calls a column "moles per 100 g
+    as weighed out", and calculate_recipe_composition multiplies recipe percents
+    straight into the analysis values - so using the sum here was this function
+    disagreeing with everything around it.
+
+    THIS IS A CONSISTENCY FIX AND NOT A QUALITY ONE, and the comment says so
+    because the numbers do. What the old denominator did wrong is exact: only 65
+    of the 179 analysed materials of the shipped database have an analysis that
+    adds up to 100, so for the other 114 dividing by the sum inflated every
+    fraction by 1 / (oxide sum) - whiting by 1.783, kaolin by 1.173, quartz by
+    1.000. Two materials with the SAME REAL CHEMISTRY therefore scored
+    differently depending only on whether their analysis happens to list what
+    burns off, which is a property of how the row was typed and of nothing else.
+    That alone is reason enough to change it.
+
+    What it did NOT do is cost answers. A/B over the 300 case scenario A corpus,
+    old denominator against new, both candidate_search modes:
+
+        heuristic   old  rel<=0.05 294/300  mean count 5.70  mean rel 0.0144
+                    new  rel<=0.05 294/300  mean count 5.71  mean rel 0.0143
+                    1 case of the 300 came back different at all
+        exhaustive  old  rel<=0.05 296/300  mean count 5.73  mean rel 0.0094
+                    new  rel<=0.05 296/300  mean count 5.73  mean rel 0.0094
+                    0 cases changed
+
+    One case in the only mode where this ranking is more than a tie break. The
+    bias is a single multiplicative factor per material, and it is dominated by
+    the differences between the residual gaps it multiplies into: a material is
+    picked here for closing a shortfall, not for the second decimal of its
+    fraction. Under 'exhaustive' - the default - every candidate is solved
+    anyway, so the ranking only orders a tie and nothing moves at all.
+
+    A fraction above 1.0 is possible and correct: cryolite analyses to 122.9 and
+    zircon to 135.22, because firing them gains oxygen rather than losing mass.
+    validate_database already accepts both as sound analyses.
+
+    Returns None for a material whose analysis carries nothing.
     """
     formula = material.get('formula', {})
-    total = sum(formula.values())
-    if total <= 0:
+    if sum(formula.values()) <= 0:
         return None
 
-    # Composition as fractions of the material weight
-    fractions = {oxide: value / total for oxide, value in formula.items()}
+    # Fractions of 100 g of the material AS WEIGHED OUT; the loop below is what
+    # skips the keys that carry no residual
+    fractions = {oxide: value / 100.0 for oxide, value in formula.items()}
 
     focus_gain = 0.0
     secondary_gain = 0.0
@@ -868,8 +1439,11 @@ def _score_candidate(material: Dict, residual: Dict[str, float], focus: Optional
     disturbance = 0.0
 
     for oxide in sorted(fractions):
+        if oxide not in residual:
+            continue
+
         fraction = fractions[oxide]
-        gap = residual.get(oxide, 0.0)
+        gap = residual[oxide]
 
         if oxide == focus:
             focus_gain = gap * fraction
@@ -995,9 +1569,11 @@ def _expand_state(state: Dict[str, Any], available_materials: Sequence[Dict],
         new_state['set_names'] = set_names
         new_state['added'] = candidate['name']
 
-        # Rounding the objective keeps equally good candidates together, so that
-        # the heuristic order (and through it the priority) decides between them
-        trials.append((round(new_state['objective_error'], 4), rank, new_state))
+        # Quantizing the objective keeps equally good candidates together, so
+        # that the heuristic order (and through it the priority) decides between
+        # them - see CANDIDATE_TIE_STEP
+        trials.append((round(new_state['objective_error'] / CANDIDATE_TIE_STEP),
+                       rank, new_state))
 
     trials.sort(key=lambda item: (item[0], item[1]))
 
@@ -1029,6 +1605,26 @@ def _solution_tie_limit(best_error: float) -> float:
     return best_error + max(best_error * SOLUTION_ERROR_TIE_REL, SOLUTION_ERROR_TIE_ABS)
 
 
+def _recipe_priority(solution: Dict[str, Any]) -> float:
+    """
+    Weight-weighted material priority of a recipe, lower being more basic.
+
+    The same quantity quality_metrics._priority_metric scores a solution by:
+    sum(priority * share / 100) over the materials the recipe uses, with
+    DEFAULT_PRIORITY for a material that carries none. A catalogue without
+    priorities collapses to DEFAULT_PRIORITY everywhere and the number is
+    constant, which is exactly what a tie break should do with no data.
+    """
+    by_name = {material.get('name'): material for material in solution['materials']}
+
+    total = 0.0
+    for name, share in solution['recipe'].items():
+        material = by_name.get(name) or {}
+        total += float(material.get('priority', DEFAULT_PRIORITY)) * float(share) / 100.0
+
+    return total
+
+
 def _solution_sort_key(solution: Dict[str, Any], best_error: float):
     """
     Order the solutions the way the caller is promised they are ordered:
@@ -1036,18 +1632,59 @@ def _solution_sort_key(solution: Dict[str, Any], best_error: float):
       1. everything within the tie band of the best objective comes first, and
          inside that band FEWER MATERIALS WINS (the objective only breaks a tie
          between two recipes of the same size);
-      2. everything outside the band follows, ordered by the objective.
+      2. everything outside the band follows, ordered by the objective;
+      3. an exact tie on all of the above is broken by the weighted material
+         PRIORITY, lower first.
 
     So the first solution is not necessarily the one with the smallest
     objective - by design. Two recipes whose errors agree to the third decimal
     are indistinguishable in the glaze bucket, and the shorter one is the better
     answer; find_best_recipe documents this and the tests pin it.
+
+    Rung 3 was added when the objective went relative and gained a deadband,
+    which made the exact tie the common case instead of a curiosity: several
+    recipes now score EXACTLY 0 on the same number of materials, and until this
+    rung existed the winner among them was whichever the pool happened to hold
+    first. Recipe 09 of the reference set is what that costs - zinc oxide and
+    zinc carbonate carry the same oxide, both recipes fit the target exactly,
+    they differ by 0.001 of recipe-rounding noise, and the arbitrary order
+    returned the carbonate that the workshop keeps at priority 100 against the
+    oxide's 10. Priority is the module's own stated preference between materials
+    that are chemically interchangeable (see PRIORITY_WEIGHT and
+    _priority_start_set); once the chemistry is a tie there is nothing else left
+    to prefer with.
+
+    It is deliberately the LAST rung and not an earlier one: a recipe is never
+    made worse chemically, nor longer, to reach a preferred material.
+
+    MEASURED WHERE THE PRIORITIES ARE REAL, which is scenario B of the corpus -
+    our own 19 material shelf with database/priorities.json behind it. Scenario
+    A is the wrong place to judge this rung and the first version of this note
+    used it anyway: there the priorities are synthesised from Glazy popularity
+    and the rung moves 1 top-1 answer of 300. On scenario B it moves 9 of 100,
+    and all nine are the behaviour described above rather than a trade:
+    objective_error, materials_count and max_relative are identical to the last
+    bit on every one of them, while the weighted priority strictly improves. The
+    improvements, every one of the nine:
+
+        241639  39.94 ->  9.50      433712  12.14 ->  3.90
+        281365  26.88 ->  3.45        8900   9.19 ->  2.76
+        557542  36.00 -> 24.27      427954   7.28 ->  3.88
+        459155  52.26 -> 42.87      530155  23.51 -> 23.12
+                                      2982   8.04 ->  7.84
+
+    a range of 0.20 to 30.44 points; 281365 is zinc oxide at 18.09% replacing
+    zinc carbonate at 25.39%. Nothing gets worse on any of the three chemistry
+    numbers, which is what "the last rung" is supposed to guarantee and now has
+    evidence for.
     """
     tie_limit = _solution_tie_limit(best_error)
 
     if solution['objective_error'] <= tie_limit:
-        return (0, solution['materials_count'], solution['objective_error'])
-    return (1, solution['objective_error'], solution['materials_count'])
+        return (0, solution['materials_count'], solution['objective_error'],
+                _recipe_priority(solution))
+    return (1, solution['objective_error'], solution['materials_count'],
+            _recipe_priority(solution))
 
 
 def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
@@ -1062,39 +1699,47 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
     returned: the search only ever adds materials, and the pruning pass is what
     takes back the ones that turned out not to be needed. A material is dropped
     only when it is not the sole source of a requested oxide AND its removal
-    costs at most PRUNE_ERROR_TOLERANCE on both error numbers, so an ingredient
-    the recipe genuinely answers the request with survives however little it
-    weighs - see MIN_MATERIAL_WEIGHT for what happens when smallness is used as
-    the criterion instead.
+    costs at most PRUNE_OBJECTIVE_TOLERANCE on the objective and
+    PRUNE_ERROR_TOLERANCE on the reported error, so an ingredient the recipe
+    genuinely answers the request with survives however little it weighs - see
+    MIN_MATERIAL_WEIGHT for what happens when smallness is used as the criterion
+    instead.
 
     Two consequences of the pass are worth knowing before reading the numbers
     below, because neither is visible in the returned shape:
 
     * error_threshold is NOT rechecked after pruning. A branch stops when its
       objective reaches the threshold, and a later removal can push the returned
-      error past it by up to one tolerance per removal. Measured over the 300
-      recipe Glazy corpus, one top-1 answer of 300 crosses the default 0.1, at
-      0.09850 -> 0.10901. The number in "error" is always the true error of the
-      recipe returned; what no longer holds exactly is the sentence "the search
-      stopped because this recipe was under the threshold".
+      objective past it by up to one tolerance per removal. Re-measured over the
+      300 recipe Glazy corpus under the relative objective: NO top-1 answer of
+      the 300 crosses the default 0.1 any more, and the worst growth the pass
+      inflicts on a returned answer is 0.0346. The number in "error" is always
+      the true error of the recipe returned; what still does not hold exactly is
+      the sentence "the search stopped because this recipe was under the
+      threshold".
     * pruning can produce a one material recipe, and on an UNREACHABLE target
       the relative tie band of _solution_sort_key can rank it first, because it
       is the shortest of a set of equally hopeless answers. Measured over the
       same 300 targets: solved against their own materials, where the answer is
       reachable by construction, the share of single material top-1 answers is
-      0.3% with or without the pass. Solved against the 19 material inventory,
-      where most of them are unreachable, it is 0.3% unpruned and 1.7% pruned -
-      it was 4.7% before the sole carrier rule, which blocks most of these
-      collapses because a hopeless target usually has exactly one carrier left
-      for something it asked for. A caller showing a headline recipe may still
-      want to read materials_count together with the error.
+      0.3%. Solved against the 19 material inventory, where most of them are
+      unreachable, it is 1.0% - it was 1.7% under the absolute objective and
+      4.7% before the sole carrier rule, which blocks most of these collapses
+      because a hopeless target usually has exactly one carrier left for
+      something it asked for. A caller showing a headline recipe may still want
+      to read materials_count together with the error.
 
     Args:
         inventory: list of available material names
         target_umf: target UMF formula as {oxide: value}. An oxide listed as an
             explicit zero is a constraint ("none of this"), not an omission:
             unknown oxides, negative and non numeric values are dropped, zeros
-            are kept and penalized like any other requested value
+            are kept and penalized like any other requested value. What was
+            dropped is logged once per call; a caller that has to SHOW it calls
+            usable_target() itself and passes the cleaned half in here, which is
+            what /api/solve does - the answer cannot carry the list, since a
+            target of nothing but unknown oxides returns no solutions to carry
+            anything
         min_materials: minimum number of materials in a returned recipe; when no
             recipe reaches it the result is an empty list, the constraint is
             never silently broken. The pruning pass respects it too and never
@@ -1113,6 +1758,19 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
             already holds max_solutions different acceptable recipes; until then
             the branch keeps being refined, because the extra recipes have to
             come from somewhere.
+            IN RELATIVE UNITS: the objective is the L2 of the per-oxide relative
+            deviations (see OBJECTIVE_DEADBAND), several times larger than the
+            absolute norm this argument used to be compared against. The default
+            was re-measured rather than carried over, and 0.1 is where it landed
+            anyway. Swept over the 300 case scenario A corpus at
+            max_solutions=5: 0.02, 0.05 and 0.1 give the identical run (296 of
+            300 inside the chemistry gate, mean material count 5.73), because
+            under the relative objective almost no branch gets that low and the
+            early-convergence rule hardly ever fires; 0.2 costs three cases and
+            one reachable scenario B target, 0.3 costs seven, 0.5 costs
+            nineteen and takes scenario B back to where it started. So 0.1 is
+            the largest value that costs nothing, and anything smaller buys
+            nothing.
         penalize_unlisted: how hard an oxide that the target does not mention is
             pushed towards zero. 1.0 / True means "not listed = must be zero",
             0.0 / False means "not listed = do not care", anything in between is
@@ -1175,8 +1833,13 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
             recipe          {material: weight percent}, adds up to exactly 100
             error           calculate_umf_error(target_umf, result_umf); it can
                             be recomputed from the two dictionaries below
-            objective_error what the search minimized: error plus the damped
-                            contamination of the unlisted oxides
+            objective_error what the search minimized, and NOT the same quantity
+                            as "error": the L2 of the per-oxide RELATIVE
+                            deviations, each given OBJECTIVE_DEADBAND for free,
+                            plus the damped contamination of the unlisted
+                            oxides. It is on the scale the feasibility LP and
+                            the benchmark gate use, so it is comparable with
+                            their tolerances and not with "error"
             result_umf      UMF of the recipe, brought onto the normalization
                             basis of the target (see unity_scale)
             unity_scale     the scale that was applied to get there; 1.0 in the
@@ -1215,7 +1878,15 @@ def find_best_recipe(inventory, target_umf, min_materials=1, max_materials=10,
     # A target of unknown oxides or of nothing but zeros cannot be converted
     # into weights at all (umf_to_weights would divide by a zero total weight);
     # catching it here keeps ZeroDivisionError out of the callers
-    clean_target = _usable_target(target_umf)
+    clean_target, dropped_oxides = usable_target(target_umf)
+    # ONCE PER CALL, not once per search step, and in the ONE wording the API
+    # layer uses too - so that a log grepped for this line counts requests
+    # rather than layers. A caller that cleaned the target itself (/api/solve
+    # does, above the choice of engine) hands us a clean one and this never
+    # fires; a caller that did not gets told here.
+    if dropped_oxides:
+        logger.warning(DROPPED_TARGET_OXIDES_LOG.format(oxides=', '.join(dropped_oxides)))
+
     if not any(value > 0.0 for value in clean_target.values()):
         if verbose:
             logger.info("the target holds no usable oxide")
@@ -1444,7 +2115,10 @@ def main():
     parser.add_argument('--umf', type=str, help='Target UMF composition as JSON string')
     parser.add_argument('--solutions', type=int, default=5, help='Number of solutions to find (default: 5)')
     parser.add_argument('--max-materials', type=int, default=10, help='Maximum number of materials (default: 10)')
-    parser.add_argument('--error-threshold', type=float, default=0.1, help='Error at which the search stops (default: 0.1)')
+    parser.add_argument('--error-threshold', type=float, default=0.1,
+                        help='Objective error at which the search stops, in RELATIVE units - '
+                             'the L2 of the per-oxide deviations divided by their own scale '
+                             '(default: 0.1)')
     parser.add_argument('--penalize-unlisted', type=float, default=1.0,
                         help='How hard an oxide missing from the target is pushed to zero, 0.0..1.0 (default: 1.0)')
     parser.add_argument('--candidate-search', choices=CANDIDATE_SEARCH_MODES, default=SEARCH_EXHAUSTIVE,

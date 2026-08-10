@@ -16,7 +16,7 @@ import os
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from solver_classic import find_multiple_solutions, calculate_recipe_composition
-from solver_iterative import find_best_recipe
+from solver_iterative import DROPPED_TARGET_OXIDES_LOG, find_best_recipe, usable_target
 from common import (weights_to_umf, umf_to_weights, load_materials, make_json_safe,
                     resolve_inventory, filter_materials_by_inventory,
                     load_oxide_classification)
@@ -99,6 +99,12 @@ DEFAULT_SOLVER = SOLVER_ITERATIVE
 # recipe.
 DEFAULT_PENALIZE_UNLISTED = 1.0
 
+# An oxide the request asked for that neither engine can fit, because
+# database/molar_masses.json does not know the name. Word for word the sentence
+# /api/feasibility has always answered on the same input: one target, one
+# verdict about it, whichever endpoint is asked.
+TARGET_OXIDES_DROPPED_WARNING = "оксиды цели не распознаны и не учтены: {oxides}"
+
 
 def iterative_solutions_to_classic_format(solutions, inventory_data):
     """
@@ -113,12 +119,25 @@ def iterative_solutions_to_classic_format(solutions, inventory_data):
     name, a negative or non numeric value - and a consumer recomputing the error
     from the raw request would get a different number for no visible reason.
     Both dictionaries are rounded to four decimals, so a recomputation agrees to
-    about 1e-4.
+    about 1e-4. WHICH KEYS WENT MISSING that way is not left to be deduced from
+    the difference: the endpoint says it in "warnings" - see
+    TARGET_OXIDES_DROPPED_WARNING.
+
+    The CLASSIC engine reaches the same place by a different route and it is
+    worth saying which: it echoes back whatever target it was given, so what
+    makes ITS 'target_composition' clean is the endpoint cleaning the target
+    before dispatch rather than anything in this function. That is why the
+    cleaning sits above the fork - "the dropped key is not in
+    target_composition" is documented for the endpoint, not for one engine of
+    it, and it used to be false on the other one.
 
     Three fields of the iterative solver are passed through as well, because
     without them the answer cannot be interpreted: 'objective_error' (what the
-    search actually minimized, error plus the damped contamination),
-    'unlisted_weight' (the penalize_unlisted that was applied, whether it came
+    search actually minimized, and NOT the same quantity as 'error' - it is the
+    L2 of the per-oxide RELATIVE deviations with a deadband, plus the damped
+    contamination, so it is comparable with the 0.05 the feasibility endpoint
+    speaks and not with 'error'), 'unlisted_weight' (the penalize_unlisted that
+    was applied, whether it came
     from the request or from the default) and 'unity_scale' (whether the UMF of
     the recipe had to be rescaled onto the basis of the target, and by how
     much). They are additions - every key the classic format has is still there.
@@ -177,32 +196,128 @@ def solve_recipe():
     }
 
     Returns:
-    [
-        {
-            "recipe": {"Material1": 45.2, "Material2": 54.8},
-            "error": 0.0123,
-            "target_composition": {"SiO2": 4, "Al2O3": 1, ...},
-            "actual_composition": {"SiO2": 3.98, "Al2O3": 1.02, ...},
-            "weight_composition": {"SiO2": 65.2, "Al2O3": 18.1, ...},
-            "materials_count": 2,
-            "recipe_umf": {"SiO2": 3.98, "Al2O3": 1.02, ...},  // UMF of this particular recipe
-            // iterative solver only (so, by default), see
-            // iterative_solutions_to_classic_format:
-            "objective_error": 0.0123,
-            "unlisted_weight": 1.0,
-            "unity_scale": 1.0
-        },
-        ...
-    ]
+    {
+        "solutions": [
+            {
+                "recipe": {"Material1": 45.2, "Material2": 54.8},
+                "error": 0.0123,
+                "target_composition": {"SiO2": 4, "Al2O3": 1, ...},
+                "actual_composition": {"SiO2": 3.98, "Al2O3": 1.02, ...},
+                "weight_composition": {"SiO2": 65.2, "Al2O3": 18.1, ...},
+                "materials_count": 2,
+                "recipe_umf": {"SiO2": 3.98, "Al2O3": 1.02, ...},  // UMF of this particular recipe
+                // iterative solver only (so, by default), see
+                // iterative_solutions_to_classic_format. "objective_error" is a
+                // DIFFERENT quantity from "error" and is deliberately shown as a
+                // different number here: it is relative, so on a target of large
+                // oxides it comes out below the absolute norm and on a target of
+                // trace oxides far above it
+                "objective_error": 0.0047,
+                "unlisted_weight": 1.0,
+                "unity_scale": 1.0
+            },
+            ...
+        ],
+        "warnings": ["оксиды цели не распознаны и не учтены: Unobtainium"]
+    }
+
+    THE TARGET IS CLEANED HERE, ONCE, ABOVE THE CHOICE OF ENGINE. That is the
+    load-bearing decision of this handler and not an implementation detail:
+    solver_iterative.usable_target() refuses an unknown NAME and a bad VALUE
+    (not a number, negative, NaN, infinity), while the classic engine refuses
+    only the name - umf_to_weights drops it - and feeds a negative value
+    straight into its NNLS. Letting each engine clean to its own taste produced
+    exactly the disagreement this endpoint exists to end: on
+    {"Fe2O3": -0.5, "solver": "classic"} the answer carried "оксид не учтён"
+    next to a recipe fitted TO -0.5, and every material in it differed from the
+    recipe for the same target without that key. Cleaned above the fork, the
+    warning, the returned "target_composition" and the vector actually fitted
+    are the same object by construction. A negative or NaN UMF is not a legal
+    input to either engine, so nothing legitimate was accepted before and is
+    refused now.
+
+    THE RESPONSE IS AN OBJECT AND USED TO BE THE BARE LIST, and the reason is
+    the "warnings" next to it rather than a taste for envelopes. Until the field
+    existed the only trace of a refusal in the answer was an absence: a recipe
+    came back, "target_composition" no longer held the key, and nothing said
+    why. /api/feasibility, handed the very same target, has always answered
+    "оксиды цели не распознаны и не учтены: ..." - word for word what is
+    answered here, down to the order of the names. Two endpoints disagreeing
+    about one input is bad enough; the silent one being the one that hands back
+    a recipe is worse.
+
+    A list cannot carry a field, and the warning cannot live inside the
+    solutions either: the request that most needs it - a target of nothing but
+    unrecognised oxides - produces no solutions at all. Hence the object. The
+    one live consumer, UI/, was moved onto it in the same change, through a
+    single unpack_solve_response() that accepts either shape - so the page keeps
+    working against a server of either vintage, and the prototype UI-v2/, which
+    reads mock data and no endpoint at all, was never on the old shape.
+
+    EVERY ERROR OF THIS ENDPOINT CARRIES "warnings" TOO, empty list included.
+    A field that is present on success and absent on failure is a field every
+    consumer has to guard, and the failure that arrives WITH a dropped oxide is
+    a plausible pair rather than a curiosity - a request can easily be wrong
+    twice. The list is empty on the error raised before the target has been read
+    at all.
+
+    A TARGET WITH NOTHING TO SOLVE FOR never reaches an engine, in three
+    flavours that are told apart because the reader has to do three different
+    things about them:
+
+      * "missing_umf"   - 400. No "umf" at all, or one that is not a non-empty
+                          object. Checked before anything reads it, in
+                          /api/feasibility's words.
+      * "empty_target"  - 422. The cleaning emptied it: every name unknown, or
+                          every value negative. /api/feasibility's code and
+                          sentence, for the same input.
+      * "zero_target"   - 422. It survived the cleaning and asks for zero of
+                          everything. Not a UMF at all: the unity such a formula
+                          would be normalized by is zero.
+
+    ON THE FIRST TWO this endpoint and /api/feasibility answer the same code and
+    the same sentence for the same body, which is the whole point of borrowing
+    them; the invariant had one exception ({"umf": {}} was 422 here and 400
+    there) until "missing_umf" was widened, and now has none.
+
+    THE THIRD IS DELIBERATELY NOT SHARED. /api/feasibility refuses an all-zero
+    target as "no_target_fluxes", which is a broader statement - it also refuses
+    {"SiO2": 3.0, "Al2O3": 0.3}, a target this endpoint solves, and both engines
+    answer it with a recipe. Same 422, own code, own sentence. Borrowing the
+    name would have claimed a check that is not made here.
+
+    None of the three is a decision taken for symmetry's sake. The two engines
+    disagree about a target of nothing - one returns an empty list, the other
+    dies inside numpy - so somebody above them has to say which it is, and a 200
+    carrying an empty list is not an answer to the question either.
     """
+    # Before the try: the handler's own except must be able to report it, and an
+    # exception can be raised by the very first line below
+    request_warnings = []
+
     try:
-        data = request.get_json()
-        
-        if not data or 'umf' not in data:
+        # silent=True, like /api/feasibility: a body that is not JSON at all -
+        # malformed, or sent under the wrong Content-Type - makes get_json()
+        # RAISE, and the raise lands in the handler's own `except Exception`
+        # and comes back as a 500 with a stack trace. That is a client mistake
+        # and it gets the same 400 as an absent body
+        data = request.get_json(silent=True)
+
+        # The shape of "umf" is checked BEFORE anything reads it, in the one
+        # test /api/feasibility already uses, word for word. Three inputs used
+        # to get past here - no "umf" key, "umf" that is not an object, and an
+        # empty object - and the last two then walked into the engines, which do
+        # not refuse them in words: the classic one died on
+        # `'list' object has no attribute 'keys'` (500) and the iterative one
+        # answered 200 with an empty list. Neither is "the caller was told what
+        # was wrong with the request".
+        umf = data.get('umf') if isinstance(data, dict) else None
+        if not isinstance(umf, dict) or not umf:
             logger.warning("missing_umf parameter in request")
-            return jsonify({"error": "missing_umf", "message": "umf parameter is required"}), 400
-        
-        umf = data['umf']
+            return jsonify({"error": "missing_umf",
+                            "message": "umf parameter is required and must be a non-empty object",
+                            "warnings": request_warnings}), 400
+
         max_solutions = data.get('max_solutions', 3)
         min_materials = data.get('min_materials', True)
         error_tolerance = data.get('error_tolerance', 0.01)
@@ -210,12 +325,70 @@ def solve_recipe():
         solver_name = data.get('solver', DEFAULT_SOLVER)
         penalize_unlisted = data.get('penalize_unlisted', DEFAULT_PENALIZE_UNLISTED)
 
+        # ONCE PER REQUEST AND ABOVE THE FORK: both engines are handed the same
+        # cleaned target, so neither can be fitting something the answer does
+        # not describe. It is a non-empty dictionary by now - the guard above is
+        # what makes that true, so nothing here has to probe for the shape.
+        umf, dropped_oxides = usable_target(umf)
+
+        if dropped_oxides:
+            # The solver's wording, not a second one of ours: one request, one
+            # line, the same line whichever engine is about to run
+            logger.warning(DROPPED_TARGET_OXIDES_LOG.format(oxides=', '.join(dropped_oxides)))
+            request_warnings.append(TARGET_OXIDES_DROPPED_WARNING.format(
+                oxides=', '.join(dropped_oxides)))
+
+        # The solver name is validated first, so that which error a bad request
+        # gets back does not depend on what its target happened to contain
         if solver_name not in AVAILABLE_SOLVERS:
             logger.warning(f"unknown_solver requested: {solver_name}")
             return jsonify({
                 "error": "unknown_solver",
-                "message": f"unknown solver '{solver_name}', expected one of: {', '.join(AVAILABLE_SOLVERS)}"
+                "message": f"unknown solver '{solver_name}', expected one of: {', '.join(AVAILABLE_SOLVERS)}",
+                "warnings": request_warnings
             }), 400
+
+        # THERE IS NOTHING TO SOLVE FOR, in one of two ways, and the endpoint
+        # answers both because the engines answer them differently and one of
+        # them badly: find_best_recipe returns 200 and an empty list, while
+        # find_multiple_solutions dies - on an empty oxide set inside
+        # numpy.matrix_rank ("zero-size array to reduction operation maximum"),
+        # on an all-zero target inside common.umf_to_weights, which divides by
+        # the total molar weight. Either way a client mistake used to arrive as
+        # a 500 with a stack trace in the log and a 5xx in the monitoring.
+        #
+        # TWO REASONS, TWO SENTENCES, because the reader has to do two different
+        # things about them: fix the oxide names, or ask for some oxide at all.
+        # The codes are separate for the same reason.
+        #
+        # ORDER IS LOAD BEARING: `not any(...)` below is vacuously true of an
+        # empty dictionary, so the emptier reason has to be tested first or it
+        # would never be reported. What arrives empty here is only ever a target
+        # the CLEANING emptied - a request that sent {} was refused above.
+        if not umf:
+            logger.warning(f"empty_target: nothing left to solve, dropped {dropped_oxides}")
+            return jsonify({"error": "empty_target",
+                            # The code and the sentence /api/feasibility answers
+                            # for this very target
+                            "message": "target UMF has no usable oxide",
+                            "warnings": request_warnings}), 422
+
+        # A ZERO IS A CONSTRAINT ("none of this") and is honoured everywhere
+        # else, so this rejects the target only when there is nothing BUT
+        # zeros - the mixed case is an ordinary request and still solved. A
+        # formula of nothing but zeros is not a UMF at all: the unity it is
+        # normalized by is the sum of its own oxides, which is zero here, so
+        # there is no basis to state the answer on and nothing to fit.
+        # /api/feasibility already refuses it (as no_target_fluxes, its own
+        # reason), so the verdict layer and the recipe layer now agree that this
+        # target is unanswerable instead of one of them returning a quiet 200
+        # with an empty list, which does not answer the question either.
+        if not any(value > 0.0 for value in umf.values()):
+            logger.warning("zero_target: every requested oxide is 0, nothing to solve for")
+            return jsonify({"error": "zero_target",
+                            "message": "target UMF asks for zero of every oxide, so it has no "
+                                       "unity to be normalized by and nothing to fit",
+                            "warnings": request_warnings}), 422
 
         logger.info(f"solving recipe for umf: {umf}, max_solutions: {max_solutions}, min_materials: {min_materials}, solver: {solver_name}, penalize_unlisted: {penalize_unlisted}")
 
@@ -232,7 +405,8 @@ def solve_recipe():
                 # The solver validates its own arguments and says what is wrong
                 # with them; that is a bad request, not a server failure
                 logger.warning(f"invalid_parameter: {exc}")
-                return jsonify({"error": "invalid_parameter", "message": str(exc)}), 400
+                return jsonify({"error": "invalid_parameter", "message": str(exc),
+                                "warnings": request_warnings}), 400
 
             solutions = iterative_solutions_to_classic_format(iterative_solutions, inventory_data)
         else:
@@ -246,23 +420,25 @@ def solve_recipe():
 
         if isinstance(solutions, dict) and 'error' in solutions:
             logger.error(f"calculation_error: {solutions['error']}")
-            return jsonify({"error": "calculation_error", "message": solutions['error']}), 500
-        
+            return jsonify({"error": "calculation_error", "message": solutions['error'],
+                            "warnings": request_warnings}), 500
+
         # Add the UMF information to every recipe
         for solution in solutions:
             # The UMF of a particular recipe is already stored in actual_composition,
             # but it is also exposed as a separate field for convenience on the frontend
             solution['recipe_umf'] = solution['actual_composition']
-        
+
         # Prepare the results for safe JSON serialization
         safe_solutions = make_json_safe(solutions)
-        
-        logger.info(f"found {len(solutions)} solutions")
-        return jsonify(safe_solutions)
-    
+
+        logger.info(f"found {len(solutions)} solutions, warnings={len(request_warnings)}")
+        return jsonify({"solutions": safe_solutions, "warnings": request_warnings})
+
     except Exception as e:
         logger.exception(f"server_error: {str(e)}")
-        return jsonify({"error": "server_error", "message": str(e)}), 500
+        return jsonify({"error": "server_error", "message": str(e),
+                        "warnings": request_warnings}), 500
 
 # A feasibility request that is syntactically fine but has nothing to compute
 # from: no usable oxide in the target, a target with no flux at all (there is no
@@ -297,11 +473,17 @@ def feasibility():
     still typing the formula - before any recipe exists.
 
     This is a separate endpoint and NOT a block added to the answer of
-    /api/solve, although section 2.4 of TZ_SOLVER_V2.md asked for the latter.
-    That response is a bare list of solutions, two interfaces read it (the live
-    UI/ and the UI-v2/ prototype), and wrapping it in an object to save one
-    round trip would break the one that works to help the one that is not wired
-    up yet.
+    /api/solve, although section 2.4 of TZ_SOLVER_V2.md asked for the latter,
+    and the paragraph above is the whole reason: the verdict does not depend on
+    a recipe and is wanted before one exists. It is re-asked when the inventory
+    changes, not when the answer does - two questions with two lifetimes, not
+    one round trip to save.
+
+    (The original text argued from the shape instead - that /api/solve answered
+    a bare list which two interfaces read, so wrapping it would break a working
+    one. Both halves of that are false now: the response is an object, carrying
+    the "warnings" a list could not, and UI-v2/ runs on mock data and calls no
+    endpoint at all. The reason above never depended on either.)
 
     POST JSON parameters:
     {
@@ -603,13 +785,19 @@ def convert_umf_to_weights():
     }
     """
     try:
-        data = request.get_json()
-        
-        if not data or 'umf' not in data:
+        # The shape check of /api/solve and /api/feasibility, in the same words:
+        # "missing_umf" is one code across this server, so it cannot mean
+        # "absent" in one endpoint and "absent or unusable" in another. Before
+        # this, {"umf": []} reached umf_to_weights and came back a 500, and
+        # {"umf": {}} came back 200 with an empty result
+        data = request.get_json(silent=True)
+
+        umf = data.get('umf') if isinstance(data, dict) else None
+        if not isinstance(umf, dict) or not umf:
             logger.warning("missing_umf parameter in umf_to_weights request")
-            return jsonify({"error": "missing_umf", "message": "umf parameter is required"}), 400
-        
-        umf = data['umf']
+            return jsonify({"error": "missing_umf",
+                            "message": "umf parameter is required and must be a non-empty object"}), 400
+
         logger.info(f"converting umf to weights: {umf}")
         
         weights = umf_to_weights(umf)
@@ -636,13 +824,19 @@ def convert_weights_to_umf():
     }
     """
     try:
-        data = request.get_json()
-        
-        if not data or 'weights' not in data:
+        # The shape check the other three endpoints make, with this one's own
+        # code and its own parameter name: "a body that does not parse as JSON
+        # is a client mistake and not a server failure" is a property of an
+        # endpoint, not of what the parameter happens to be called
+        data = request.get_json(silent=True)
+
+        weights = data.get('weights') if isinstance(data, dict) else None
+        if not isinstance(weights, dict) or not weights:
             logger.warning("missing_weights parameter in weights_to_umf request")
-            return jsonify({"error": "missing_weights", "message": "weights parameter is required"}), 400
-        
-        weights = data['weights']
+            return jsonify({"error": "missing_weights",
+                            "message": "weights parameter is required and must be "
+                                       "a non-empty object"}), 400
+
         logger.info(f"converting weights to umf: {weights}")
         
         umf = weights_to_umf(weights)
