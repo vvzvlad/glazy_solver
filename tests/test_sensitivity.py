@@ -74,8 +74,11 @@ def flat_warning(result):
 
     FLAT_SIGMA_WARNING is the stem of that message and not the whole of it: the
     fact it states is the same every time, and what follows is what was observed
-    here - the sigma every material got, and a cause only where this run of the
-    calculation could check one.
+    here - the one number every applied sigma came out as, and a cause only where
+    this run of the calculation could check one. The stem is all this helper
+    matches; the text that follows it is pinned by
+    test_the_message_claims_only_what_the_set_of_sigmas_holds, because a prefix
+    match let two refuted wordings through in a row.
     """
     return next((warning for warning in result["warnings"]
                  if warning.startswith(FLAT_SIGMA_WARNING)), None)
@@ -141,6 +144,26 @@ class TestMaterialSigma(unittest.TestCase):
 
     def test_empty_formula_gives_no_sigmas(self):
         self.assertEqual(material_sigma(self.materials[EMPTY_FORMULA_MATERIAL], self.tolerances), {})
+
+    def test_a_cell_that_cannot_be_perturbed_gets_no_sigma_of_its_own(self):
+        """
+        A direct call, because it is the only way in
+
+        Through recipe_sensitivity() a non-numeric cell never reaches this code:
+        calculate_recipe_composition() multiplies it by the share several steps
+        earlier and raises there. A line trace of the whole suite (240 tests)
+        found the `except (TypeError, ValueError)` of material_sigma() and the
+        skip of a zero cell never executed once, while API.md described both as
+        the module's own guard - so the guard was documented and unrun.
+
+        The material is built here rather than looked up: no record of
+        database/materials.json carries a cell like these (checked over all 216).
+        """
+        material = {"name": "материал не из базы",
+                    "formula": {"SiO2": 50, "Al2O3": "много", "CaO": None, "K2O": 0}}
+
+        self.assertEqual(material_sigma(material, self.tolerances),
+                         {"SiO2": self.tolerances["default_relative"]})
 
 
 class TestToleranceLoading(unittest.TestCase):
@@ -359,7 +382,14 @@ class TestToleranceFilesThatDoNotWork(unittest.TestCase):
                 with self.assertLogs('sensitivity', level='WARNING'):
                     tolerances = load_tolerances(path)
                     result = recipe_sensitivity(recipe, self.materials, tolerances)
-                    flat_sigma = self.matching_flat_sigma(recipe, result, payload)
+
+                # Outside the assertLogs, like write_tolerances above it: this
+                # helper calls recipe_sensitivity itself, once per candidate
+                # sigma, on a file that is flat by construction - so it always
+                # logs sensitivity_flat_sigmas and there is always at least one
+                # candidate. Inside the block it satisfied the assertion on its
+                # own and the call under test could have gone silent unnoticed.
+                flat_sigma = self.matching_flat_sigma(recipe, result, payload)
 
                 if flat_sigma is None:
                     self.assertIsNone(flat_warning(result), f"{name}: a working file called flat")
@@ -380,8 +410,15 @@ class TestToleranceFilesThatDoNotWork(unittest.TestCase):
         with self.assertLogs('sensitivity', level='WARNING'):
             tolerances = load_tolerances(self.write_tolerances({"default_relative": 0.02}))
             result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials, tolerances)
-            at_the_fallback = self.flat_shares(TRANSPARENT_RECIPE, FALLBACK_RELATIVE)
-            at_its_own = self.flat_shares(TRANSPARENT_RECIPE, 0.02)
+
+        # Outside the block for the same reason as in the test above: flat_shares
+        # calls recipe_sensitivity on a file that is flat by construction, so it
+        # logs sensitivity_flat_sigmas on its own and satisfied the assertion by
+        # itself. Silencing ONLY the call under test - the two are told apart by
+        # the "issues" key load_tolerances always adds - left this test passing
+        # while its neighbour above failed 8 of its 12 subtests.
+        at_the_fallback = self.flat_shares(TRANSPARENT_RECIPE, FALLBACK_RELATIVE)
+        at_its_own = self.flat_shares(TRANSPARENT_RECIPE, 0.02)
 
         self.assertIsNotNone(flat_warning(result))
         self.assertAlmostEqual(share_of(result, "Волластонит МИВОЛЛ"), 0.332833969, places=6)
@@ -545,8 +582,17 @@ class TestAHealthyFileThatNeverReachesTheRecipe(unittest.TestCase):
         self.assertIsNone(result["error"])
         self.assertIsNotNone(flat_warning(result))
 
-    def test_one_material_of_the_recipe_with_a_sigma_of_its_own_is_enough(self):
-        """The complement: the warning is about the recipe, not about the file"""
+    def test_one_material_on_a_class_number_of_its_own_answers_without_it(self):
+        """
+        The complement: the warning is about the recipe, not about the file
+
+        Named after what is set up here and not after a rule. "A sigma of its
+        own is enough" would be the rule, and it is false three ways, each of
+        them measured: a class number equal to default_relative is not a sigma
+        of its own (the test below), an override equal to the class number is
+        not either, and one written onto an oxide that never reaches the UMF -
+        Loi, or one the material does not carry - changes nothing at all.
+        """
         tolerances = load_tolerances(self.write_tolerances(
             {"default_relative": 0.05, "classes": self.shipped["classes"],
              "materials": {"Улексит (Химпэк)": {"class": "hydrate_borate"}}}))
@@ -818,6 +864,16 @@ class TestFlatSigmaAnswer(unittest.TestCase):
         Why the warning is not cosmetic: with flat sigmas the answer is the
         ranking by lever alone, the one the module exists to avoid. Ulexite
         stops being the leader and nothing in the response would show it.
+
+        What that ranking does NOT do is promote quartz - it is last in both,
+        and the header of sensitivity.py used to say otherwise. Pinned here so
+        the sentence that replaced it stays measured rather than argued.
+
+        Pinned with it: "the ranking by lever alone" is not one ranking. The
+        response is not linear in the sigma, so which material leads the flat
+        answer depends on the flat number - wollastonite at 0.05, nepheline at
+        0.2. The replacement sentence said a common factor cannot reorder
+        anything, and this is what refuted it before it was committed.
         """
         with_file = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials)
         with self.assertLogs('sensitivity', level='WARNING'):
@@ -825,9 +881,96 @@ class TestFlatSigmaAnswer(unittest.TestCase):
 
         self.assertEqual(with_file["by_material"][0]["material"], "Улексит (Химпэк)")
         self.assertNotEqual(flat["by_material"][0]["material"], "Улексит (Химпэк)")
+        self.assertEqual(flat["by_material"][-1]["material"], "Кварцевая мука Кварцверке W12")
+        self.assertEqual(with_file["by_material"][-1]["material"], "Кварцевая мука Кварцверке W12")
+        self.assertEqual([row["material"] for row in flat["by_material"]].index("Улексит (Химпэк)"), 2)
+
+        leaders = {}
+        for sigma in (0.05, 0.2):
+            with self.assertLogs('sensitivity', level='WARNING'):
+                answer = recipe_sensitivity(
+                    TRANSPARENT_RECIPE, self.materials,
+                    {"default_relative": sigma, "classes": {}, "materials": {}})
+            leaders[sigma] = answer["by_material"][0]["material"]
+
+        self.assertEqual(leaders, {0.05: "Волластонит МИВОЛЛ", 0.2: "Нефелин-сиенит VR13"})
 
     def test_a_readable_database_adds_no_such_warning(self):
         self.assertEqual(recipe_sensitivity(TRANSPARENT_RECIPE, self.materials)["warnings"], [])
+
+    def test_the_message_claims_only_what_the_set_of_sigmas_holds(self):
+        """
+        The text itself, pinned, on the two answers that refuted its predecessors
+
+        Nothing checked this string before - flat_warning() matches the stem and
+        stops - so both earlier wordings travelled in shipped answers next to a
+        row that contradicted them. Both spoke about MATERIALS; the set behind
+        the message holds sigmas.
+
+        Chalk is the degenerate case of API.md. Its 0.01 IS applied and the
+        perturbation does run, and the formula still does not move by a digit: a
+        UMF whose only oxide is a flux is CaO 1.0 whatever the analysis says. So
+        the same answer carries ZERO_CONTRIBUTION_WARNING, which "все материалы,
+        способные сдвинуть формулу, получили одну и ту же сигму" contradicted in
+        the line above it.
+
+        Gypsum is the other side: an empty formula contributes no sigma at all
+        and its row says so with sigma_used: null, which is what refuted the
+        wording before that one, "все материалы рецепта".
+
+        Spelled out and not composed from FLAT_SIGMA_OBSERVED: a test that builds
+        its expectation out of the constant under test agrees with whatever the
+        constant says. Written that way first, it passed with the refuted wording
+        restored - the same shape of hole as the message this test exists for.
+        """
+        with self.assertLogs('sensitivity', level='WARNING'):
+            chalk = recipe_sensitivity({"Мел, CaCO3": 100}, self.materials)
+
+        self.assertEqual(flat_warning(chalk),
+                         "ранжирование идёт только по плечу: разброс паспортов не различает "
+                         "материалы этого рецепта — все применённые сигмы оказались одним "
+                         "числом 0.01")
+        self.assertIn(ZERO_CONTRIBUTION_WARNING, chalk["warnings"])
+        self.assertEqual(chalk["by_material"],
+                         [{"material": "Мел, CaCO3", "share": 0.0, "via_oxide": "CaO",
+                           "sigma_used": 0.01, "affects": []}])
+
+        with self.assertLogs('sensitivity', level='WARNING'):
+            with_gypsum = recipe_sensitivity(
+                {EMPTY_FORMULA_MATERIAL: 50, "Нефелин-сиенит VR13": 50}, self.materials)
+
+        self.assertEqual(flat_warning(with_gypsum),
+                         "ранжирование идёт только по плечу: разброс паспортов не различает "
+                         "материалы этого рецепта — все применённые сигмы оказались одним "
+                         "числом 0.02")
+        self.assertEqual(
+            next(row for row in with_gypsum["by_material"]
+                 if row["material"] == EMPTY_FORMULA_MATERIAL),
+            {"material": EMPTY_FORMULA_MATERIAL, "share": 0.0, "via_oxide": None,
+             "sigma_used": None, "affects": []})
+
+    def test_the_other_half_of_the_message_when_no_sigma_was_applied_at_all(self):
+        """
+        The empty set says so instead of naming a number it does not have
+
+        The comment at the flat check names an inf cell of a formula as the way
+        in, and that is the way taken here - a hand edit of materials.json, which
+        is how that file is maintained. The answer is refused with
+        nonfinite_result, but the warnings travel with the 422 body, so the text
+        is what a caller reads. Untested until now, and a line trace of the suite
+        confirmed it: the branch never executed once.
+        """
+        poisoned = copy.deepcopy(
+            next(m for m in self.materials if m["name"] == "Мел, CaCO3"))
+        poisoned["formula"] = {"CaO": float('inf')}
+
+        with self.assertLogs('sensitivity', level='WARNING'):
+            result = recipe_sensitivity({"Мел, CaCO3": 100}, [poisoned])
+
+        self.assertEqual(result["error"], "nonfinite_result")
+        self.assertEqual(flat_warning(result),
+                         "ранжирование идёт только по плечу: разброс паспортов не различает "
+                         "материалы этого рецепта — ни одна сигма не вошла в расчёт")
 
 
 class TestRecipeSensitivity(unittest.TestCase):
@@ -835,14 +978,61 @@ class TestRecipeSensitivity(unittest.TestCase):
     def setUp(self):
         self.materials = all_materials()
 
+    def test_an_oxide_with_no_molar_mass_costs_the_material_a_sigma(self):
+        """
+        Why API.md says "no more than the oxides of formula" and not "as many as"
+
+        Three records of database/materials.json carry Loi, and Loi is not in
+        database/molar_masses.json, so it never reaches the UMF and perturbing it
+        provably changes nothing. Their applied sigmas come out one short of
+        their formula: Нефелин-сиенит А-270 8 and 7, Метакаолин BMK-45 4 and 3,
+        Дисульфид Молибдена 2 and 1.
+
+        The second half is the consequence a reader of the file would want: a
+        sigma written onto such an oxide is a sigma written into the void. A
+        0.9 on Loi - the loosest value the file accepts - leaves the answer equal
+        to the shipped one field by field, warning for warning.
+        """
+        molar_masses = load_molar_masses()
+        self.assertNotIn("Loi", molar_masses)
+
+        tolerances = load_tolerances()
+        for name, oxides, applied in [("Нефелин-сиенит А-270", 8, 7),
+                                      ("Метакаолин BMK-45", 4, 3),
+                                      ("Дисульфид Молибдена", 2, 1)]:
+            material = next(m for m in self.materials if m["name"] == name)
+            sigmas = material_sigma(material, tolerances)
+            self.assertEqual(len(material["formula"]), oxides, name)
+            self.assertEqual(len([o for o in sigmas if o in molar_masses]), applied, name)
+
+        recipe = {"Метакаолин BMK-45": 50, "Волластонит МИВОЛЛ": 50}
+        into_the_void = copy.deepcopy(tolerances)
+        into_the_void["materials"]["Метакаолин BMK-45"] = {"oxides": {"Loi": 0.9}}
+
+        with self.assertLogs('sensitivity', level='WARNING'):
+            shipped = recipe_sensitivity(recipe, self.materials, tolerances)
+        with self.assertLogs('sensitivity', level='WARNING'):
+            overridden = recipe_sensitivity(recipe, self.materials, into_the_void)
+
+        self.assertEqual(shipped, overridden)
+
     def test_ulexite_outranks_quartz_on_the_reference_recipe(self):
         """
         The whole point of the metric: lever TIMES uncertainty
 
-        Quartz has by far the biggest lever on SiO2 of this recipe, but its
-        analysis (99-100% SiO2) never lies. Ulexite has a smaller lever and a
-        much wider spread. A metric ranking by lever alone would put quartz on
-        top, which is exactly the answer that helps nobody.
+        Of the SiO2 cells quartz has the largest lever in raw UMF units (+0.011
+        per 1% of its analysis against +0.003 for the B2O3 of ulexite; the
+        largest lever across ALL cells is wollastonite's CaO at -0.017),
+        but its analysis (99-100% SiO2) never lies, while the hydration of
+        ulexite moves the B2O3 it brings.
+
+        What the uncertainty buys is measured by
+        test_the_ranking_really_does_change_without_the_file, and it is
+        NOT "quartz would be on top" - quartz is last either way, 0.003 here
+        and 0.027 flat, because the contribution is scored against the scale of
+        the oxide moved and SiO2 is 3.15. It is that with one flat sigma ulexite
+        falls from 0.700 to 0.275 and third place, behind wollastonite and
+        nepheline.
         """
         result = recipe_sensitivity(TRANSPARENT_RECIPE, self.materials)
 
@@ -924,8 +1114,12 @@ class TestRecipeSensitivity(unittest.TestCase):
                                share_of(baseline, "Улексит (Химпэк)"), places=6)
 
     def test_single_material_recipe(self):
-        # One material is the flat ranking by definition - there is nothing for
-        # the tolerances to tell apart - so the answer says so
+        # Nepheline syenite alone comes out flat because every oxide of it takes
+        # the "feldspar" 0.02 and the shipped file overrides none of them - NOT
+        # because a one-material recipe is flat by definition. It is not: an
+        # override applies per material-oxide pair, so ulexite alone has two
+        # applied sigmas (0.08 by class, 0.10 on B2O3) and answers with no
+        # warning at all. See test_a_single_material_is_not_flat_by_itself.
         with self.assertLogs('sensitivity', level='WARNING'):
             result = recipe_sensitivity({"Нефелин-сиенит VR13": 100}, self.materials)
 
@@ -934,6 +1128,28 @@ class TestRecipeSensitivity(unittest.TestCase):
         self.assertAlmostEqual(result["by_material"][0]["share"], 1.0, delta=1e-6)
         self.assertTrue(result["per_oxide"])
         self.assertIsNotNone(flat_warning(result))
+
+    def test_a_single_material_is_not_flat_by_itself(self):
+        """
+        The generalisation the documentation used to make, pinned as false
+
+        "A recipe of one material" and "every material in one class" were listed
+        as cases that always carry the flat warning. They do not: a sigma is
+        applied per material-oxide pair, and the shipped file overrides B2O3 of
+        ulexite and borax to 0.10 over the 0.08 of their "hydrate_borate" class.
+        So one ulexite has two applied sigmas and is ranked by them, and a reader
+        who trusted the old text would read a one-row by_material with share 1.0
+        as a meaningful ranking on the strength of a warning that never came.
+        """
+        for recipe in ({"Улексит (Химпэк)": 100},
+                       {"Бура, Na2O 2 B2O3 10 H2O": 100},
+                       {"Улексит (Химпэк)": 50, "Бура, Na2O 2 B2O3 10 H2O": 50}):
+            with self.subTest(str(recipe)):
+                result = recipe_sensitivity(recipe, self.materials)
+
+                self.assertIsNone(result["error"])
+                self.assertIsNone(flat_warning(result),
+                                  f"{recipe}: called flat although B2O3 is overridden")
 
     def assert_nonfinite_share_is_skipped(self, amount):
         recipe = dict(TRANSPARENT_RECIPE)
